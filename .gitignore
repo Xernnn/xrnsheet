@@ -1,0 +1,16 @@
+.venv/
+tools/
+results/
+data/images/
+data/my_sheets/
+data/fonts/
+data/fonts.conf
+data/chords_test/
+data/jobs/
+__pycache__/
+.pytest_cache/
+data/corrections/
+data/notes/
+models/*
+!models/chord_reader.pt
+!models/note_reader.pt

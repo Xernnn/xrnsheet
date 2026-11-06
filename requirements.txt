@@ -1,0 +1,15 @@
+homr==0.7.0
+music21
+verovio
+opencv-python-headless
+numpy
+rapidocr
+pypdfium2
+fonttools
+torch
+fastapi
+uvicorn
+python-multipart
+matplotlib
+pytest
+httpx

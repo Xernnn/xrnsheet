@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xrnsheet</title>
+<style>
+:root {
+  --paper: #fbfaf7; --panel: #ffffff; --ink: #1f2328; --muted: #646b73;
+  --line: #e2dfd8; --accent: #1f6feb; --warn: #c2570c; --warn-soft: #fff1e6;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 system-ui, sans-serif; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 17px; margin: 0 auto 0 0; letter-spacing: -.01em; }
+button, .button { font: inherit; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); cursor: pointer; text-decoration: none; display: inline-block; }
+button:hover:not(:disabled), .button:hover { border-color: #b9b5ab; }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, .button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.primary:hover { filter: brightness(1.08); }
+main { padding: 16px; max-width: 1500px; margin: 0 auto; }
+#start { max-width: 560px; margin: 8vh auto; text-align: center; }
+#start h2 { font-size: 26px; letter-spacing: -.02em; margin: 0 0 6px; }
+#start p { color: var(--muted); margin: 0 0 22px; }
+#drop { border: 1.5px dashed #bdb8ac; border-radius: 12px; padding: 36px 20px; background: var(--panel); }
+#drop.over { border-color: var(--accent); background: #f2f7ff; }
+#drop .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 14px; }
+#busy { text-align: center; margin: 14vh auto; }
+.spinner { width: 28px; height: 28px; margin: 0 auto 14px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+#message { padding: 9px 14px; background: var(--warn-soft); color: #7a3606; border-radius: 8px; margin-bottom: 12px; }
+#workspace { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 16px; align-items: start; }
+@media (max-width: 860px) { #workspace { grid-template-columns: minmax(0, 1fr); } }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
+#original { position: sticky; top: 68px; }
+#imageBox { position: relative; line-height: 0; }
+#imageBox img { width: 100%; height: auto; border-radius: 4px; }
+.box { position: absolute; border: 1.5px solid #2e9e6b; border-radius: 2px; pointer-events: none; }
+.box.unsure { border-color: var(--warn); background: rgba(194, 87, 12, .13); }
+.box.active { border-color: var(--accent); background: rgba(31, 111, 235, .16); }
+#tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+#tools button { min-width: 38px; }
+#tools .label { color: var(--muted); font-size: 13px; margin-right: 4px; }
+#pages svg { display: block; width: 100%; height: auto; }
+#pages { scroll-margin-top: 68px; }
+#pages g.note, #pages g.harm { cursor: pointer; }
+#pages g.note:hover { fill: var(--accent); stroke: var(--accent); }
+#pages g.note.selected, #pages g.note.selected * { fill: var(--accent); stroke: var(--accent); }
+#pages g.harm:hover text, #pages g.harm.active text { fill: var(--accent); }
+#pages g.harm.unsure text { fill: var(--warn); }
+#checks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
+#checks .label { color: var(--muted); font-size: 13px; }
+.chip { padding: 3px 9px; border-radius: 999px; border: 1px solid #efc7a6; background: var(--warn-soft); color: #7a3606; font-size: 14px; }
+#editor { position: absolute; z-index: 10; display: flex; gap: 6px; padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 6px 22px rgba(0,0,0,.14); }
+#editor input { width: 130px; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+#editorError { position: absolute; left: 8px; top: 100%; margin-top: 4px; width: max-content; max-width: 280px; padding: 5px 9px; background: #7a1f1f; color: #fff; border-radius: 6px; font-size: 13px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>xrnsheet</h1>
+  <button id="undo" hidden disabled>Undo</button>
+  <a id="xml" class="button" hidden>MusicXML</a>
+  <a id="pdf" class="button primary" hidden>Download PDF</a>
+  <button id="again" hidden>New sheet</button>
+</header>
+<main>
+  <div id="start">
+    <h2>Turn a sheet into a score you can edit</h2>
+    <p>Notes and chord symbols are read for you. Fix what's wrong, then print a clean PDF.</p>
+    <div id="drop">
+      <div class="actions">
+        <label class="button primary" tabindex="0">Choose a file<input id="file" type="file" accept="image/*,.pdf" hidden></label>
+        <label class="button" tabindex="0">Take a photo<input id="camera" type="file" accept="image/*" capture="environment" hidden></label>
+      </div>
+      <div class="hint">Or drop a photo or PDF here. Flat, well-lit pages read best.</div>
+    </div>
+  </div>
+  <div id="busy" hidden><div class="spinner"></div><div id="busyText">Reading your sheet. This usually takes under a minute.</div></div>
+  <div id="message" role="status" hidden></div>
+  <div id="workspace" hidden>
+    <section id="original" aria-label="Your original sheet">
+      <h2>Your sheet</h2>
+      <div id="imageBox"><img id="pageImage" alt="The sheet you uploaded"></div>
+      <div id="checks" hidden><span class="label">Please check:</span></div>
+    </section>
+    <section aria-label="Recognized score">
+      <div id="tools">
+        <span class="label" id="toolLabel">Click a note or chord to edit it</span>
+        <button data-action="up" disabled title="Move up (↑)" aria-label="Move note up">↑</button>
+        <button data-action="down" disabled title="Move down (↓)" aria-label="Move note down">↓</button>
+        <button data-action="sharp" disabled title="Sharp (#)" aria-label="Make sharp">♯</button>
+        <button data-action="flat" disabled title="Flat (b)" aria-label="Make flat">♭</button>
+        <button data-action="natural" disabled title="Natural (n)" aria-label="Make natural">♮</button>
+        <button data-action="clear" disabled title="Remove a fermata, ornament or accent from this note">Clear marks</button>
+        <button data-action="delete" disabled title="Delete (Del)">Delete</button>
+        <button id="addChord" disabled>Add chord</button>
+      </div>
+      <div id="pages"></div>
+    </section>
+  </div>
+</main>
+<div id="editor" hidden>
+  <input id="chordInput" aria-label="Chord symbol" autocomplete="off" spellcheck="false" placeholder="e.g. Bbmaj7">
+  <button id="chordSave" class="primary">Save</button>
+  <button id="chordDelete">Remove</button>
+  <div id="editorError" hidden></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const UNSURE_BELOW = 0.8;
+let scoreId = null, score = null, selected = null, editing = null;
+
+function show(view) {
+  $("start").hidden = view !== "start";
+  $("busy").hidden = view !== "busy";
+  $("workspace").hidden = view !== "workspace";
+  for (const id of ["undo", "xml", "pdf", "again"]) $(id).hidden = view !== "workspace";
+}
+
+function message(text) {
+  $("message").textContent = text || "";
+  $("message").hidden = !text;
+}
+
+async function upload(file) {
+  if (!file) return;
+  message("");
+  show("busy");
+  const body = new FormData();
+  body.append("file", file);
+  const response = await fetch("/api/scores", { method: "POST", body });
+  const data = await response.json();
+  if (!response.ok) { show("start"); message(data.detail); return; }
+  scoreId = data.id;
+  location.hash = scoreId;
+  poll();
+}
+
+async function poll() {
+  const response = await fetch(`/api/scores/${scoreId}`);
+  if (!response.ok) { show("start"); return; }
+  const data = await response.json();
+  if (data.status === "processing") { show("busy"); setTimeout(poll, 1500); return; }
+  if (data.status === "failed") { show("start"); message(data.message); return; }
+  message(data.message);
+  score = data;
+  $("pageImage").src = `/api/scores/${scoreId}/page.jpg`;
+  $("xml").href = `/api/scores/${scoreId}/score.musicxml`;
+  $("pdf").href = `/api/scores/${scoreId}/score.pdf`;
+  show("workspace");
+  draw();
+}
+
+function draw() {
+  $("pages").innerHTML = score.pages.join("");
+  $("undo").disabled = !score.canUndo;
+  const shown = [...document.querySelectorAll("#pages g.harm")];
+  score.chords.forEach((chord, index) => {
+    const element = shown[index];
+    if (!element) return;
+    element.dataset.index = index;
+    if (chord.confidence !== null && chord.confidence < UNSURE_BELOW) element.classList.add("unsure");
+  });
+  drawBoxes();
+  drawChecks();
+  if (selected) {
+    const element = document.getElementById(selected);
+    if (element) element.classList.add("selected"); else selected = null;
+  }
+  updateTools();
+}
+
+function drawBoxes() {
+  const image = $("pageImage");
+  const place = () => {
+    document.querySelectorAll(".box").forEach(box => box.remove());
+    if (!image.naturalWidth) return;
+    for (const chord of score.chords) {
+      if (!chord.box) continue;
+      const [left, top, right, bottom] = chord.box;
+      const box = document.createElement("div");
+      box.className = "box" + (chord.confidence !== null && chord.confidence < UNSURE_BELOW ? " unsure" : "");
+      box.dataset.index = chord.index;
+      box.style.left = `${left / image.naturalWidth * 100}%`;
+      box.style.top = `${top / image.naturalHeight * 100}%`;
+      box.style.width = `${(right - left) / image.naturalWidth * 100}%`;
+      box.style.height = `${(bottom - top) / image.naturalHeight * 100}%`;
+      $("imageBox").append(box);
+    }
+  };
+  if (image.complete) place(); else image.onload = place;
+}
+
+function drawChecks() {
+  document.querySelectorAll(".chip").forEach(chip => chip.remove());
+  const unsure = score.chords.filter(chord => chord.confidence !== null && chord.confidence < UNSURE_BELOW);
+  $("checks").hidden = unsure.length === 0;
+  for (const chord of unsure) {
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.textContent = chord.text;
+    chip.addEventListener("click", () => {
+      const element = document.querySelector(`#pages g.harm[data-index="${chord.index}"]`);
+      if (element) openEditor(element.getBoundingClientRect(), chord.index, chord.text);
+    });
+    $("checks").append(chip);
+  }
+}
+
+function updateTools() {
+  const on = Boolean(selected);
+  document.querySelectorAll("#tools button").forEach(button => { button.disabled = !on; });
+  $("toolLabel").textContent = on ? "Note:" : "Click a note or chord to edit it";
+}
+
+function select(id) {
+  document.querySelectorAll("#pages g.note.selected").forEach(element => element.classList.remove("selected"));
+  selected = id;
+  if (id) document.getElementById(id)?.classList.add("selected");
+  updateTools();
+}
+
+async function send(path, body) {
+  const response = await fetch(`/api/scores/${scoreId}/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "That edit didn't work.");
+  score = data;
+  draw();
+}
+
+async function noteAction(action) {
+  if (!selected) return;
+  try {
+    const id = selected;
+    await send(`notes/${id}`, { action });
+    if (action !== "delete") select(id); else select(null);
+  } catch (error) { message(error.message); }
+}
+
+function openEditor(rect, index, text, noteId = null) {
+  editing = { index, noteId };
+  document.querySelectorAll(".box.active").forEach(box => box.classList.remove("active"));
+  document.querySelector(`.box[data-index="${index}"]`)?.classList.add("active");
+  $("editor").hidden = false;
+  $("editorError").hidden = true;
+  $("chordDelete").hidden = index === null;
+  const width = $("editor").offsetWidth;
+  $("editor").style.left = `${Math.max(8, Math.min(rect.left + scrollX, innerWidth - width - 8))}px`;
+  $("editor").style.top = `${rect.bottom + scrollY + 6}px`;
+  $("chordInput").value = text;
+  $("chordInput").focus();
+  $("chordInput").select();
+}
+
+function closeEditor() {
+  editing = null;
+  $("editor").hidden = true;
+  document.querySelectorAll(".box.active").forEach(box => box.classList.remove("active"));
+}
+
+async function saveChord(text) {
+  if (!editing) return;
+  try {
+    if (editing.index === null) await send("chords", { note: editing.noteId, text });
+    else await send(`chords/${editing.index}`, { text });
+    closeEditor();
+  } catch (error) {
+    $("editorError").textContent = error.message;
+    $("editorError").hidden = false;
+  }
+}
+
+// Noteheads are tiny and staff lines can sit on top of them, so a near miss still counts.
+function nearest(selector, x, y, reach) {
+  let best = null, bestDistance = reach;
+  for (const element of document.querySelectorAll(selector)) {
+    const box = (element.querySelector(".notehead") || element).getBoundingClientRect();
+    const dx = Math.max(box.left - x, 0, x - box.right);
+    const dy = Math.max(box.top - y, 0, y - box.bottom);
+    const distance = Math.hypot(dx, dy);
+    if (distance < bestDistance) { best = element; bestDistance = distance; }
+  }
+  return best;
+}
+
+$("pages").addEventListener("click", event => {
+  const chord = event.target.closest("g.harm") || nearest("#pages g.harm", event.clientX, event.clientY, 6);
+  if (chord && chord.dataset.index !== undefined) {
+    const index = Number(chord.dataset.index);
+    openEditor(chord.getBoundingClientRect(), index, score.chords[index].text);
+    return;
+  }
+  const note = event.target.closest("g.note") || nearest("#pages g.note", event.clientX, event.clientY, 14);
+  closeEditor();
+  select(note ? note.id : null);
+});
+
+document.querySelectorAll("#tools button[data-action]").forEach(button => {
+  button.addEventListener("click", () => noteAction(button.dataset.action));
+});
+
+$("addChord").addEventListener("click", () => {
+  const note = document.getElementById(selected);
+  if (note) openEditor(note.getBoundingClientRect(), null, "", selected);
+});
+$("chordSave").addEventListener("click", () => saveChord($("chordInput").value));
+$("chordDelete").addEventListener("click", () => saveChord(""));
+$("chordInput").addEventListener("keydown", event => {
+  if (event.key === "Enter") saveChord(event.target.value);
+  if (event.key === "Escape") closeEditor();
+});
+
+$("undo").addEventListener("click", () => send("undo").catch(error => message(error.message)));
+$("again").addEventListener("click", () => { history.replaceState(null, "", " "); scoreId = null; selected = null; message(""); show("start"); });
+$("file").addEventListener("change", event => upload(event.target.files[0]));
+$("camera").addEventListener("change", event => upload(event.target.files[0]));
+
+const keys = { ArrowUp: "up", ArrowDown: "down", "#": "sharp", b: "flat", n: "natural", Delete: "delete", Backspace: "delete" };
+document.addEventListener("keydown", event => {
+  if (event.target.tagName === "INPUT") return;
+  if ((event.ctrlKey || event.metaKey) && event.key === "z") { event.preventDefault(); if (score?.canUndo) $("undo").click(); return; }
+  if (event.key === "Escape") { closeEditor(); select(null); return; }
+  if (selected && keys[event.key]) { event.preventDefault(); noteAction(keys[event.key]); }
+});
+
+const drop = $("drop");
+for (const name of ["dragenter", "dragover"]) drop.addEventListener(name, event => { event.preventDefault(); drop.classList.add("over"); });
+for (const name of ["dragleave", "drop"]) drop.addEventListener(name, event => { event.preventDefault(); drop.classList.remove("over"); });
+drop.addEventListener("drop", event => upload(event.dataTransfer.files[0]));
+document.querySelectorAll("label.button").forEach(label => {
+  label.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); } });
+});
+
+if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); }
+</script>
+</body>
+</html>
