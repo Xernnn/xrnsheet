@@ -146,7 +146,7 @@ If the models were equal, these would split 50/50. An exact binomial test gives 
 
 **Character error rate (CER)** is edit distance divided by length. It shows near misses that accuracy treats as total failures.
 
-**Selective prediction.** Measure accuracy at each confidence cutoff. On the test set, keeping readings above 0.8 kept 71% at 99.9% accuracy. That's the logic behind asking a person to check only some chords.
+**Selective prediction.** Measure accuracy at each confidence cutoff. On the test set, the first model kept 71% of readings above 0.8, at 99.9% accuracy. That's the logic behind asking a person to check only some chords.
 
 **Ablation.** Remove one thing and retrain, to prove what it contributes. I removed camera damage:
 
@@ -222,7 +222,73 @@ Looking at actual images caught problems no metric would have shown:
 
 If a label is unreadable to a person, it's noise to the model. I now look at generated samples before every training run.
 
-## 11. Building it as software
+## 11. Reading notes myself
+
+homr works, but it's AGPL and it won't tell me where its barlines are. So I built a small note reader for the simplest useful case: one melody on one staff. That covers lead sheets and most jazz charts. It doesn't cover piano or choir music.
+
+**Finding staves without a neural network.** Each line of music has to be cut out first, and this is classical computer vision:
+
+1. Threshold the page, so ink is white and paper is black, even under uneven light.
+2. Use a long horizontal opening, which keeps lines and removes almost everything else.
+3. Cut the page into 48 vertical slices. In each one, look for five evenly spaced rows. I call that a comb.
+4. Chain combs from slice to slice into tracks, and fit a smooth curve through each one.
+5. Use `cv2.remap` to bend the staff flat.
+
+My first version counted ink along straight rows. It lost staves on warped photos, because a curved line doesn't sit in one row. The tracing version then invented staves on 64 of 120 pages, because a ledger line or beam beside four real lines also looks like a comb, shifted by one line. Keeping one track per staff fixed that. It now gets all 300 generated pages right, and all 48 rotated photo pages up to 8 degrees.
+
+**One change to the CRNN: keep the height.** The chord reader pools height down to 1, because a chord's meaning runs along the line. In a note, height is the pitch, so pooling it away would destroy the answer.
+
+```
+strip                      1 × 96 × W
+CNN with pooling         192 × 6 × W/4       keep 6 rows of height
+flatten each slice      1152 × W/4
+bidirectional LSTM       640 × W/4
+linear + log-softmax     269 × W/4           one of 269 tokens per slice
+```
+
+**Tokens describe what's printed, and rules work out the pitch.** The model doesn't output "F sharp 5". It outputs `note:9:8`, meaning a note in staff position 9 that looks like an eighth. Rules then apply the clef, the key and any accidental earlier in the bar, the way a musician does. That gives two benefits. The vocabulary stays at 269 tokens, and one misread key signature can be fixed in one place, without touching the notes.
+
+**CTC gives me positions for free.** I said CTC doesn't need to know where characters are. It doesn't, but after training, the slice where each token fires is close to where the symbol sits. Greedy decoding keeps that slice, so my reader knows the x position of every barline and note. Chord placement can then use real positions rather than guessing from note counts.
+
+**Round-trip test.** Before an hour of training, I checked the labels. A generated page gives tokens, and the code that builds the score turns those tokens back into MusicXML. If the result differs from the original, the labels or the builder are wrong, and no amount of training can fix that. All 150 random pages came back exactly.
+
+**Set limits from the unit you actually care about.** My pen distortion was copied from the chord generator, where it was sized for letters. One staff step on a strip is only 4 pixels, so that much warp would have moved a note to a different pitch and silently made its label wrong. I cut it to a level that can't change a pitch, then checked by eye.
+
+**One test font explained more than the average did.** Petaluma, the hand-style test font, got 52% of strips exactly right, against 97% for Leipzig. An alignment found the biggest single cause: the reader got the time signature right on only 38 of 250 strips. Ignoring that token lifts Petaluma to 74%, which is still far below Leipzig's 99%, so it's only part of the story. My first reading was that notes were fine, and that was too generous. The notes I could line up were 98.7% right, but that leaves out every strip that came out the wrong length, and a quarter of Petaluma's strips did.
+
+**The same lesson about test sets, again.** I could work on that token, but Petaluma is my held-out font. Changing the model because of it would turn it into a development font, and I'd have no clean test left.
+
+**An earlier negative result.** With homr I tried finding barlines from the image with rules. It helped clean pages, but on photos it found wrong barlines whose count happened to match, so placement fell from 185 to 171 of 207. That's why I wanted barlines from a model that has read the line.
+
+## 12. Learning from real corrections
+
+The app's correction loop is also a way to collect data: every chord a person fixes is a real, labelled example. That sounds free. Getting something usable out of it took more thought than the model did.
+
+**Human in the loop.** A person checks the model's output, and that check becomes training data. The danger is that the model's mistakes can become labels. If someone opens a sheet, fixes two chords and leaves, the rest wasn't necessarily checked. So only sheets marked "checked" are used. "Checked" means a person looked, which is what makes a label worth trusting.
+
+**Label quality, and how a tool can invent bad labels.** I compare the first recognized version with the final one and classify each chord as confirmed, corrected, moved or removed. A simulated user quickly exposed a bug in that logic: 28 chords looked "removed", which would have taught the model that real chords aren't chords. They had only been put in the wrong place, and the user deleted them and added them elsewhere. Those are now counted as moved, by looking within one measure either side. When the text differs and I can't tell which case it is, I skip the chord. A missing example costs less than a wrong one.
+
+**Group splits and near-duplicates.** If the same piece is scanned twice and one copy lands in training and one in the test, the test is a disguised copy. It's the Tinos and Liberation Serif problem from section 4, with sheets in place of fonts. So sheets with mostly the same chords are grouped, and a whole group goes to one side. One group in five is held out, decided by a hash, so a sheet doesn't switch sides as more data arrives.
+
+**Fine-tuning.** Rather than train from nothing, I start from the existing model and train gently on the new data, at a low learning rate. Each batch adds 20 real chords to 60 synthetic ones. The synthetic part is there so that training on a few dozen chords doesn't wear away everything else the model can read.
+
+**K-fold cross-validation.** With 53 real chords, a single split is mostly luck, and the test side is tiny. K-fold takes turns: split into 5 parts, train on 4, test on the fifth, and repeat. Every chord is tested exactly once, by a model that never saw it.
+
+| Real chords used to train | Right, of 53 | Gained | Lost | McNemar p | Second writer, of 8 |
+|---|---|---|---|---|---|
+| None, the current model | 41 | | | | 4 |
+| 10, 500 steps | 41 | 6 | 6 | 1.00 | 4.8 |
+| 20, 500 steps | 40 | 5 | 6 | 1.00 | 5.0 |
+| 42, 500 steps | 41 | 7 | 7 | 1.00 | 4.8 |
+| 42, 1,500 steps | 43 | 7 | 5 | 0.77 | 4.8 |
+
+Fine-tuning changed which chords were right, but not how many. The best case, 43 against 41, is well within chance. So a few dozen corrected chords haven't been shown to help. Retraining may need far more data, or may not be where the gain is. It's better to learn that before spending weeks on corrections in the belief that they'll retrain the model. One caveat: that page already shaped the current model, so it's a harsh test for further gains.
+
+**Promotion gates.** A new model mustn't replace the old one because the numbers look nice on the day. So I fixed the rules before any real data existed. `chords.retrain` promotes a model only if there are at least 30 held-out chords, the synthetic test stays at 0.99 or above, it gains more chords than it loses, and McNemar gives p below 0.05. Fixing the rule first is what stops me bending it later, and the gate can only be applied to data the new model has never trained on.
+
+**A stand-in isn't evidence.** I tested the whole loop with a simulated user who corrected synthetic sheets. That proved the plumbing works, from upload through correction, export, retraining and gate. Its accuracy numbers mean nothing, and both models scored 88/88. A pipeline test and a model test can look identical in a log, so the difference has to be written down.
+
+## 13. Building it as software
 
 **Tests that prove something.** Passing tests only show the code matches my expectations. **Mutation testing** checks the tests themselves: break the code on purpose and see if a test fails. When I put old bugs back, two got through, including a test font moving into training. A test now pins those fonts by name.
 
@@ -230,7 +296,17 @@ If a label is unreadable to a person, it's noise to the model. I now look at gen
 
 **Caching experiments.** homr takes about 20 seconds per page, but the chord logic takes under a second. Saving homr's output let me compare five versions of the rule on 13 pages in a few minutes. Fast experiments get run, and slow ones get skipped.
 
-**Running out of resources.** The laptop has little free memory, so each engine run has a memory cap through `systemd-run`. The GPU has 4 GB, so a training batch of 80 needs validation at 48.
+**Running out of resources.** The laptop has little free memory, so each engine run has a memory cap through `systemd-run`. The GPU has 4 GB, so a training batch of 80 needs validation at 48. For the note reader I measured instead of guessing: a guessed pixel limit would have cut batches to about 5, and the measured one allows 32 at 1.82 GB.
+
+**Save your work as you go.** The note reader's training was stopped by the system for lack of memory, after about 23,000 of 24,000 steps. Almost nothing was lost, because the best checkpoint so far is always on disk. Long jobs on a shared laptop should always assume they can die.
+
+**Python details that cost me time.**
+
+- On Python 3.14, worker processes re-import the main script. A script without an `if __name__ == "__main__"` guard crashes with a confusing `ConnectionResetError`.
+- A pipe hides failures. `python script.py | grep ...` reports grep's exit code, so a crash looked like success until I set `pipefail`.
+- `best = 1.0` as a starting value meant a score of exactly 1.0 never saved. It's `float("inf")` now.
+
+**Keep one page's failure from losing the others.** Each page of a PDF is read in its own process, with a time limit. A blank page or a crash leaves that page out and tells the user, rather than failing the whole score.
 
 **Web app basics.**
 
@@ -242,7 +318,7 @@ If a label is unreadable to a person, it's noise to the model. I now look at gen
 
 **Designing for errors.** A recognizer will always make mistakes, so the product is really the correction loop. Showing the original beside the result, marking doubtful chords and making one-click fixes matter as much as accuracy. When I found about one false fermata per page, a filter would also have deleted real fermatas. A "Clear marks" button was the better fix.
 
-## 12. Licences
+## 14. Licences
 
 Licences decide what a startup can ship, so I tracked them from the start.
 
@@ -256,7 +332,9 @@ Licences decide what a startup can ship, so I tracked them from the start.
 
 Training on a non-commercial dataset can restrict the resulting model, so what looks like a data decision is really a business decision. Images taken from papers also stay out of the repository.
 
-## 13. Questions I should be able to answer
+This is also the second reason for my own note reader. On melody sheets it can run with no AGPL code at all. It isn't a replacement yet, because it can't read several voices on one staff.
+
+## 15. Questions I should be able to answer
 
 1. Why did you split by font instead of by image?
 2. Walk through what happens to a 200-pixel crop inside the model.
@@ -270,6 +348,16 @@ Training on a non-commercial dataset can restrict the resulting model, so what l
 10. Why did you use rules rather than train a detector?
 11. On rendered print your model barely beats a free OCR. Was it worth building?
 12. How would you make this a commercial product, given homr's licence?
+13. Why does the note reader keep 6 rows of height when the chord reader keeps 1?
+14. Why not have the model output pitches directly?
+15. CTC doesn't need positions, so how does your reader know where notes are?
+16. What's a round-trip test, and why run it before training?
+17. Petaluma scored much worse than Leipzig. What was actually wrong, and why didn't you fix it?
+18. Why cross-validation on the real page instead of one train and test split?
+19. Fine-tuning gained 7 chords and lost 5. What can you conclude?
+20. Why were the promotion rules written before any real data existed?
+21. How can a correction tool create wrong labels?
+22. What did the simulated user prove, and what didn't it prove?
 
 My short answer to question 11: on print it wasn't needed, and the honest conclusion is to use the free reader there. I still learned the most from building it, and the only place it may have an edge is handwriting, which is where I have the least evidence.
 
@@ -290,13 +378,21 @@ My short answer to question 11: on print it wasn't needed, and the honest conclu
 | Domain randomization | Varying synthetic data widely so reality fits inside it |
 | Dynamic programming | Solving a problem by reusing answers to smaller ones |
 | F1 | The harmonic mean of precision and recall |
+| Fine-tuning | Continuing to train an existing model on new data, gently |
 | Greedy decoding | Taking the likeliest output at each step |
+| Group split | Keeping related items together on one side of a split |
+| Human in the loop | Using a person's checks of model output as data |
+| K-fold cross-validation | Taking turns holding out each part of the data |
+| Label noise | Wrong labels in the training data |
 | LSTM | A recurrent layer that carries memory along a sequence |
 | McNemar's test | A paired test using only disagreements |
+| Morphological opening | Erasing, then regrowing, shapes to keep only those of a chosen form |
 | Mutation testing | Breaking code on purpose to check that tests notice |
 | MusicXML | The shared file format for notation |
 | Negative sample | An example of what the target is not |
 | OMR | Optical music recognition |
 | Over- and under-segmentation | Splitting one object apart, or merging several into one |
+| Promotion gate | Rules a new model must pass to replace the old one |
+| Round-trip test | Converting data there and back to check that nothing changed |
 | Selective prediction | Answering only when confident |
 | Wilson interval | A confidence interval that behaves well near 0 and 1 |

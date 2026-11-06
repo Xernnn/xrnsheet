@@ -2,7 +2,7 @@
 
 Turn a photo or PDF of sheet music into notation you can edit and reprint.
 
-Upload a sheet, check the result beside the original, fix notes and chord symbols, then download a PDF or MusicXML. Notes are read by [homr](https://github.com/liebharc/homr), and chord symbols by a small model trained in this repository.
+Upload a sheet, check the result beside the original, fix notes and chord symbols, then download a PDF or MusicXML. Chord symbols are read by a small model trained in this repository. Notes are read by [homr](https://github.com/liebharc/homr), or by a second small model here if the sheet has one melody per staff.
 
 It works well on clean, computer-rendered sheets. It's weak on real handwriting, and it hasn't been tested on real phone photos or real printed pages yet. See [the project report](docs/PROJECT_REPORT.md) for the full results, and [the knowledge guide](docs/KNOWLEDGE_GUIDE.md) for the ideas behind them.
 
@@ -16,7 +16,7 @@ python3 -m venv .venv
 .venv/bin/python -m chords.fonts          # download the fonts
 ```
 
-The app needs a chord model at `models/chord_reader.pt`. Train one with the command under [Train the chord reader](#train-the-chord-reader), or copy a trained one there.
+The trained models are in `models/`. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
 
 The benchmark also uses Audiveris and Tesseract. Audiveris has no Arch package, so it's unpacked into `tools/` from the official release:
 
@@ -35,7 +35,13 @@ Tesseract needs `eng.traineddata` in `/usr/share/tessdata`.
 .venv/bin/python -m app.server
 ```
 
-Open <http://127.0.0.1:8000>. A page takes 15 to 30 seconds on CPU.
+Open <http://127.0.0.1:8000>. A page takes 15 to 30 seconds on CPU. PDFs can have up to 40 pages. If a page can't be read, it's left out and the app says which one. Your sheets are listed on the start page, so you can come back to them.
+
+To read notes with the model in this repository and not homr, which only works for one melody per staff:
+
+```sh
+.venv/bin/python -m app.server --notes own
+```
 
 | Key | Action |
 |---|---|
@@ -45,7 +51,7 @@ Open <http://127.0.0.1:8000>. A page takes 15 to 30 seconds on CPU.
 | Ctrl+Z | Undo |
 | Esc | Close the chord editor |
 
-Click a chord to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note.
+Click a chord to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data.
 
 To recognize a sheet without the app:
 
@@ -64,6 +70,29 @@ To recognize a sheet without the app:
 
 Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the ablation. Training data is generated as it runs, and 5 fonts are held out for testing.
 
+## Train the note reader
+
+```sh
+.venv/bin/python -m notes.render      # generate the strips, about an hour of CPU time
+.venv/bin/python -m notes.train       # about 60 minutes on a 4 GB GPU
+.venv/bin/python -m notes.evaluate    # score it on the two held-out music fonts
+```
+
+The best checkpoint is saved as training runs, so a stopped run still leaves a usable model.
+
+## Retrain on your own corrections
+
+After you've pressed "Mark as checked" on some sheets:
+
+```sh
+.venv/bin/python -m chords.corrections       # gather checked sheets into data/corrections/
+.venv/bin/python bench/real_report.py        # how the app did on the held-out sheets
+.venv/bin/python -m chords.retrain           # train a candidate and report on it
+.venv/bin/python -m chords.retrain --promote # also replace the live model if it passes
+```
+
+About one sheet in five is held out, chosen by a hash. A candidate replaces the live model only if there are at least 30 held-out chords, it gains more chords than it loses with p below 0.05, and it stays at 0.99 or above on the synthetic test. So far, a few dozen real corrections haven't been shown to help. See [the project report](docs/PROJECT_REPORT.md).
+
 ## Run the benchmark
 
 ```sh
@@ -72,7 +101,9 @@ Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the a
 .venv/bin/python bench/make_figures.py     # redraw the report's charts
 ```
 
-Add `--only chart --engine xrnsheet` to run part of it. Finished runs are cached in `results/`, so delete `results/xrnsheet` after changing the pipeline or the model.
+Add `--only chart --engine xrnsheet` to run part of it. Finished runs are cached in `results/`, so delete `results/xrnsheet` after changing the pipeline or the model. The `own_notes` engine runs the same pipeline with no homr, and isn't part of the default run.
+
+To compare another app, export its result for each image as `data/external/soundslice/<image name>.musicxml`, then add `--engine soundslice`.
 
 ## Test your own sheets
 
@@ -109,13 +140,26 @@ From 2026-11-06, on synthetic pages. Notes are `note` F1 scores, and chords show
 
 These aren't real-world accuracy. homr was trained on images much like these, so its scores are likely inflated. On one real handwritten page, the pipeline found 20 of 53 chords.
 
+The note reader in this repository (`--notes own`), on the same synthetic pages:
+
+| Sheets | Notes: own reader | Notes: homr | Chords placed: own reader | Chords placed: homr |
+|---|---|---|---|---|
+| Spelled jazz charts, clean (10) | 1.00 | 1.00 | 0.93 | 0.88 |
+| Spelled jazz charts, simulated photo (10) | 1.00 | 1.00 | 0.88 | 0.87 |
+| Lead sheets, clean (3) | 1.00 | 1.00 | 1.00 | 0.96 |
+| Lead sheets, handwritten-style font (3) | 0.99 | 1.00 | 1.00 | 1.00 |
+| Lead sheets, simulated photo (3) | 1.00 | 1.00 | 1.00 | 0.98 |
+| Classical, all conditions (15) | 0.12 | 0.91 | n/a | n/a |
+
+It reads one melody per staff, which is why classical music scores so low, and why homr stays the default. It takes about 4 seconds a page. It reads hand-style time signatures badly, and the notes score doesn't measure that. On real handwriting it found only a small share of the notes.
+
 ## Licences
 
 Check these before shipping a commercial product.
 
 | Component | Licence | Note |
 |---|---|---|
-| homr, Audiveris | AGPL-3.0 | Running them as a closed online service may require sharing source code |
+| homr, Audiveris | AGPL-3.0 | Running them as a closed online service may require sharing source code. `--notes own` runs with no homr, for melody sheets only |
 | Verovio | LGPL-3.0 | |
 | music21 | BSD-3-Clause | The benchmark pieces come from its corpus |
 | RapidOCR | Apache-2.0 | |
