@@ -43,15 +43,44 @@ To read notes with the model in this repository and not homr, which only works f
 .venv/bin/python -m app.server --notes own
 ```
 
+To write music with no photo behind it, choose "Or start a blank score" on the start page and pick a key, time, staff and number of bars.
+
+The keys follow MuseScore. Press `N` to start entering notes, pick a length, and type the letters or click the staff. A new bar appears when you write past the last one.
+
 | Key | Action |
 |---|---|
-| ↑ ↓ | Move the selected note |
-| `#` `b` `n` | Sharp, flat, natural |
-| Delete | Delete the note |
-| Ctrl+Z | Undo |
-| Esc | Close the chord editor |
+| `N` | Start or stop entering notes |
+| `A` to `G` | Write that note and move on |
+| Shift+`A` to `G` | Add that note to the chord just written |
+| `1` to `7` | Length, from a 64th to a whole note. `5` is a quarter note |
+| `.` | Dotted |
+| `0` | Rest |
+| `T` | Tie to the next note |
+| Ctrl+`3` | Make a triplet from the chosen length, or take one away |
+| `#` `-` `=` | Sharp, flat, natural. `b` also means flat when you aren't entering notes |
+| ↑ ↓ | Move a note. With Ctrl, move an octave |
+| ← → | Previous or next note |
+| Shift+click, Shift+← → | Select a stretch of notes |
+| Ctrl+A | Select the whole staff |
+| Ctrl+C, Ctrl+X, Ctrl+V | Copy, cut, paste, also between scores |
+| Ctrl+L | Type lyrics. Space moves on, `-` joins syllables, Enter finishes. On the last note both stay in the word |
+| Space | Play or stop, from the selected note |
+| Ctrl+Z, Ctrl+Y | Undo, redo |
+| Delete, Ctrl+Delete | Turn into a rest, or remove the beat and pull later notes in |
+| Esc | Stop entering notes, or close the chord editor |
+| Click the staff | While entering notes, place a note there. Shift+click adds it to a chord |
 
-Click a chord to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data.
+A longer note overwrites what comes after it, and a shorter one leaves a rest, so every bar stays full. Bars that don't add up to the time signature are listed above the score, which is usually how a misread rhythm shows itself. Click one to go there, then fix it with "Remove beat" or "Insert beat". The toolbar also adds and deletes bars, and changes the key or time from the selected bar. A new time signature doesn't move notes between bars: the ones that no longer fit are listed for you to fix.
+
+A note too long for its bar carries into the next one, tied. A selected stretch moves, deletes or copies as one undo step, within one voice.
+
+Play sounds the notes and the chord symbols, starting from the selected note. It follows repeats and first and second endings, but not D.C. or D.S.
+
+To write a triplet, pick the length it should fill, press Ctrl+`3`, and type its three notes. A quarter gives eighth-note triplets. A triplet can't be cut in half, so selecting or copying any note of one takes the whole triplet.
+
+The "Repeat…" menu starts or ends a repeat at the selected bar, and marks it as a first or second ending. Select several bars to put one ending over all of them. The title and composer you type above the score are printed. A title recognition guessed isn't printed until you save it.
+
+Click a chord to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. Bars you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
 
 To recognize a sheet without the app:
 
@@ -101,7 +130,7 @@ About one sheet in five is held out, chosen by a hash. A candidate replaces the 
 .venv/bin/python bench/make_figures.py     # redraw the report's charts
 ```
 
-Add `--only chart --engine xrnsheet` to run part of it. Finished runs are cached in `results/`, so delete `results/xrnsheet` after changing the pipeline or the model. The `own_notes` engine runs the same pipeline with no homr, and isn't part of the default run.
+Add `--only chart --engine xrnsheet` to run part of it, or `--cached` to re-score existing outputs without running any engine. `bench/repair_report.py` shows what the bar repairs change, and `bench/real_page.py` scores the real handwritten page, which its opening comment explains how to fetch. Finished runs are cached in `results/`, so delete `results/xrnsheet` after changing the pipeline or the model. The `own_notes` engine runs the same pipeline with no homr, and isn't part of the default run.
 
 To compare another app, export its result for each image as `data/external/soundslice/<image name>.musicxml`, then add `--engine soundslice`.
 

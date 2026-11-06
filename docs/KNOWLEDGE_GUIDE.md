@@ -206,6 +206,17 @@ ranked by: pieces covered, then fewest spans
 
 **Model the negatives you actually see.** Before writing new negatives, I made a sheet of the real false chords. Almost all were pieces of staff with handwritten stems running through them, read as `F` or `E`, which are bars on a stem. So that's what I added.
 
+**Judge a fix on every score, not on the example that suggested it.** Tracing lost chords gave me three convincing ideas, and only one survived.
+
+| Idea | Why it looked right | What the numbers said |
+|---|---|---|
+| Shrink the page before the detector | Photos lost more chords, and photos are larger | No size beat the original |
+| Join overlapping failed boxes | One chord really was cut between two boxes | Lost 23 of 268 chords on clean pages |
+| Split a second time at a smaller gap | Two chords on a photo sat just under the gap limit | Gained 2 on the benchmark, added 4 false chords on the real page |
+| Allow 10 pieces in a box, not 6 | A box of 7 pieces lost all 5 of its chords | Gained 3 chords and 2 false ones on clean pages, and changed nothing on the real page |
+
+The third idea is the one to remember. It raised every synthetic score and looked finished until I ran the real page, because a rule that cuts more boxes also cuts handwriting that was never a chord. A rule has to be tested on the data most likely to hurt it.
+
 **Heuristics or learning?** Each of these rules could in principle be learned by a chord-specific detector. Rules are the right start with no labelled data, because they're fast to test and easy to explain. If I get real labelled pages, training a detector is the obvious next step.
 
 ## 10. Looking at the data
@@ -318,7 +329,50 @@ Fine-tuning changed which chords were right, but not how many. The best case, 43
 
 **Designing for errors.** A recognizer will always make mistakes, so the product is really the correction loop. Showing the original beside the result, marking doubtful chords and making one-click fixes matter as much as accuracy. When I found about one false fermata per page, a filter would also have deleted real fermatas. A "Clear marks" button was the better fix.
 
-## 14. Licences
+## 14. Building a score editor
+
+**Why rhythm is harder than pitch.** Changing a pitch touches one note. Changing a length touches a whole bar, because MusicXML stores a bar as a list played in order. A note's position is the running total of everything before it, with `backup` and `forward` jumps between voices. Editing that list directly means repairing every jump after every change.
+
+**Change the form, edit, change it back.** So an edited bar is read into a simpler form, a timeline: each voice is a list of events with a start and a length. The edit happens there, and the bar is written out again whole. Bars that weren't edited are never rewritten. Reading a real file and rewriting every bar changed nothing in 106 files and 2,121 bars, which proved this was safe before anything was built on it.
+
+**Exact fractions.** A triplet eighth is a third of a quarter note, and a float can't store a third exactly. Small errors would make two notes that start together look different. Python's `Fraction` keeps 1/3 as 1/3, so three of them add up to exactly 1. MusicXML has the same problem from the other side, because it stores lengths as whole numbers of `divisions` per quarter note. A file with 2 divisions can't hold a 16th, so the editor rescales a score before writing into it.
+
+**Rules that keep a bar valid.** A longer note overwrites what follows, a note that's partly covered becomes rest, and a shorter note leaves a rest. So a bar stays full whatever you type. These are MuseScore's rules. I used its behaviour and keyboard conventions, but not its code, which is GPL.
+
+**Property-based tests and an oracle.** An example test only tries what I thought of. A property-based test states something that must always be true, called an **invariant**, and throws random inputs at the code. After every random edit I check four: IDs are unique, children are in the order the format requires, no tie has one end missing, and bars add up. I also wrote a second, much simpler model of a bar as 16 slots, and the real code has to agree with it at every step. A separate way of getting the right answer is called an **oracle**. Seeds are fixed, so a failure can be replayed. These tests found bugs my examples had missed, including a note left half-tied after being moved.
+
+**Stable identity.** Chord boxes and correction labels pointed at bar numbers. Add a bar and every later number shifts, so a chord would point at the wrong box and the correction loop would write wrong training labels. Each bar now has a permanent ID that remembers its original number. It's the same reason a database row has an ID and not just a position.
+
+**Race conditions.** A race condition is a bug that depends on the order two things happen to finish in. Fast typing sends edits faster than the server answers, which goes wrong in two ways. Two requests can read version 5 and both save version 6, losing an edit. Or the browser can send a note using a cursor from before the last note came back. So the server holds a lock around each read, edit and save, and the browser queues its edits. Without the lock, a test that sends 16 edits at once fails. The browser test types 8 notes with no delay between them.
+
+**A check that needs no answers.** Notes in a bar have to add up to the time signature, which is true without any truth file. On correct files this raised 0 false alarms in 337 bars. On homr's output it found real errors that my note score can't see, like a piece read in 4/4 instead of 3/4, and a note placed half a beat late on a page that scored 1.00. Real use has no labels, so a check from the rules of the domain is often the only validation you get.
+
+**Written length and sounding length.** A triplet is three notes in the time of two, so an eighth in a triplet lasts a third of a beat while still being written as an eighth. A note therefore needs two lengths, and code that mixes them up writes notes that look right and play wrong. MusicXML stores the group in `<time-modification>` on every note, and draws the bracket from `<tuplet>` marks on the first and last. A dotted note inside a triplet can land exactly on a beat, so "does this position look like a beat" can't find where a triplet ends. The unit, `<normal-type>`, can.
+
+**One queue for everything that matters.** The first race fix put edits in a queue, but a length key still took effect at once. Type `c d 6 e` quickly and the half-note choice reached the `d` still waiting to be sent, so the wrong note got the wrong length. The general rule is that anything changing what the next edit means has to wait in the same queue: length, cursor, selection, stopping. The opposite mistake also exists. Reading a form field when a queued save finally runs can pick up a blank that a late reply just drew there. So read what the user typed at the moment they typed it, and read the score's state in turn.
+
+**Testing what can't be seen.** A browser test can't hear. An `OfflineAudioContext` renders the same sound into an array instead of the speakers, faster than real time. The test then measures how strong each pitch is in each half beat, using a single-frequency form of the Fourier transform, and checks the loudest one. That proved pitches, timing, silence in rests and repeats. It can also tell a tied note from two notes of the same pitch, because the sound dips between two separate notes and doesn't across a tie.
+
+**Test where the edges are, at different speeds, in more than one browser.** Typing `won-der` on the last note had a bug in every browser. The hyphen moves to the next note, there isn't one, so the box closed. In Chromium the rest of the word was typed before the reply came back and vanished. In Firefox the reply came first, so the letters reached the editor as commands. The same bug looked different because of timing, and only the second form made a test fail.
+
+**Keep it simple until a number says otherwise.** The server redraws the whole score on every edit, which sounds wasteful. I measured it before building anything cleverer, and Verovio redraws 192 bars in 185 ms.
+
+## 15. Repairing output with rules
+
+**What a score flattens, it can't see.** My note score turns a page into one list of notes, so a voice that starts a bar late, or a page in the wrong time signature, can score 1.00. I added two measures that keep that information: `time_right`, the share of bars with the right signature, and `bars_full`, the share of bars whose notes add up.
+
+**Check a new metric against a dumb answer.** 15 of my 18 test pieces are in 4/4, so a program that always says 4/4 gets 0.83 overall. Reporting by signature removes that shelter. homr was right on 4/4, and right on only half of the 3/4 sheets.
+
+**Use a constraint the output must obey.** Bars in a piece are nearly all the same length, so the notes themselves say what the signature must be. Two details matter:
+
+- **Not every bar gets a vote.** A whole-bar rest stretches to whatever signature was read, so it says nothing about the real length. The first and last bars can be pickups, so they don't vote either.
+- **Judge each part alone.** homr read Schubert's voice in 4/4 and the piano in 3/4. My first guard said "the score must have one signature", which blocked the very fix it was for.
+
+**All or nothing.** homr sometimes leaves out the instruction to step back to the start of a bar, so a second voice begins late with all the right notes. My first fix moved whatever it could, and the note score on Schumann fell from 0.914 to 0.887, because a half-fixed bar is worse than an untouched one. Now it only touches a bar when every voice then fits.
+
+**Say how thin the evidence is.** The signature repair changed 3 of 88 sheets and got all 3 right, but they are one piece in three versions. The other 85 only show that it raises no false alarms. A repair also can't choose between signatures of the same length: `2/2` and `4/4` both add up.
+
+## 16. Licences
 
 Licences decide what a startup can ship, so I tracked them from the start.
 
@@ -334,7 +388,7 @@ Training on a non-commercial dataset can restrict the resulting model, so what l
 
 This is also the second reason for my own note reader. On melody sheets it can run with no AGPL code at all. It isn't a replacement yet, because it can't read several voices on one staff.
 
-## 15. Questions I should be able to answer
+## 17. Questions I should be able to answer
 
 1. Why did you split by font instead of by image?
 2. Walk through what happens to a 200-pixel crop inside the model.
@@ -358,6 +412,23 @@ This is also the second reason for my own note reader. On melody sheets it can r
 20. Why were the promotion rules written before any real data existed?
 21. How can a correction tool create wrong labels?
 22. What did the simulated user prove, and what didn't it prove?
+23. Why does the editor rewrite a whole bar when one note changes?
+24. Why use fractions rather than floats for positions?
+25. What can a property-based test find that an example test can't? What's an oracle?
+26. Why do bars need a permanent ID when they already have a number?
+27. How can fast typing lose a note, and how do you know your fix works?
+28. What did the bar check find that the note score couldn't?
+29. Putting old bugs back got past your tests three times. What did you do about each one?
+30. Why does a triplet note need two lengths? Why can't you find a triplet's end from positions alone?
+31. Typing `c d 6 e` gave the D the wrong length. Why, and what's the general rule that fixes it?
+32. How did you test sound without listening to it?
+33. A sheet scored 1.00 for notes while a third of its bars were wrong. How can both be true?
+34. What would always answering 4/4 score, and what does that tell you about the time signature number?
+35. Why does the voice repair refuse to fix part of a bar?
+36. A rule raised every synthetic score and you removed it. Why?
+37. Why can't the repair tell `2/2` from `4/4`?
+38. Why does a whole-bar rest get no vote on the length of a bar?
+39. How did a browser difference expose a bug that was in every browser?
 
 My short answer to question 11: on print it wasn't needed, and the honest conclusion is to use the free reader there. I still learned the most from building it, and the only place it may have an edge is handwriting, which is where I have the least evidence.
 
@@ -382,17 +453,27 @@ My short answer to question 11: on print it wasn't needed, and the honest conclu
 | Greedy decoding | Taking the likeliest output at each step |
 | Group split | Keeping related items together on one side of a split |
 | Human in the loop | Using a person's checks of model output as data |
+| Invariant | Something that must stay true after every step |
 | K-fold cross-validation | Taking turns holding out each part of the data |
 | Label noise | Wrong labels in the training data |
 | LSTM | A recurrent layer that carries memory along a sequence |
 | McNemar's test | A paired test using only disagreements |
 | Morphological opening | Erasing, then regrowing, shapes to keep only those of a chosen form |
-| Mutation testing | Breaking code on purpose to check that tests notice |
 | MusicXML | The shared file format for notation |
+| Mutation testing | Breaking code on purpose to check that tests notice |
 | Negative sample | An example of what the target is not |
 | OMR | Optical music recognition |
+| Oracle | A separate way of getting the right answer, used to check code |
 | Over- and under-segmentation | Splitting one object apart, or merging several into one |
+| Pickup | Notes before the first full bar, which make that bar short |
 | Promotion gate | Rules a new model must pass to replace the old one |
+| Property-based test | A test that states a rule and tries it on random inputs |
+| Race condition | A bug that depends on which of two things finishes first |
+| Regression | A change that breaks something that used to work |
 | Round-trip test | Converting data there and back to check that nothing changed |
 | Selective prediction | Answering only when confident |
+| Stable identifier | A name that stays the same when things around it move |
+| Time signature | How many beats a bar holds, and what kind of note gets one |
+| Tuplet | Notes played in a time they wouldn't normally fill, such as three in the time of two |
+| Volta | A first or second ending, played only on that pass through a repeat |
 | Wilson interval | A confidence interval that behaves well near 0 and 1 |
