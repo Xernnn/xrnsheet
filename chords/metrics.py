@@ -2,6 +2,7 @@
 
 import math
 from collections import defaultdict
+from collections.abc import Sequence
 
 from chords.vocab import clean_text, parse_chord
 
@@ -12,7 +13,7 @@ def is_correct(predicted: str, label: str) -> bool:
     return chord is not None and chord == parse_chord(label)
 
 
-def edit_distance(a: str, b: str) -> int:
+def edit_distance(a: Sequence, b: Sequence) -> int:
     previous = list(range(len(b) + 1))
     for i, char_a in enumerate(a, start=1):
         current = [i]
@@ -77,3 +78,16 @@ def print_summary(summary: dict[str, dict], title: str) -> None:
     for name, values in summary.items():
         interval = f"{values['low']:.3f}-{values['high']:.3f}"
         print(f"{name:<36}{values['n']:>6}{values['accuracy']:>10.3f}{interval:>16}{values['cer']:>7.3f}")
+
+
+def mcnemar_exact(only_first_right: int, only_second_right: int) -> float:
+    """Two-sided exact McNemar test: could this many one-sided wins be chance?
+
+    Items both readers got right or wrong say nothing about which is better. Among the rest,
+    two equal readers would each win half the time, like a fair coin.
+    """
+    total = only_first_right + only_second_right
+    if total == 0:
+        return 1.0
+    tail = sum(math.comb(total, count) for count in range(min(only_first_right, only_second_right) + 1))
+    return min(1.0, 2 * tail / 2**total)

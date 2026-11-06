@@ -38,8 +38,17 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
 section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
 #original { position: sticky; top: 68px; }
-#imageBox { position: relative; line-height: 0; }
-#imageBox img { width: 100%; height: auto; border-radius: 4px; }
+#images { max-height: calc(100vh - 150px); overflow-y: auto; }
+.imageBox { position: relative; line-height: 0; }
+.imageBox + .imageBox { margin-top: 10px; }
+.imageBox img { width: 100%; height: auto; border-radius: 4px; }
+@media (max-width: 860px) { #original { position: static; } #images { max-height: 60vh; } }
+#history { margin-top: 26px; text-align: left; }
+#history h3 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
+#history a { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); text-decoration: none; margin-bottom: 6px; }
+#history a:hover { border-color: #b9b5ab; }
+#history .state { color: var(--muted); font-size: 13px; white-space: nowrap; }
+#checked.done { background: #e8f6ef; border-color: #2e9e6b; color: #14573a; }
 .box { position: absolute; border: 1.5px solid #2e9e6b; border-radius: 2px; pointer-events: none; }
 .box.unsure { border-color: var(--warn); background: rgba(194, 87, 12, .13); }
 .box.active { border-color: var(--accent); background: rgba(31, 111, 235, .16); }
@@ -66,6 +75,7 @@ section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0
 <header>
   <h1>xrnsheet</h1>
   <button id="undo" hidden disabled>Undo</button>
+  <button id="checked" hidden title="Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.">Mark as checked</button>
   <a id="xml" class="button" hidden>MusicXML</a>
   <a id="pdf" class="button primary" hidden>Download PDF</a>
   <button id="again" hidden>New sheet</button>
@@ -81,13 +91,14 @@ section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0
       </div>
       <div class="hint">Or drop a photo or PDF here. Flat, well-lit pages read best.</div>
     </div>
+    <div id="history" hidden><h3>Your sheets</h3><div id="historyList"></div></div>
   </div>
   <div id="busy" hidden><div class="spinner"></div><div id="busyText">Reading your sheet. This usually takes under a minute.</div></div>
   <div id="message" role="status" hidden></div>
   <div id="workspace" hidden>
     <section id="original" aria-label="Your original sheet">
       <h2>Your sheet</h2>
-      <div id="imageBox"><img id="pageImage" alt="The sheet you uploaded"></div>
+      <div id="images"></div>
       <div id="checks" hidden><span class="label">Please check:</span></div>
     </section>
     <section aria-label="Recognized score">
@@ -121,7 +132,28 @@ function show(view) {
   $("start").hidden = view !== "start";
   $("busy").hidden = view !== "busy";
   $("workspace").hidden = view !== "workspace";
-  for (const id of ["undo", "xml", "pdf", "again"]) $(id).hidden = view !== "workspace";
+  for (const id of ["undo", "checked", "xml", "pdf", "again"]) $(id).hidden = view !== "workspace";
+  if (view === "start") drawHistory();
+}
+
+async function drawHistory() {
+  const response = await fetch("/api/scores");
+  if (!response.ok) return;
+  const sheets = await response.json();
+  $("history").hidden = sheets.length === 0;
+  $("historyList").replaceChildren(...sheets.map(sheet => {
+    const link = document.createElement("a");
+    link.href = `#${sheet.id}`;
+    link.addEventListener("click", event => { event.preventDefault(); location.hash = sheet.id; scoreId = sheet.id; poll(); });
+    const title = document.createElement("span");
+    const when = new Date(sheet.saved * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    title.textContent = `${when}, ${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.chords} ${sheet.chords === 1 ? "chord" : "chords"}`;
+    const state = document.createElement("span");
+    state.className = "state";
+    state.textContent = sheet.checked ? "Checked" : "Not checked";
+    link.append(title, state);
+    return link;
+  }));
 }
 
 function message(text) {
@@ -147,11 +179,16 @@ async function poll() {
   const response = await fetch(`/api/scores/${scoreId}`);
   if (!response.ok) { show("start"); return; }
   const data = await response.json();
-  if (data.status === "processing") { show("busy"); setTimeout(poll, 1500); return; }
+  if (data.status === "processing") {
+    $("busyText").textContent = data.message || "Reading your sheet. This usually takes under a minute.";
+    show("busy");
+    setTimeout(poll, 1500);
+    return;
+  }
   if (data.status === "failed") { show("start"); message(data.message); return; }
   message(data.message);
   score = data;
-  $("pageImage").src = `/api/scores/${scoreId}/page.jpg`;
+  drawOriginals();
   $("xml").href = `/api/scores/${scoreId}/score.musicxml`;
   $("pdf").href = `/api/scores/${scoreId}/score.pdf`;
   show("workspace");
@@ -161,6 +198,8 @@ async function poll() {
 function draw() {
   $("pages").innerHTML = score.pages.join("");
   $("undo").disabled = !score.canUndo;
+  $("checked").textContent = score.checked ? "Checked ✓" : "Mark as checked";
+  $("checked").classList.toggle("done", score.checked);
   const shown = [...document.querySelectorAll("#pages g.harm")];
   score.chords.forEach((chord, index) => {
     const element = shown[index];
@@ -177,25 +216,37 @@ function draw() {
   updateTools();
 }
 
+function drawOriginals() {
+  $("images").replaceChildren(...score.sourcePages.map(number => {
+    const frame = document.createElement("div");
+    frame.className = "imageBox";
+    frame.dataset.page = number;
+    const image = new Image();
+    image.alt = `Page ${number} of your sheet`;
+    image.addEventListener("load", drawBoxes);
+    image.src = `/api/scores/${scoreId}/source/${number}.jpg`;
+    frame.append(image);
+    return frame;
+  }));
+}
+
 function drawBoxes() {
-  const image = $("pageImage");
-  const place = () => {
-    document.querySelectorAll(".box").forEach(box => box.remove());
-    if (!image.naturalWidth) return;
-    for (const chord of score.chords) {
-      if (!chord.box) continue;
-      const [left, top, right, bottom] = chord.box;
-      const box = document.createElement("div");
-      box.className = "box" + (chord.confidence !== null && chord.confidence < UNSURE_BELOW ? " unsure" : "");
-      box.dataset.index = chord.index;
-      box.style.left = `${left / image.naturalWidth * 100}%`;
-      box.style.top = `${top / image.naturalHeight * 100}%`;
-      box.style.width = `${(right - left) / image.naturalWidth * 100}%`;
-      box.style.height = `${(bottom - top) / image.naturalHeight * 100}%`;
-      $("imageBox").append(box);
-    }
-  };
-  if (image.complete) place(); else image.onload = place;
+  document.querySelectorAll(".box").forEach(box => box.remove());
+  for (const chord of score.chords) {
+    if (!chord.box) continue;
+    const frame = document.querySelector(`.imageBox[data-page="${chord.page}"]`);
+    const image = frame?.querySelector("img");
+    if (!image?.naturalWidth) continue;
+    const [left, top, right, bottom] = chord.box;
+    const box = document.createElement("div");
+    box.className = "box" + (chord.confidence !== null && chord.confidence < UNSURE_BELOW ? " unsure" : "");
+    box.dataset.index = chord.index;
+    box.style.left = `${left / image.naturalWidth * 100}%`;
+    box.style.top = `${top / image.naturalHeight * 100}%`;
+    box.style.width = `${(right - left) / image.naturalWidth * 100}%`;
+    box.style.height = `${(bottom - top) / image.naturalHeight * 100}%`;
+    frame.append(box);
+  }
 }
 
 function drawChecks() {
@@ -251,7 +302,9 @@ async function noteAction(action) {
 function openEditor(rect, index, text, noteId = null) {
   editing = { index, noteId };
   document.querySelectorAll(".box.active").forEach(box => box.classList.remove("active"));
-  document.querySelector(`.box[data-index="${index}"]`)?.classList.add("active");
+  const active = document.querySelector(`.box[data-index="${index}"]`);
+  active?.classList.add("active");
+  active?.scrollIntoView({ block: "nearest" });
   $("editor").hidden = false;
   $("editorError").hidden = true;
   $("chordDelete").hidden = index === null;
@@ -322,6 +375,7 @@ $("chordInput").addEventListener("keydown", event => {
 });
 
 $("undo").addEventListener("click", () => send("undo").catch(error => message(error.message)));
+$("checked").addEventListener("click", () => send("checked", { checked: !score.checked }).catch(error => message(error.message)));
 $("again").addEventListener("click", () => { history.replaceState(null, "", " "); scoreId = null; selected = null; message(""); show("start"); });
 $("file").addEventListener("change", event => upload(event.target.files[0]));
 $("camera").addEventListener("change", event => upload(event.target.files[0]));
@@ -342,7 +396,7 @@ document.querySelectorAll("label.button").forEach(label => {
   label.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); } });
 });
 
-if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); }
+if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); } else drawHistory();
 </script>
 </body>
 </html>

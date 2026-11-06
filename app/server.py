@@ -3,15 +3,19 @@
     .venv/bin/python -m app.server
 
 Then open http://127.0.0.1:8000. Each score lives in its own folder in data/jobs/, with
-every saved version kept so edits can be undone.
+every saved version kept so edits can be undone. Add --notes own to read notes with our
+own reader instead of homr.
 """
 
+import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
@@ -28,13 +32,17 @@ from pydantic import BaseModel
 from chords.fonts import ROOT
 from pipeline import edit
 from pipeline.engrave import export_pdf, render_pages
+from pipeline.merge import merge_pages
 from pipeline.musicxml import to_text
 
 JOB_DIR = ROOT / "data" / "jobs"
 STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".pdf"}
 MAX_UPLOAD_BYTES = 40 * 1024 * 1024
+MAX_PDF_PAGES = 40
+PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
+NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 
 app = FastAPI(title="xrnsheet")
 one_at_a_time = threading.Semaphore(1)  # Recognition is memory hungry.
@@ -51,6 +59,10 @@ class ChordAdd(BaseModel):
 
 class NoteEdit(BaseModel):
     action: str
+
+
+class CheckedMark(BaseModel):
+    checked: bool
 
 
 def job_folder(score_id: str) -> Path:
@@ -80,35 +92,78 @@ def save_version(folder: Path, root: ET.Element) -> None:
     (folder / f"version_{number:04d}.musicxml").write_text(to_text(root), encoding="utf-8")
 
 
-def pdf_to_image(path: Path) -> tuple[Path, str]:
+def pdf_to_images(path: Path) -> tuple[list[Path], str]:
     import pypdfium2
 
     document = pypdfium2.PdfDocument(str(path))
-    image_path = path.with_suffix(".png")
-    document[0].render(scale=250 / 72).to_pil().convert("RGB").save(image_path)
-    note = f"Only the first of {len(document)} pages was read." if len(document) > 1 else ""
+    folder = path.parent / "pages"
+    folder.mkdir(exist_ok=True)
+    images = []
+    for index in range(min(len(document), MAX_PDF_PAGES)):
+        image_path = folder / f"page_{index + 1:03d}.png"
+        document[index].render(scale=250 / 72).to_pil().convert("RGB").save(image_path)
+        images.append(image_path)
+    note = f"Only the first {MAX_PDF_PAGES} of {len(document)} pages were read." if len(document) > MAX_PDF_PAGES else ""
     document.close()
-    return image_path, note
+    return images, note
+
+
+def recognize_page(image: Path, out_dir: Path) -> str | None:
+    """Recognize one page in its own process, so a crash or memory spike can't kill the app.
+
+    Returns None on success, or the reason it failed.
+    """
+    command = [sys.executable, "-m", "pipeline.recognize", str(image), "--out", str(out_dir), "--notes", os.environ.get("XRNSHEET_NOTES", "homr")]
+    if shutil.which("systemd-run"):
+        command = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={MEMORY_LIMIT}", *command]
+    try:
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=PAGE_TIMEOUT_SECONDS, check=False)
+    except subprocess.TimeoutExpired:
+        return "Recognition took too long."
+    if result.returncode == 0 and list(out_dir.glob("*.musicxml")):
+        return None
+    print(result.stderr[-2000:], file=sys.stderr)
+    return NO_STAVES if "No staffs found" in result.stderr or "No noteheads" in result.stderr else "Recognition failed."
+
+
+def combine_pages(folder: Path, numbers: list[int]) -> ET.Element:
+    """Merge recognized pages, and renumber their chords to match the merged score."""
+    pages = [ET.parse(next((folder / "recognized" / f"page_{number:03d}").glob("*.musicxml"))).getroot() for number in numbers]
+    merged, offsets = merge_pages(pages)
+    chords = []
+    for number, offset in zip(numbers, offsets):
+        found = json.loads((folder / "recognized" / f"page_{number:03d}" / "chords.json").read_text(encoding="utf-8"))
+        chords.extend(item | {"page": number, "measure": item["measure"] + offset} for item in found)
+    (folder / "recognized" / "chords.json").write_text(json.dumps(chords, ensure_ascii=False, indent=1), encoding="utf-8")
+    (folder / "recognized" / "pages.json").write_text(json.dumps(numbers), encoding="utf-8")
+    return merged
 
 
 def recognize_job(folder: Path, upload: Path) -> None:
-    """Run recognition in its own process, so a failure or memory spike can't kill the app."""
     with one_at_a_time:
         try:
-            image, note = pdf_to_image(upload) if upload.suffix.lower() == ".pdf" else (upload, "")
-            command = [sys.executable, "-m", "pipeline.recognize", str(image), "--out", str(folder / "recognized")]
-            if shutil.which("systemd-run"):
-                command = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={MEMORY_LIMIT}", *command]
-            result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=600, check=False)
-            scores = list((folder / "recognized").glob("*.musicxml"))
-            if result.returncode != 0 or not scores:
-                reason = "No staves were found. Try a sharper, straighter photo." if "No staffs found" in result.stderr or "No noteheads" in result.stderr else "Recognition failed."
-                print(result.stderr[-2000:], file=sys.stderr)
-                write_status(folder, "failed", reason)
+            images, note = pdf_to_images(upload) if upload.suffix.lower() == ".pdf" else ([upload], "")
+            if not images:
+                write_status(folder, "failed", "That PDF has no pages.")
                 return
-            root = ET.parse(scores[0]).getroot()
+            read, failed = [], {}
+            for number, image in enumerate(images, start=1):
+                if len(images) > 1:
+                    write_status(folder, "processing", f"Reading page {number} of {len(images)}.")
+                reason = recognize_page(image, folder / "recognized" / f"page_{number:03d}")
+                if reason is None:
+                    read.append(number)
+                else:
+                    failed[number] = reason
+            if not read:
+                write_status(folder, "failed", next(iter(failed.values())))
+                return
+            root = combine_pages(folder, read)
             edit.ensure_note_ids(root)
             save_version(folder, root)
+            if failed:
+                listed = ", ".join(str(number) for number in failed)
+                note = f"{note} Couldn't read page {listed}, so it was left out.".strip()
             write_status(folder, "ready", note)
         except Exception as error:  # A background thread has no one else to report to.
             print(f"recognition error: {error}", file=sys.stderr)
@@ -135,19 +190,53 @@ async def create_score(file: UploadFile) -> dict:
     return {"id": score_id}
 
 
+def read_chord_file(folder: Path) -> list[dict]:
+    path = folder / "recognized" / "chords.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def source_pages(folder: Path) -> list[int]:
+    return json.loads((folder / "recognized" / "pages.json").read_text(encoding="utf-8"))
+
+
 def describe(folder: Path, status: dict) -> dict:
     root = current_root(folder)
-    read_info = {}
-    chords_file = folder / "recognized" / "chords.json"
-    if chords_file.exists():
-        for item in json.loads(chords_file.read_text(encoding="utf-8")):
-            read_info[(item["measure"], float(item["onset"]))] = item
+    read_info: dict[tuple[int, float], dict] = {}
+    for item in read_chord_file(folder):
+        read_info.setdefault((item["measure"], float(item["onset"])), item)  # Only the first was placed.
     chords = []
     for chord in edit.list_chords(root):
         found = read_info.get((chord["measure"], chord["onset"]))
         unchanged = found is not None and found["chord"] == chord["text"]
-        chords.append(chord | {"confidence": found["confidence"] if unchanged else None, "box": found["box"] if found else None})
-    return status | {"chords": chords, "canUndo": len(versions(folder)) > 1, "pages": render_pages(to_text(root))}
+        chords.append(chord | {
+            "confidence": found["confidence"] if unchanged else None,
+            "box": found["box"] if found else None,
+            "page": found["page"] if found else None,
+        })
+    return status | {
+        "chords": chords,
+        "canUndo": len(versions(folder)) > 1,
+        "pages": render_pages(to_text(root)),
+        "sourcePages": source_pages(folder),
+        "checked": (folder / "checked.json").exists(),
+    }
+
+
+@app.get("/api/scores")
+def list_scores() -> list[dict]:
+    """List finished sheets, newest first, so one can be reopened after closing the page."""
+    found = []
+    for folder in JOB_DIR.glob("*") if JOB_DIR.exists() else []:
+        if not (folder / "status.json").exists() or read_status(folder)["status"] != "ready":
+            continue
+        found.append({
+            "id": folder.name,
+            "saved": versions(folder)[-1].stat().st_mtime,
+            "pages": len(source_pages(folder)),
+            "chords": len(read_chord_file(folder)),
+            "checked": (folder / "checked.json").exists(),
+        })
+    return sorted(found, key=lambda item: item["saved"], reverse=True)
 
 
 @app.get("/api/scores/{score_id}")
@@ -157,9 +246,29 @@ def get_score(score_id: str) -> dict:
     return describe(folder, status) if status["status"] == "ready" else status
 
 
-@app.get("/api/scores/{score_id}/page.jpg")
-def get_page(score_id: str) -> FileResponse:
-    return FileResponse(job_folder(score_id) / "recognized" / "page.jpg")
+@app.get("/api/scores/{score_id}/source/{number}.jpg")
+def get_source_page(score_id: str, number: int) -> FileResponse:
+    path = job_folder(score_id) / "recognized" / f"page_{number:03d}" / "page.jpg"
+    if not path.exists():
+        raise HTTPException(404, "No such page")
+    return FileResponse(path)
+
+
+@app.post("/api/scores/{score_id}/checked")
+def mark_checked(score_id: str, body: CheckedMark) -> dict:
+    """Record that a person has fixed this sheet, which makes its answers fit to learn from.
+
+    An uncorrected chord only counts as right once someone has actually looked at it.
+    """
+    folder = job_folder(score_id)
+    if read_status(folder)["status"] != "ready":
+        raise HTTPException(409, "This sheet isn't ready yet")
+    path = folder / "checked.json"
+    if body.checked:
+        path.write_text(json.dumps({"checked_at": time.time()}), encoding="utf-8")
+    else:
+        path.unlink(missing_ok=True)
+    return describe(folder, read_status(folder))
 
 
 def apply_edit(score_id: str, change: Callable[[ET.Element], None]) -> dict:
@@ -228,4 +337,9 @@ app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--notes", choices=["homr", "own"], default="homr")
+    parser.add_argument("--port", type=int, default=8000)
+    arguments = parser.parse_args()
+    os.environ["XRNSHEET_NOTES"] = arguments.notes
+    uvicorn.run(app, host="127.0.0.1", port=arguments.port)

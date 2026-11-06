@@ -2,11 +2,11 @@
 
     .venv/bin/python -m pipeline.recognize photo.jpg --out results/photo
 
-Notes come from homr. Chords come from the text detector and our chord reader, then get
-attached to notes by their position on the page.
+Notes come from homr, or from our own note reader with --notes own. Chords come from the
+text detector and our chord reader, then get attached to notes by their position on the page.
 
-This file imports homr, which is AGPL-3.0. Keep that import here so the engine stays
-replaceable, and check the licence before shipping this as a closed product.
+This file imports homr, which is AGPL-3.0. Keep that import here, and inside run_homr, so a
+run with --notes own never loads it. Check the licence before shipping this as a closed product.
 """
 
 import argparse
@@ -147,9 +147,18 @@ def read_chords_on_page(
     return sorted(found, key=lambda item: (item.measure, item.onset))
 
 
-def recognize(image_path: Path, out_dir: Path, reader: str = "model", device: str = "cpu") -> tuple[Path, list[ReadChord]]:
+def run_own_reader(image_path: Path, device: str) -> tuple[ET.Element, list[align.SystemLayout], np.ndarray]:
+    from notes.page import read_page
+
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError(f"Could not open {image_path}")
+    return read_page(image, device)
+
+
+def recognize(image_path: Path, out_dir: Path, reader: str = "model", device: str = "cpu", notes: str = "homr") -> tuple[Path, list[ReadChord]]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    root, layouts, image = run_homr(image_path, out_dir)
+    root, layouts, image = run_homr(image_path, out_dir) if notes == "homr" else run_own_reader(image_path, device)
     part = root.find("part")
     measures = read_measures(part)
     systems = align.split_into_systems(measures)
@@ -188,8 +197,9 @@ def main() -> None:
     parser.add_argument("image", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--reader", choices=["model", "rapidocr"], default="model")
+    parser.add_argument("--notes", choices=["homr", "own"], default="homr")
     arguments = parser.parse_args()
-    out_path, chords = recognize(arguments.image, arguments.out, arguments.reader)
+    out_path, chords = recognize(arguments.image, arguments.out, arguments.reader, notes=arguments.notes)
     print(out_path)
     print(" ".join(item.chord for item in chords))
 

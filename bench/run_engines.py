@@ -53,8 +53,8 @@ def run_audiveris(image: Path, out_dir: Path) -> None:
     subprocess.run(limited(command), timeout=TIMEOUT_SECONDS, capture_output=True, check=False, env=environment)
 
 
-def run_pipeline(image: Path, out_dir: Path, reader: str) -> None:
-    command = [sys.executable, "-m", "pipeline.recognize", str(image), "--out", str(out_dir), "--reader", reader]
+def run_pipeline(image: Path, out_dir: Path, reader: str, notes: str = "homr") -> None:
+    command = [sys.executable, "-m", "pipeline.recognize", str(image), "--out", str(out_dir), "--reader", reader, "--notes", notes]
     subprocess.run(limited(command), timeout=TIMEOUT_SECONDS, capture_output=True, check=False, cwd=ROOT)
 
 
@@ -67,12 +67,26 @@ def run_general_ocr(image: Path, out_dir: Path) -> None:
     run_pipeline(image, out_dir, "rapidocr")
 
 
+def run_own_notes(image: Path, out_dir: Path) -> None:
+    """Our full stack, with no homr. It reads one melody per staff, so score it on those sheets."""
+    run_pipeline(image, out_dir, "model", "own")
+
+
+def run_external(image: Path, out_dir: Path) -> None:
+    """Score another app's export: save it as data/external/<app>/<image name>.musicxml."""
+    for path in (ROOT / "data" / "external" / out_dir.parent.name).glob(f"{image.stem}.*"):
+        shutil.copy(path, out_dir / path.name)
+
+
 ENGINES = {
     "homr": run_homr,
     "audiveris": run_audiveris,
     "xrnsheet": run_xrnsheet,
     "general_ocr": run_general_ocr,
+    "own_notes": run_own_notes,
+    "soundslice": run_external,
 }
+DEFAULT_ENGINES = ["homr", "audiveris", "xrnsheet", "general_ocr"]
 
 
 def list_images(pattern: str) -> list[Path]:
@@ -168,10 +182,12 @@ def main() -> None:
     parser.add_argument("--engine", choices=sorted(ENGINES), help="only run this engine")
     arguments = parser.parse_args()
 
-    engines = [arguments.engine] if arguments.engine else list(ENGINES)
+    engines = [arguments.engine] if arguments.engine else DEFAULT_ENGINES
     rows = []
     for image in list_images(arguments.only):
         for engine in engines:
+            if ENGINES[engine] is run_external and not list((ROOT / "data" / "external" / engine).glob(f"{image.stem}.*")):
+                continue
             row = evaluate(engine, image)
             rows.append(row)
             print(f"{engine:<10} {image.stem:<34} pitch={row.get('pitch_f1', 0):.2f} note={row.get('note_f1', 0):.2f}", flush=True)
