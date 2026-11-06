@@ -24,7 +24,7 @@ MODEL_DIR = ROOT / "models"
 RESULT_DIR = ROOT / "results" / "notes"
 VALIDATION_SIZE = 600
 POOL_BATCHES = 40  # Sorting a pool by width keeps padding, and so wasted memory, low.
-MOST_PIXELS = 460_000  # About what fits in 4 GB with a recurrent layer this wide.
+MOST_PIXELS = 3_000_000  # About 32 full-width strips, measured at under 2 GB of GPU memory.
 
 
 def load_rows(split: str) -> list[tuple[str, str, list[str]]]:
@@ -98,8 +98,8 @@ def validate(model: nn.Module, strips: list, labels: list, device: str) -> float
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--steps", type=int, default=30000)
-    parser.add_argument("--batch-size", type=int, default=24)
+    parser.add_argument("--steps", type=int, default=24000)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--seed", type=int, default=0)
@@ -126,7 +126,7 @@ def main() -> None:
     scaler = torch.amp.GradScaler(device, enabled=device == "cuda")
 
     log_path = RESULT_DIR / f"{arguments.name}_log.csv"
-    best = 1.0
+    best = float("inf")
     started = time.time()
     with open(log_path, "w", newline="", encoding="utf-8") as log:
         writer = csv.writer(log)
@@ -135,7 +135,7 @@ def main() -> None:
             pixels, widths = pixels.to(device, non_blocking=True), widths.to(device, non_blocking=True)
             with torch.autocast(device, enabled=device == "cuda"):
                 log_probabilities, lengths = model(pixels, widths)
-            loss = loss_function(log_probabilities.float().permute(1, 0, 2), targets, lengths, target_lengths)
+            loss = loss_function(log_probabilities.float().permute(1, 0, 2), targets.to(device), lengths, target_lengths)
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
