@@ -38,6 +38,26 @@ def divisions_by_measure(measures: list[ET.Element]) -> list[str]:
     return values
 
 
+def drop_repeats(measure: ET.Element, in_force: dict[str, tuple]) -> None:
+    """Remove a key, time or clef that's already in force.
+
+    Each page states its own, and the renderer would print them again in the middle of a line.
+    """
+    attributes = measure.find("attributes")
+    if attributes is None:
+        return
+    for element in list(attributes):
+        if element.tag == "divisions":
+            continue
+        name = element.tag + element.get("number", "")
+        content = (sorted(element.attrib.items()), "".join(element.itertext()).split())
+        if in_force.get(name) == content:
+            attributes.remove(element)
+        in_force[name] = content
+    if len(attributes) == 0:
+        measure.remove(attributes)
+
+
 def merge_pages(pages: list[ET.Element]) -> tuple[ET.Element, list[int]]:
     """Return one score, plus the number of measures that come before each page."""
     widest = max(pages, key=lambda page: len(page.findall("part")))
@@ -54,6 +74,7 @@ def merge_pages(pages: list[ET.Element]) -> tuple[ET.Element, list[int]]:
 
     offsets = []
     total = 0
+    in_force: list[dict[str, tuple]] = [{} for _ in parts]
     for page_index, page in enumerate(pages):
         page_parts = [part.findall("measure") for part in page.findall("part")]
         longest = max(page_parts, key=len, default=[])
@@ -65,6 +86,7 @@ def merge_pages(pages: list[ET.Element]) -> tuple[ET.Element, list[int]]:
                 measure = copy.deepcopy(measures[index]) if index < len(measures) else blank_measure(longest[index], divisions[index])
                 measure.set("number", str(total + index + 1))
                 measure.attrib.pop("implicit", None)
+                drop_repeats(measure, in_force[part_index])
                 if index == 0 and page_index > 0:
                     found = measure.find("print")
                     if found is None:

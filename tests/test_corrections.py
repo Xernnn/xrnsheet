@@ -64,6 +64,16 @@ def test_a_deleted_chord_is_skipped_if_a_different_one_was_added_beside_it():
     assert corrections.label_chords([recognized(0, 0.0, "G7")], [final(0, 2, "Dm7")]) == []
 
 
+def test_a_chord_moved_across_a_barline_is_still_a_real_chord():
+    rows = corrections.label_chords([recognized(4, 2.0, "G7", "G7")], [final(5, 0, "G7")])
+    assert rows[0]["label"] == "G7" and rows[0]["outcome"] == "moved"
+
+
+def test_a_chord_added_far_away_says_nothing_about_a_deleted_one():
+    rows = corrections.label_chords([recognized(0, 0.0, "G7")], [final(5, 0, "Dm7")])
+    assert rows[0]["label"] == "" and rows[0]["outcome"] == "removed"
+
+
 def test_only_the_first_chord_on_a_beat_was_placed():
     rows = corrections.label_chords([recognized(0, 0.0, "C"), recognized(0, 0.0, "D")], [final(0, 0, "C")])
     assert len(rows) == 1 and rows[0]["chord"] == "C"
@@ -100,6 +110,13 @@ def test_export_uses_only_checked_sheets(tmp_path):
     rows = corrections.load_labels(out)
     assert len(rows) == 1 and rows[0]["label"] == "D" and rows[0]["outcome"] == "corrected"
     assert counts["corrected"] == 1 and cv2.imread(str(out / rows[0]["image"])) is not None
+
+
+def test_a_moved_chord_does_not_count_as_missed(tmp_path):
+    jobs = tmp_path / "jobs"
+    folder = write_sheet(jobs, "a" * 32, [recognized(0, 2.0, "C")], ["C"])
+    assert corrections.export(jobs, tmp_path / "out")["moved"] == 1
+    assert corrections.export(jobs, tmp_path / "out")["added"] == 0 and folder.exists()
 
 
 def test_export_starts_clean(tmp_path):

@@ -47,8 +47,9 @@ def label_chords(recognized: list[dict], final: list[dict]) -> list[dict]:
     """Label each chord the app placed, using what the person left in the score.
 
     A chord that was deleted is usually a false one, which makes a useful "not a chord"
-    example. But if a new chord was added in the same measure, it may be a real chord that
-    was only on the wrong beat, so it's skipped rather than risk teaching something false.
+    example. But if a new chord was added nearby, it may be a real chord that was only on the
+    wrong beat, so it's skipped rather than risk teaching the model something false. Placement
+    can miss by a whole measure, so "nearby" includes the measures on either side.
     """
     placed: dict[tuple[int, float], dict] = {}
     for item in recognized:
@@ -62,7 +63,7 @@ def label_chords(recognized: list[dict], final: list[dict]) -> list[dict]:
             # The model's own text keeps the page's spelling, so C-7 isn't taught as Cm7.
             rows.append(item | {"label": item["text"] if confirmed else text, "outcome": "confirmed" if confirmed else "corrected"})
             continue
-        added = [value for other, value in kept.items() if other not in placed and other[0] == key[0]]
+        added = [value for other, value in kept.items() if other not in placed and abs(other[0] - key[0]) <= 1]
         if item["chord"] in added:
             rows.append(item | {"label": item["text"], "outcome": "moved"})
         elif not added:
@@ -120,8 +121,10 @@ def export(job_dir: Path = JOB_DIR, out_dir: Path = OUT_DIR) -> Counter:
         recognized = json.loads((folder / "recognized" / "chords.json").read_text(encoding="utf-8"))
         split = "test" if is_test_key(keys[folder.name]) else "train"
         summary[f"{split}_sheets"] += 1
-        summary["added"] += count_added(recognized, finals[folder.name])
-        for number, row in enumerate(label_chords(recognized, finals[folder.name])):
+        labelled = label_chords(recognized, finals[folder.name])
+        moved = sum(row["outcome"] == "moved" for row in labelled)
+        summary["added"] += count_added(recognized, finals[folder.name]) - moved
+        for number, row in enumerate(labelled):
             if any(character not in CHARACTER_INDEX for character in row["label"]):
                 summary["unreadable_labels"] += 1
                 continue

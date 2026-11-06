@@ -10,6 +10,7 @@ import score
 from chords.metrics import edit_distance
 from notes import render
 from notes.build import build_score
+from notes.evaluate import confusion_counts
 from notes.model import NoteReader, decode, to_batch
 from notes.staves import STRIP_HEIGHT, crop_staff, find_staves
 from notes.train import fit_memory, token_error
@@ -208,3 +209,13 @@ def test_wide_batches_are_cut_to_fit_memory():
 def test_token_error_counts_edits_per_true_token():
     assert token_error([["a", "b"]], [["a", "b", "c", "d"]]) == 0.5
     assert edit_distance(["note:1:4"], ["note:2:4"]) == 1
+
+
+def test_confusions_separate_pitch_from_rhythm_mistakes():
+    counts = confusion_counts([["note:3:4", "bar"], ["note:3:8"]], [["note:4:4", "bar"], ["note:3:4"]])
+    assert counts["note_total"] == 2 and counts["note_wrong"] == 2
+    assert counts["note_wrong_pitch"] == 1 and counts["note_wrong_length"] == 1 and counts["bar_wrong"] == 0
+
+
+def test_a_strip_of_the_wrong_length_is_set_aside():
+    assert confusion_counts([["bar"]], [["bar", "bar"]])["length_mismatch"] == 1

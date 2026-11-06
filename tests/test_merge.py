@@ -77,3 +77,33 @@ def test_note_ids_stay_unique_after_merging():
     edit.ensure_note_ids(merged)
     ids = [note.get("id") for note in merged.iter("note")]
     assert len(ids) == len(set(ids)) == 2
+
+
+def with_signatures(fifths: int, beats: int = 4, sign: str = "G") -> ET.Element:
+    root = page([1])
+    attributes = root.find("part/measure/attributes")
+    ET.SubElement(ET.SubElement(attributes, "key"), "fifths").text = str(fifths)
+    time = ET.SubElement(attributes, "time")
+    ET.SubElement(time, "beats").text = str(beats)
+    ET.SubElement(time, "beat-type").text = "4"
+    ET.SubElement(ET.SubElement(attributes, "clef"), "sign").text = sign
+    return root
+
+
+def test_a_repeated_key_time_and_clef_are_not_printed_again():
+    merged, _ = merge_pages([with_signatures(2), with_signatures(2)])
+    first, second = merged.findall("part/measure")
+    assert first.find("attributes/key") is not None and first.find("attributes/clef") is not None
+    assert second.find("attributes/key") is None and second.find("attributes/time") is None and second.find("attributes/clef") is None
+
+
+def test_each_page_keeps_its_own_divisions():
+    merged, _ = merge_pages([with_signatures(2), with_signatures(2)])
+    assert merged.findall("part/measure")[1].findtext("attributes/divisions") == "4"
+
+
+def test_a_real_change_between_pages_is_kept():
+    merged, _ = merge_pages([with_signatures(2), with_signatures(-3, sign="F")])
+    second = merged.findall("part/measure")[1]
+    assert second.findtext("attributes/key/fifths") == "-3" and second.findtext("attributes/clef/sign") == "F"
+    assert second.find("attributes/time") is None
