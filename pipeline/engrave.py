@@ -1,5 +1,6 @@
 """Turn MusicXML back into pages, as SVG for the screen and PDF for printing."""
 
+import re
 import subprocess
 import tempfile
 import threading
@@ -11,6 +12,8 @@ import verovio
 # Verovio keeps its font location per thread, so a web server's worker threads must set it.
 RESOURCE_PATH = str(Path(verovio.__file__).parent / "data")
 RENDER_LOCK = threading.Lock()
+TITLE_SCALE = 2
+LYRIC_WORD_SPACE = 2.5  # Verovio's default leaves neighbouring words almost touching.
 
 # Verovio writes these symbols in a private music font that the SVG rasterizer cannot
 # find, so they would come out as garbage. Swap them for their ordinary Unicode versions.
@@ -107,7 +110,7 @@ def add_beams(root: ET.Element) -> None:
                 group: list[tuple[ET.Element, float]] = []
                 current = None
                 for note, onset, length in notes:
-                    beamable = note.find("rest") is None and 0 < length <= 0.5 and note.find("time-modification") is None
+                    beamable = note.find("rest") is None and 0 < length <= 0.5
                     bucket = int(onset / span + 1e-6)
                     if not beamable or bucket != current:
                         write_beam_group(group)
@@ -126,7 +129,20 @@ def prepare_for_drawing(musicxml: str) -> str:
     return drop_spelled_degrees(ET.tostring(root, encoding="unicode"))
 
 
+def enlarge_title(svg: str) -> str:
+    """Make the title stand out. Verovio prints credits in one size, whatever they ask for."""
+    head = svg.find('class="pgHead"')
+    if head < 0:
+        return svg
+    # The title is the centred line. A composer on their own is right-aligned and stays as it is.
+    centred = svg.find('text-anchor="middle"', head)
+    if centred < 0:
+        return svg
+    return svg[:centred] + re.sub(r'font-size="(\d{3,})px"', lambda found: f'font-size="{int(found.group(1)) * TITLE_SCALE}px"', svg[centred:], count=1)
+
+
 def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970) -> list[str]:
+    has_title = "<credit" in musicxml
     with RENDER_LOCK:
         toolkit = verovio.toolkit()
         toolkit.setResourcePath(RESOURCE_PATH)
@@ -134,13 +150,14 @@ def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970)
             "pageWidth": page_width,
             "pageHeight": page_height,
             "scale": 45,
-            "header": "none",
+            "header": "auto" if has_title else "none",
             "footer": "none",
             "breaks": "auto",
+            "lyricWordSpace": LYRIC_WORD_SPACE,
         })
         if not toolkit.loadData(prepare_for_drawing(musicxml)):
             raise ValueError("Could not read this MusicXML")
-        return [replace_private_glyphs(toolkit.renderToSVG(page)) for page in range(1, toolkit.getPageCount() + 1)]
+        return [enlarge_title(replace_private_glyphs(toolkit.renderToSVG(page))) for page in range(1, toolkit.getPageCount() + 1)]
 
 
 def export_pdf(musicxml: str, out_path: Path) -> None:

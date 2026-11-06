@@ -30,10 +30,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from chords.fonts import ROOT
-from pipeline import edit
+from pipeline import edit, structure
 from pipeline.engrave import export_pdf, render_pages
 from pipeline.merge import merge_pages
 from pipeline.musicxml import to_text
+from pipeline.playback import playback
 
 JOB_DIR = ROOT / "data" / "jobs"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -46,6 +47,8 @@ NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 
 app = FastAPI(title="xrnsheet")
 one_at_a_time = threading.Semaphore(1)  # Recognition is memory hungry.
+# Edits read the latest version and write the next one, so two at once would lose one of them.
+edit_lock = threading.RLock()
 
 
 class ChordEdit(BaseModel):
@@ -59,6 +62,63 @@ class ChordAdd(BaseModel):
 
 class NoteEdit(BaseModel):
     action: str
+    type: str = "quarter"
+    dots: int = 0
+    step: str | None = None
+    line: int | None = None  # A place on the staff, in steps down from the top line.
+
+
+class GroupEdit(BaseModel):
+    action: str
+    notes: list[str]
+
+
+class Stretch(BaseModel):
+    first: str
+    last: str
+
+
+class CopiedEvent(BaseModel):
+    type: str
+    dots: int = 0
+    pitches: list[tuple[str, int, int]] = []
+    tie: bool = False
+    triplet: int | None = None
+    chord: str | None = None
+    lyric: dict | None = None
+
+
+class Paste(BaseModel):
+    at: str
+    events: list[CopiedEvent]
+
+
+class Lyric(BaseModel):
+    text: str
+    joined: bool | None = False
+
+
+class Title(BaseModel):
+    title: str = ""
+    composer: str = ""
+
+
+class BarEdit(BaseModel):
+    action: str
+    note: str | None = None
+    last: str | None = None
+    fifths: int = 0
+    beats: int = 4
+    beat_type: int = 4
+    number: int = 0
+
+
+class BlankScore(BaseModel):
+    fifths: int = 0
+    beats: int = 4
+    beat_type: int = 4
+    clef: str = "treble"
+    measures: int = 16
 
 
 class CheckedMark(BaseModel):
@@ -87,9 +147,15 @@ def current_root(folder: Path) -> ET.Element:
     return ET.parse(versions(folder)[-1]).getroot()
 
 
+def undone(folder: Path) -> list[Path]:
+    return sorted((folder / "undone").glob("version_*.musicxml"))
+
+
 def save_version(folder: Path, root: ET.Element) -> None:
+    """Save the next version. A new edit starts a new future, so anything undone is dropped."""
     number = int(versions(folder)[-1].stem.split("_")[1]) + 1 if versions(folder) else 0
     (folder / f"version_{number:04d}.musicxml").write_text(to_text(root), encoding="utf-8")
+    shutil.rmtree(folder / "undone", ignore_errors=True)
 
 
 def pdf_to_images(path: Path) -> tuple[list[Path], str]:
@@ -160,6 +226,7 @@ def recognize_job(folder: Path, upload: Path) -> None:
                 return
             root = combine_pages(folder, read)
             edit.ensure_note_ids(root)
+            structure.ensure_measure_ids(root)
             save_version(folder, root)
             if failed:
                 listed = ", ".join(str(number) for number in failed)
@@ -196,17 +263,18 @@ def read_chord_file(folder: Path) -> list[dict]:
 
 
 def source_pages(folder: Path) -> list[int]:
-    return json.loads((folder / "recognized" / "pages.json").read_text(encoding="utf-8"))
+    path = folder / "recognized" / "pages.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
 def describe(folder: Path, status: dict) -> dict:
     root = current_root(folder)
     read_info: dict[tuple[int, float], dict] = {}
     for item in read_chord_file(folder):
-        read_info.setdefault((item["measure"], float(item["onset"])), item)  # Only the first was placed.
+        read_info.setdefault((item["measure"], round(float(item["onset"]), 3)), item)  # Only the first was placed.
     chords = []
     for chord in edit.list_chords(root):
-        found = read_info.get((chord["measure"], chord["onset"]))
+        found = read_info.get((chord["origin"], chord["onset"]))
         unchanged = found is not None and found["chord"] == chord["text"]
         chords.append(chord | {
             "confidence": found["confidence"] if unchanged else None,
@@ -216,10 +284,29 @@ def describe(folder: Path, status: dict) -> dict:
     return status | {
         "chords": chords,
         "canUndo": len(versions(folder)) > 1,
+        "canRedo": bool(undone(folder)),
         "pages": render_pages(to_text(root)),
         "sourcePages": source_pages(folder),
         "checked": (folder / "checked.json").exists(),
-    }
+        "blank": not (folder / "recognized").exists(),
+        "barChecks": structure.check_measures(root),
+    } | structure.title_of(root)
+
+
+@app.post("/api/scores/blank")
+def create_blank_score(body: BlankScore) -> dict:
+    """Start an empty score to write in, with no photo behind it."""
+    try:
+        root = structure.blank_score(body.fifths, body.beats, body.beat_type, body.clef, body.measures)
+    except edit.EditError as error:
+        raise HTTPException(422, str(error)) from error
+    edit.ensure_note_ids(root)
+    score_id = uuid.uuid4().hex
+    folder = JOB_DIR / score_id
+    folder.mkdir(parents=True)
+    save_version(folder, root)
+    write_status(folder, "ready")
+    return {"id": score_id}
 
 
 @app.get("/api/scores")
@@ -235,6 +322,8 @@ def list_scores() -> list[dict]:
             "pages": len(source_pages(folder)),
             "chords": len(read_chord_file(folder)),
             "checked": (folder / "checked.json").exists(),
+            "blank": not (folder / "recognized").exists(),
+            "title": structure.title_of(current_root(folder))["title"],
         })
     return sorted(found, key=lambda item: item["saved"], reverse=True)
 
@@ -263,6 +352,8 @@ def mark_checked(score_id: str, body: CheckedMark) -> dict:
     folder = job_folder(score_id)
     if read_status(folder)["status"] != "ready":
         raise HTTPException(409, "This sheet isn't ready yet")
+    if not (folder / "recognized").exists():
+        raise HTTPException(409, "Only recognized sheets can be checked")
     path = folder / "checked.json"
     if body.checked:
         path.write_text(json.dumps({"checked_at": time.time()}), encoding="utf-8")
@@ -271,15 +362,19 @@ def mark_checked(score_id: str, body: CheckedMark) -> dict:
     return describe(folder, read_status(folder))
 
 
-def apply_edit(score_id: str, change: Callable[[ET.Element], None]) -> dict:
+def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None]) -> dict:
+    """Run one edit and save it. Anything the edit returns is passed on to the page."""
     folder = job_folder(score_id)
-    root = current_root(folder)
-    try:
-        change(root)
-    except edit.EditError as error:
-        raise HTTPException(422, str(error)) from error
-    save_version(folder, root)
-    return describe(folder, read_status(folder))
+    with edit_lock:
+        root = current_root(folder)
+        structure.ensure_measure_ids(root)
+        try:
+            extra = change(root)
+        except edit.EditError as error:
+            raise HTTPException(422, str(error)) from error
+        edit.ensure_note_ids(root)
+        save_version(folder, root)
+        return describe(folder, read_status(folder)) | (extra or {})
 
 
 @app.post("/api/scores/{score_id}/notes/{note_id}")
@@ -287,15 +382,118 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
     actions: dict[str, Callable[[ET.Element], None]] = {
         "up": lambda root: edit.move_note(root, note_id, 1),
         "down": lambda root: edit.move_note(root, note_id, -1),
+        "octaveUp": lambda root: edit.move_note(root, note_id, 7),
+        "octaveDown": lambda root: edit.move_note(root, note_id, -7),
         "sharp": lambda root: edit.set_accidental(root, note_id, 1),
         "flat": lambda root: edit.set_accidental(root, note_id, -1),
         "natural": lambda root: edit.set_accidental(root, note_id, 0),
         "delete": lambda root: edit.delete_note(root, note_id),
         "clear": lambda root: edit.clear_marks(root, note_id),
+        "length": lambda root: edit.change_length(root, note_id, body.type, body.dots),
+        "dot": lambda root: edit.toggle_dot(root, note_id),
+        "write": lambda root: edit.write_note(root, note_id, body.type, body.dots, body.step, body.line),
+        "stack": lambda root: {"written": edit.add_pitch(root, note_id, body.step or "", body.line)},
+        "tuplet": lambda root: edit.toggle_tuplet(root, note_id, edit.length_of(body.type, body.dots)),
+        "tupletHere": lambda root: edit.toggle_tuplet(root, note_id),
+        "tie": lambda root: edit.toggle_tie(root, note_id),
+        "close": lambda root: {"cursor": edit.close_gap(root, note_id)},
+        "insert": lambda root: {"cursor": edit.insert_rest(root, note_id, body.type, body.dots)},
     }
     if body.action not in actions:
         raise HTTPException(422, "Unknown note action")
     return apply_edit(score_id, actions[body.action])
+
+
+GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {
+    "up": lambda root, note: edit.move_note(root, note, 1),
+    "down": lambda root, note: edit.move_note(root, note, -1),
+    "octaveUp": lambda root, note: edit.move_note(root, note, 7),
+    "octaveDown": lambda root, note: edit.move_note(root, note, -7),
+    "sharp": lambda root, note: edit.set_accidental(root, note, 1),
+    "flat": lambda root, note: edit.set_accidental(root, note, -1),
+    "natural": lambda root, note: edit.set_accidental(root, note, 0),
+    "delete": edit.delete_note,
+    "clear": edit.clear_marks,
+}
+
+
+@app.post("/api/scores/{score_id}/group")
+def change_group(score_id: str, body: GroupEdit) -> dict:
+    """Apply one action to several notes as one edit, so one undo takes it all back."""
+    if body.action not in GROUP_ACTIONS:
+        raise HTTPException(422, "That can't be done to a selection")
+
+    def change(root: ET.Element) -> None:
+        done = 0
+        for note_id in body.notes:
+            try:
+                GROUP_ACTIONS[body.action](root, note_id)
+                done += 1
+            except edit.EditError:
+                pass  # Rests can't move, and most notes have no marks. The rest of the selection can.
+        if not done:
+            raise edit.EditError("That doesn't apply to anything selected.")
+
+    return apply_edit(score_id, change)
+
+
+@app.post("/api/scores/{score_id}/range")
+def find_range(score_id: str, body: Stretch) -> dict:
+    """List what's between two notes. Nothing is changed, so nothing is saved."""
+    try:
+        return edit.range_ids(current_root(job_folder(score_id)), body.first, body.last)
+    except edit.EditError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/scores/{score_id}/copy")
+def copy_notes(score_id: str, body: Stretch) -> dict:
+    try:
+        return edit.copy_range(current_root(job_folder(score_id)), body.first, body.last)
+    except edit.EditError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post("/api/scores/{score_id}/paste")
+def paste_notes(score_id: str, body: Paste) -> dict:
+    return apply_edit(score_id, lambda root: edit.paste(root, body.at, [item.model_dump() for item in body.events]))
+
+
+@app.post("/api/scores/{score_id}/lyrics/{note_id}")
+def change_lyric(score_id: str, note_id: str, body: Lyric) -> dict:
+    return apply_edit(score_id, lambda root: edit.set_lyric(root, note_id, body.text, body.joined))
+
+
+@app.post("/api/scores/{score_id}/title")
+def change_title(score_id: str, body: Title) -> dict:
+    return apply_edit(score_id, lambda root: structure.set_title(root, body.title, body.composer))
+
+
+@app.post("/api/scores/{score_id}/bars")
+def change_bars(score_id: str, body: BarEdit) -> dict:
+    """Change the score's bars. Each change applies at the bar holding the given note."""
+
+    def change(root: ET.Element) -> None:
+        index = structure.bar_of(root, body.note) if body.note else None
+        if body.action == "insert":
+            structure.insert_measure(root, len(root.find("part").findall("measure")) if index is None else index)
+        elif body.action == "delete":
+            if index is None:
+                raise edit.EditError("Click a note in the bar to delete first.")
+            structure.delete_measure(root, index)
+        elif body.action == "key":
+            structure.set_key(root, index or 0, body.fifths)
+        elif body.action == "time":
+            structure.set_time(root, index or 0, body.beats, body.beat_type)
+        elif body.action in ("forward", "backward"):
+            structure.toggle_repeat(root, index or 0, body.action)
+        elif body.action == "ending":
+            first = index or 0
+            structure.set_ending(root, first, structure.bar_of(root, body.last) if body.last else first, body.number)
+        else:
+            raise HTTPException(422, "Unknown bar action")
+
+    return apply_edit(score_id, change)
 
 
 @app.post("/api/scores/{score_id}/chords/{index}")
@@ -311,11 +509,29 @@ def add_chord(score_id: str, body: ChordAdd) -> dict:
 @app.post("/api/scores/{score_id}/undo")
 def undo(score_id: str) -> dict:
     folder = job_folder(score_id)
-    saved = versions(folder)
-    if len(saved) < 2:
-        raise HTTPException(409, "Nothing to undo")
-    saved[-1].unlink()
-    return describe(folder, read_status(folder))
+    with edit_lock:
+        saved = versions(folder)
+        if len(saved) < 2:
+            raise HTTPException(409, "Nothing to undo")
+        (folder / "undone").mkdir(exist_ok=True)
+        saved[-1].rename(folder / "undone" / saved[-1].name)
+        return describe(folder, read_status(folder))
+
+
+@app.post("/api/scores/{score_id}/redo")
+def redo(score_id: str) -> dict:
+    folder = job_folder(score_id)
+    with edit_lock:
+        waiting = undone(folder)
+        if not waiting:
+            raise HTTPException(409, "Nothing to redo")
+        waiting[0].rename(folder / waiting[0].name)
+        return describe(folder, read_status(folder))
+
+
+@app.get("/api/scores/{score_id}/playback")
+def get_playback(score_id: str) -> dict:
+    return playback(current_root(job_folder(score_id)))
 
 
 @app.get("/api/scores/{score_id}/score.musicxml")

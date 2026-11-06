@@ -1,5 +1,7 @@
 import io
 import json
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
@@ -187,3 +189,290 @@ def test_one_chord_page_keeps_its_confidence(client, ready_score):
     (folder / "recognized" / "chords.json").write_text(json.dumps(items), encoding="utf-8")
     chord = client.get(f"/api/scores/{ready_score}").json()["chords"][0]
     assert chord["confidence"] == 0.5 and chord["box"] == [1, 2, 3, 4]  # Only the first was placed.
+
+
+def blank(client, **settings):
+    response = client.post("/api/scores/blank", json={"measures": 4, **settings})
+    assert response.status_code == 200
+    return response.json()["id"]
+
+
+def saved(client, score_id):
+    return ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+
+
+def notes_of(client, score_id):
+    return list(saved(client, score_id).iter("note"))
+
+
+def first_id(client, score_id):
+    return notes_of(client, score_id)[0].get("id")
+
+
+def pitches(client, score_id):
+    return [note.findtext("pitch/step") for note in notes_of(client, score_id) if note.find("pitch") is not None]
+
+
+def write(client, score_id, at, step, length="quarter"):
+    response = client.post(f"/api/scores/{score_id}/notes/{at}", json={"action": "write", "type": length, "step": step})
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_a_blank_score_opens_with_the_chosen_signature(client):
+    score_id = blank(client, fifths=-3, beats=6, beat_type=8, clef="bass", measures=2)
+    root = saved(client, score_id)
+    attributes = root.find("part/measure/attributes")
+    assert attributes.findtext("key/fifths") == "-3" and attributes.findtext("time/beats") == "6"
+    assert attributes.findtext("clef/sign") == "F" and len(root.findall("part/measure")) == 2
+    data = client.get(f"/api/scores/{score_id}").json()
+    assert data["blank"] is True and data["canUndo"] is False and data["barChecks"] == []
+
+
+def test_a_blank_score_is_listed_as_blank(client):
+    score_id = blank(client)
+    assert next(sheet for sheet in client.get("/api/scores").json() if sheet["id"] == score_id)["blank"] is True
+
+
+def test_impossible_blank_scores_are_refused(client):
+    assert client.post("/api/scores/blank", json={"measures": 0}).status_code in (400, 422)
+    assert client.post("/api/scores/blank", json={"beat_type": 5}).status_code in (400, 422)
+    assert client.post("/api/scores/blank", json={"clef": "alto-sax"}).status_code in (400, 422)
+
+
+def test_a_blank_score_cannot_be_marked_checked(client):
+    # There's no recognized version to compare against, so it could only feed bad training labels.
+    assert client.post(f"/api/scores/{blank(client)}/checked", json={"checked": True}).status_code == 409
+
+
+def test_writing_a_note_returns_the_note_and_the_next_place(client):
+    score_id = blank(client)
+    data = write(client, score_id, first_id(client, score_id), "G")
+    assert data["written"] and data["cursor"] and data["written"] != data["cursor"]
+    following = write(client, score_id, data["cursor"], "A")
+    assert pitches(client, score_id) == ["G", "A"] and following["canUndo"] is True
+
+
+def test_filling_the_last_bar_adds_no_bar_until_the_next_note(client):
+    score_id = blank(client, measures=1)
+    cursor = write(client, score_id, first_id(client, score_id), "C", "whole")["cursor"]
+    assert len(saved(client, score_id).findall("part/measure")) == 1
+    write(client, score_id, cursor, "D", "quarter")
+    assert len(saved(client, score_id).findall("part/measure")) == 2 and pitches(client, score_id) == ["C", "D"]
+
+
+def test_notes_can_be_stacked_into_a_chord(client):
+    score_id = blank(client)
+    written = write(client, score_id, first_id(client, score_id), "C")["written"]
+    response = client.post(f"/api/scores/{score_id}/notes/{written}", json={"action": "stack", "step": "E"})
+    assert response.status_code == 200
+    assert sum(note.find("chord") is not None for note in notes_of(client, score_id)) == 1
+
+
+def test_redo_replays_an_undone_edit(client):
+    score_id = blank(client)
+    url = f"/api/scores/{score_id}"
+    write(client, score_id, first_id(client, score_id), "C")
+    assert client.post(f"{url}/undo").json()["canRedo"] is True
+    assert pitches(client, score_id) == []
+    assert client.post(f"{url}/redo").json()["canRedo"] is False
+    assert pitches(client, score_id) == ["C"]
+
+
+def test_a_new_edit_clears_redo(client):
+    score_id = blank(client)
+    url = f"/api/scores/{score_id}"
+    write(client, score_id, first_id(client, score_id), "C")
+    client.post(f"{url}/undo")
+    write(client, score_id, first_id(client, score_id), "D")
+    assert client.get(url).json()["canRedo"] is False
+    assert client.post(f"{url}/redo").status_code == 409
+    assert pitches(client, score_id) == ["D"]
+
+
+def test_a_refused_edit_keeps_redo(client):
+    score_id = blank(client)
+    url = f"/api/scores/{score_id}"
+    write(client, score_id, first_id(client, score_id), "C")
+    client.post(f"{url}/undo")
+    assert client.post(f"{url}/notes/note999", json={"action": "up"}).status_code == 422
+    assert client.get(url).json()["canRedo"] is True
+
+
+def test_bars_can_be_added_and_deleted(client):
+    score_id = blank(client, measures=2)
+    url = f"/api/scores/{score_id}"
+    assert client.post(f"{url}/bars", json={"action": "insert"}).status_code == 200
+    assert len(saved(client, score_id).findall("part/measure")) == 3
+    assert client.post(f"{url}/bars", json={"action": "delete", "note": first_id(client, score_id)}).status_code == 200
+    root = saved(client, score_id)
+    assert len(root.findall("part/measure")) == 2 and root.findtext("part/measure/attributes/divisions")
+
+
+def test_the_last_bar_cannot_be_deleted(client):
+    score_id = blank(client, measures=1)
+    response = client.post(f"/api/scores/{score_id}/bars", json={"action": "delete", "note": first_id(client, score_id)})
+    assert response.status_code == 422 and len(saved(client, score_id).findall("part/measure")) == 1
+
+
+def test_a_new_key_is_saved(client):
+    score_id = blank(client)
+    client.post(f"/api/scores/{score_id}/bars", json={"action": "key", "fifths": 2})
+    assert saved(client, score_id).findtext("part/measure/attributes/key/fifths") == "2"
+
+
+def test_a_new_time_flags_bars_that_no_longer_fit(client):
+    score_id = blank(client, measures=2)
+    cursor = first_id(client, score_id)
+    for step in "CDEF":
+        cursor = write(client, score_id, cursor, step)["cursor"]
+    data = client.post(f"/api/scores/{score_id}/bars", json={"action": "time", "beats": 3, "beat_type": 4}).json()
+    assert [check["problem"] for check in data["barChecks"]] == ["long"]
+    assert data["barChecks"][0]["measure"] == 0 and data["barChecks"][0]["note"]
+
+
+def test_edits_arriving_together_are_all_kept(client):
+    score_id = blank(client, measures=1)
+    ids = [note.get("id") for note in notes_of(client, score_id)]
+    url = f"/api/scores/{score_id}"
+    start = len(list((server.JOB_DIR / score_id).glob("version_*.musicxml")))
+
+    def edit(_):
+        return client.post(f"{url}/bars", json={"action": "insert"}).status_code
+
+    with ThreadPoolExecutor(8) as pool:
+        assert set(pool.map(edit, range(16))) == {200}
+    assert ids and len(saved(client, score_id).findall("part/measure")) == 17
+    assert len(list((server.JOB_DIR / score_id).glob("version_*.musicxml"))) == start + 16
+
+
+def test_chords_stay_on_their_boxes_after_a_bar_is_added(client, ready_score):
+    folder = server.JOB_DIR / ready_score
+    (folder / "recognized" / "chords.json").write_text(json.dumps([
+        {"measure": 0, "onset": 0.0, "chord": "Dm7", "text": "Dm7", "confidence": 0.5, "box": [1, 2, 3, 4], "page": 1},
+    ]))
+    url = f"/api/scores/{ready_score}"
+    assert client.post(f"{url}/bars", json={"action": "insert", "note": "note0"}).status_code == 200
+    chord = client.get(url).json()["chords"][0]
+    assert chord["measure"] == 1 and chord["box"] == [1, 2, 3, 4] and chord["confidence"] == 0.5
+
+
+def test_playback_lists_notes_and_chords_in_time_order(client, ready_score):
+    data = client.get(f"/api/scores/{ready_score}/playback").json()
+    assert [note["start"] for note in data["notes"]] == [0, 1, 2, 3] and data["total"] == 4
+    assert data["chords"][0]["length"] == 4 and data["notes"][0]["id"] == "note0"
+
+
+def melody(client, score_id, steps):
+    cursor = first_id(client, score_id)
+    written = []
+    for step in steps:
+        data = write(client, score_id, cursor, step)
+        written.append(data["written"])
+        cursor = data["cursor"]
+    return written, cursor
+
+
+def test_a_note_can_be_placed_by_staff_line(client):
+    score_id = blank(client)
+    url = f"/api/scores/{score_id}/notes/{first_id(client, score_id)}"
+    assert client.post(url, json={"action": "write", "type": "quarter", "line": 0}).status_code == 200
+    assert pitches(client, score_id) == ["F"]
+
+
+def test_a_triplet_endpoint_reports_the_length_to_use(client):
+    score_id = blank(client)
+    url = f"/api/scores/{score_id}/notes/{first_id(client, score_id)}"
+    data = client.post(url, json={"action": "tuplet", "type": "quarter"}).json()
+    assert data["type"] == "eighth" and data["cursor"]
+    assert sum(1 for _ in saved(client, score_id).iter("time-modification")) == 3
+
+
+def test_a_selected_note_becomes_a_triplet_and_back(client):
+    score_id = blank(client)
+    written, _ = melody(client, score_id, "C")
+    url = f"/api/scores/{score_id}/notes/{written[0]}"
+    assert client.post(url, json={"action": "tupletHere"}).status_code == 200
+    assert client.post(url, json={"action": "tupletHere"}).status_code == 200
+    assert not list(saved(client, score_id).iter("time-modification"))
+
+
+def test_a_group_edit_is_one_undo(client):
+    score_id = blank(client)
+    written, _ = melody(client, score_id, "CD")
+    url = f"/api/scores/{score_id}"
+    versions_before = len(list((server.JOB_DIR / score_id).glob("version_*.musicxml")))
+    assert client.post(f"{url}/group", json={"action": "octaveUp", "notes": written}).status_code == 200
+    assert len(list((server.JOB_DIR / score_id).glob("version_*.musicxml"))) == versions_before + 1
+    client.post(f"{url}/undo")
+    assert [note.findtext("pitch/octave") for note in notes_of(client, score_id)[:2]] == ["5", "5"]
+
+
+def test_a_group_edit_skips_rests(client):
+    score_id = blank(client)
+    written, cursor = melody(client, score_id, "C")
+    response = client.post(f"/api/scores/{score_id}/group", json={"action": "up", "notes": [*written, cursor]})
+    assert response.status_code == 200 and pitches(client, score_id) == ["D"]
+
+
+def test_a_group_of_only_rests_is_refused(client):
+    score_id = blank(client)
+    response = client.post(f"/api/scores/{score_id}/group", json={"action": "up", "notes": [first_id(client, score_id)]})
+    assert response.status_code == 422
+
+
+def test_a_group_can_only_do_group_actions(client):
+    score_id = blank(client)
+    assert client.post(f"/api/scores/{score_id}/group", json={"action": "write", "notes": []}).status_code == 422
+
+
+def test_looking_at_a_range_saves_nothing(client):
+    score_id = blank(client)
+    written, _ = melody(client, score_id, "CD")
+    url = f"/api/scores/{score_id}"
+    before = len(list((server.JOB_DIR / score_id).glob("version_*.musicxml")))
+    assert client.post(f"{url}/range", json={"first": written[0], "last": written[1]}).json()["ids"] == written
+    assert client.post(f"{url}/copy", json={"first": written[0], "last": written[1]}).status_code == 200
+    assert len(list((server.JOB_DIR / score_id).glob("version_*.musicxml"))) == before
+
+
+def test_copy_and_paste_work_between_scores(client):
+    source = blank(client)
+    written, _ = melody(client, source, "CDE")
+    clip = client.post(f"/api/scores/{source}/copy", json={"first": written[0], "last": written[-1]}).json()
+    target = blank(client)
+    response = client.post(f"/api/scores/{target}/paste", json={"at": first_id(client, target), "events": clip["events"]})
+    assert response.status_code == 200 and pitches(client, target) == ["C", "D", "E"] and response.json()["cursor"]
+
+
+def test_a_bad_range_is_refused(client):
+    score_id = blank(client)
+    assert client.post(f"/api/scores/{score_id}/range", json={"first": "nope", "last": "nope"}).status_code == 422
+    assert client.post(f"/api/scores/{score_id}/copy", json={"first": "nope", "last": "nope"}).status_code == 422
+
+
+def test_a_lyric_is_saved(client):
+    score_id = blank(client)
+    written, _ = melody(client, score_id, "CD")
+    response = client.post(f"/api/scores/{score_id}/lyrics/{written[0]}", json={"text": "hel", "joined": True})
+    assert response.status_code == 200 and next(saved(client, score_id).iter("syllabic")).text == "begin"
+    assert response.json()["next"] == written[1]
+
+
+def test_a_title_appears_in_the_score_and_the_list(client):
+    score_id = blank(client)
+    data = client.post(f"/api/scores/{score_id}/title", json={"title": "Song", "composer": "Writer"}).json()
+    assert data["title"] == "Song" and data["composer"] == "Writer" and "Song" in data["pages"][0]
+    assert client.get("/api/scores").json()[0]["title"] == "Song"
+
+
+def test_repeats_and_endings_change_how_a_score_plays(client):
+    score_id = blank(client, measures=3)
+    written, _ = melody(client, score_id, "CDEF")
+    url = f"/api/scores/{score_id}"
+    bars = [measure.find("note").get("id") for measure in saved(client, score_id).findall("part/measure")]
+    assert client.post(f"{url}/bars", json={"action": "backward", "note": bars[1]}).status_code == 200
+    assert client.post(f"{url}/bars", json={"action": "ending", "note": bars[1], "number": 1}).status_code == 200
+    assert client.post(f"{url}/bars", json={"action": "ending", "note": bars[2], "number": 2}).status_code == 200
+    assert client.get(f"{url}/playback").json()["total"] == 16
+    assert written

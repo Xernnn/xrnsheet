@@ -1,0 +1,744 @@
+"""Drive the editor in a real browser, the way a person would.
+
+Start the server, then run this with a Python that has Playwright:
+
+    .venv/bin/python -m app.server --notes own --port 8011
+    python tests/e2e_editor.py --port 8011 --shots /tmp/shots
+
+Set XRNSHEET_BROWSER to use a Chromium that's already installed, or pass --browser firefox.
+Every score it creates is listed at the end, and removed if you pass --clean, even when a step
+crashes. It isn't collected by pytest, because it needs a browser and a running server.
+"""
+
+import argparse
+import json
+import os
+import shutil
+import urllib.request
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+from playwright.sync_api import sync_playwright
+
+ROOT = Path(__file__).resolve().parent.parent
+FAILURES: list[str] = []
+
+
+def check(name: str, passed: bool, detail: object = "") -> None:
+    print(f"{'ok  ' if passed else 'FAIL'} {name} {detail if detail != '' else ''}", flush=True)
+    if not passed:
+        FAILURES.append(name)
+
+
+def fetch_text(base: str, path: str) -> str:
+    with urllib.request.urlopen(f"{base}{path}") as response:
+        return response.read().decode("utf-8")
+
+
+def read_notes(base: str, score_id: str) -> list[tuple]:
+    root = ET.fromstring(fetch_text(base, f"/api/scores/{score_id}/score.musicxml"))
+    found = []
+    for bar, measure in enumerate(root.find("part").findall("measure")):
+        for note in measure.findall("note"):
+            found.append((
+                bar,
+                note.findtext("pitch/step", "rest"),
+                note.findtext("pitch/octave", ""),
+                note.findtext("type", "bar"),
+                note.findtext("accidental", ""),
+                note.find("chord") is not None,
+            ))
+    return found
+
+
+def pitched(notes: list[tuple]) -> list[str]:
+    return [f"{step}{octave}" for _, step, octave, *_ in notes if step != "rest"]
+
+
+def settle(page) -> None:
+    """Wait until every queued edit has come back from the server."""
+    page.evaluate("() => queue")
+
+
+def click_on(page, locator) -> None:
+    """Click where a mouse would. Staff lines are drawn over noteheads, which the app allows for."""
+    locator.evaluate("element => element.scrollIntoView({ block: 'center' })")
+    head = locator.locator(".notehead")
+    box = (head.first if head.count() else locator).bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+
+
+def test_writing(page, base: str, shots: Path | None, created: list[str]) -> None:
+    page.goto(base)
+    page.click("#blankOpen")
+    page.select_option("#blankTime", "4/4")
+    page.fill("#blankBars", "8")
+    page.click("#blankForm button[type=submit]")
+    page.wait_for_selector("#pages svg")
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    check("blank score opens ready to type", page.get_attribute("#inputToggle", "aria-pressed") == "true")
+    check("blank score hides the original panel", page.is_hidden("#original"))
+    check("blank score hides mark as checked", page.is_hidden("#checked"))
+
+    page.keyboard.press("5")
+    page.keyboard.type("cdefgabc", delay=0)  # As fast as possible, to expose any race.
+    settle(page)
+    notes = read_notes(base, score_id)
+    check("fast typing keeps every note, in order", pitched(notes) == ["C5", "D5", "E5", "F5", "G5", "A5", "B5", "C6"], pitched(notes))
+    check("notes crossed into bar 2", [note[0] for note in notes if note[1] != "rest"] == [0, 0, 0, 0, 1, 1, 1, 1])
+
+    page.keyboard.press("6")
+    page.keyboard.press("e")
+    settle(page)
+    notes = read_notes(base, score_id)
+    check("a chosen length is used", any(note[3] == "half" and note[1] == "E" for note in notes))
+    page.keyboard.press("#")
+    settle(page)
+    check("sharp applies to the note just written", any(note[4] == "sharp" for note in read_notes(base, score_id)))
+    page.keyboard.press("Shift+G")
+    settle(page)
+    check("shift stacks a chord", any(note[5] for note in read_notes(base, score_id)))
+
+    page.keyboard.press("Control+z")
+    page.keyboard.press("Control+z")
+    settle(page)
+    before = read_notes(base, score_id)
+    cursor = lambda: page.evaluate("() => editor.cursor")
+    start = cursor()
+    page.keyboard.press("d")
+    settle(page)
+    after = cursor()
+    page.keyboard.press("Control+z")
+    settle(page)
+    check("undo restores the score", read_notes(base, score_id) == before)
+    check("undo puts the cursor back", cursor() == start)
+    page.keyboard.press("Control+y")
+    settle(page)
+    check("redo brings it back", read_notes(base, score_id) != before)
+    check("redo moves the cursor on", cursor() == after)
+    page.keyboard.press("Control+z")
+    settle(page)
+    check("a second undo still lands in the right place", cursor() == start)
+
+    box = page.locator("#caret").bounding_box()
+    check("the entry cursor is visible", box is not None and box["height"] > 10, box)
+    if shots:
+        page.screenshot(path=str(shots / "entering.png"), full_page=True)
+
+    page.keyboard.press("Escape")
+    check("escape leaves entry mode", page.get_attribute("#inputToggle", "aria-pressed") == "false")
+
+    first = page.locator("#pages g.note").first
+    click_on(page, first)
+    check("a note can be selected", page.locator("#pages g.selected").count() >= 1)
+    page.keyboard.press("6")
+    settle(page)
+    notes = read_notes(base, score_id)
+    check("a selected note changes length", notes[0][3] == "half", notes[:3])
+    check("the note it covered has gone", notes[1][1] == "E", notes[:3])
+    page.keyboard.press("Control+ArrowUp")
+    settle(page)
+    check("control up moves an octave", read_notes(base, score_id)[0][:3] == (0, "C", "6"))
+
+    click_on(page, page.locator("#pages g.mRest").first)
+    check("a whole-bar rest can be selected", page.locator("#pages g.selected").count() == 1)
+    page.keyboard.press("Escape")
+
+    bars = lambda: len({note[0] for note in read_notes(base, score_id)})
+    page.click("#addBar")
+    settle(page)
+    check("add bar adds one at the end", bars() == 9)
+    click_on(page, page.locator("#pages g.note").first)
+    page.click("#deleteBar")
+    settle(page)
+    check("delete bar removes it", bars() == 8)
+    check("the deleted bar's signature moved on", ET.fromstring(fetch_text(base, f"/api/scores/{score_id}/score.musicxml")).find("part").find("measure").findtext("attributes/divisions") is not None)
+
+    click_on(page, page.locator("#pages g.note").first)
+    page.select_option("#keyChoice", "-2")
+    settle(page)
+    xml = fetch_text(base, f"/api/scores/{score_id}/score.musicxml")
+    check("key change is saved", "<fifths>-2</fifths>" in xml)
+    check("the key picker resets", page.input_value("#keyChoice") == "")
+
+    page.keyboard.press("Escape")
+    page.select_option("#timeChoice", "3/4")
+    settle(page)
+    chips = page.locator("#barChecks .chip")
+    check("bars that no longer fit are listed", chips.count() >= 1, chips.count() and chips.first.inner_text())
+    chips.first.click()
+    check("a bar check selects that bar", page.locator("#pages g.selected").count() >= 1)
+    if shots:
+        page.screenshot(path=str(shots / "bar_check.png"), full_page=True)
+    page.keyboard.press("Control+z")
+    settle(page)
+    check("undo clears the bar check", page.locator("#barChecks .chip").count() == 0)
+    page.keyboard.press("Escape")
+
+    page.keyboard.press(" ")
+    page.wait_for_function("() => document.querySelector('#play').textContent === 'Stop'")
+    check("space starts playback", int(page.get_attribute("#play", "data-notes")) >= 5)
+    page.wait_for_selector("#pages g.playing", timeout=4000)
+    check("the playing note lights up", True)
+    page.keyboard.press(" ")
+    check("space stops playback", page.inner_text("#play") == "Play" and page.locator("#pages g.playing").count() == 0)
+
+    pdf = urllib.request.urlopen(f"{base}/api/scores/{score_id}/score.pdf").read()
+    check("the PDF downloads", pdf[:4] == b"%PDF", len(pdf))
+
+    kept = read_notes(base, score_id)
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    check("a reload keeps the score", read_notes(base, score_id) == kept)
+    page.click("#again")
+    page.wait_for_selector("#historyList a")
+    check("it's listed as written from scratch", "written from scratch" in page.inner_text("#historyList"))
+
+
+def open_blank(page, base: str, created: list[str], bars: int = 4, staff: str = "treble") -> str:
+    page.goto(base)
+    page.click("#blankOpen")
+    page.select_option("#blankClef", staff)
+    page.fill("#blankBars", str(bars))
+    page.click("#blankForm button[type=submit]")
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    return created[-1]
+
+
+def saved_score(base: str, score_id: str) -> ET.Element:
+    return ET.fromstring(fetch_text(base, f"/api/scores/{score_id}/score.musicxml"))
+
+
+def with_slow_server(page, slow: bool) -> None:
+    """Hold every request back, so keys arrive faster than the answers."""
+    page.evaluate("""slow => {
+        window.realFetch ??= window.fetch;
+        window.fetch = slow ? async (...request) => { await new Promise(done => setTimeout(done, 150)); return window.realFetch(...request); } : window.realFetch;
+    }""", slow)
+
+
+def click_staff(page, element_id: str, step: int, shift: bool = False) -> None:
+    """Click over a note or rest at a chosen place: 0 is the top line, and each step is a line or space."""
+    spot = page.evaluate("""([id, step]) => {
+        const element = document.getElementById(id);
+        element.scrollIntoView({ block: "center" });
+        const lines = staffLines(element.closest("g.staff"));
+        const box = element.getBoundingClientRect();
+        return { x: box.left + box.width / 2, y: lines.top + step * lines.step };
+    }""", [element_id, step])
+    page.mouse.move(spot["x"], spot["y"])
+    if shift:
+        page.keyboard.down("Shift")
+    page.mouse.click(spot["x"], spot["y"])
+    if shift:
+        page.keyboard.up("Shift")
+    settle(page)
+
+
+def stepped_over_chord(page) -> bool:
+    start = page.evaluate("""() => {
+        const chord = document.querySelector("#pages g.chord");
+        editor.cursor = chord.querySelector("g.note").id;
+        return editor.cursor;
+    }""")
+    page.keyboard.press("ArrowRight")
+    settle(page)
+    after = page.evaluate("() => document.getElementById(editor.cursor).closest('g.chord') === null")
+    page.keyboard.press("ArrowLeft")
+    settle(page)
+    return after and page.evaluate("() => editor.cursor") == start
+
+
+def test_clicking_notes(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = open_blank(page, base, created, staff="piano")
+    cursor = page.evaluate("() => editor.cursor")
+    click_staff(page, cursor, 4)
+    check("clicking the middle line writes B", pitched(read_notes(base, score_id)) == ["B4"], pitched(read_notes(base, score_id)))
+    check("the ghost note shows while hovering", page.is_visible("#ghost"))
+    written = page.evaluate("() => editor.last")
+    click_staff(page, written, 8, shift=True)
+    notes = read_notes(base, score_id)
+    check("shift-click stacks a chord note", sorted(pitched(notes)) == ["B4", "E4"] and any(note[5] for note in notes), notes[:3])
+    lower = page.evaluate("""() => {
+        const staves = [...document.querySelectorAll("#pages g.staff")];
+        return staves[1].querySelector("g.rest, g.mRest").id;
+    }""")
+    click_staff(page, lower, 0)
+    bass = saved_score(base, score_id).find("part").find("measure")
+    placed = [(note.findtext("staff"), note.findtext("pitch/step"), note.findtext("pitch/octave")) for note in bass.findall("note") if note.find("pitch") is not None]
+    check("a click on the lower staff uses the bass clef", ("2", "A", "3") in placed, placed)
+    check("the arrows step over a chord as one place", stepped_over_chord(page), page.evaluate("() => editor.cursor"))
+    page.keyboard.press("Escape")
+    settle(page)
+    check("the ghost goes when entering stops", page.is_hidden("#ghost"))
+
+
+def test_end_of_score(page, base: str, created: list[str]) -> None:
+    score_id = open_blank(page, base, created, bars=1)
+    page.keyboard.press("5")
+    page.keyboard.type("cdef", delay=0)
+    settle(page)
+    bars = lambda: len(saved_score(base, score_id).find("part").findall("measure"))
+    check("filling the last bar adds no empty bar", bars() == 1, bars())
+    check("the cursor waits past the last note", page.evaluate("() => editor.cursor.startsWith('after:')"))
+    check("the caret still shows at the end", page.is_visible("#caret"))
+    box, note = page.evaluate("""() => {
+        const last = document.getElementById(editor.cursor.slice(6)).getBoundingClientRect();
+        return [$("caret").getBoundingClientRect().left, last.right];
+    }""")
+    check("the caret sits right of the last note", box > note, (box, note))
+    page.keyboard.press("g")
+    settle(page)
+    check("the next note adds the bar", bars() == 2, bars())
+    page.keyboard.press("Control+z")
+    settle(page)
+    check("undo at the end takes the bar away again", bars() == 1 and page.evaluate("() => editor.cursor.startsWith('after:')"), bars())
+    page.keyboard.press("ArrowLeft")
+    settle(page)
+    last_note = page.evaluate("""() => [...document.querySelectorAll("#pages g.note")].at(-1).id""")
+    check("left from the end lands on the last note", page.evaluate("() => editor.cursor") == last_note)
+    page.keyboard.press("ArrowRight")
+    settle(page)
+    check("right from the last note goes back past it", page.evaluate("() => editor.cursor.startsWith('after:')"))
+    page.keyboard.press("6")
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("g")
+    settle(page)
+    root = saved_score(base, score_id)
+    ties = len(root.findall(".//tie[@type='start']"))
+    check("a note over the barline is split and tied", ties == 1 and bars() == 2, (ties, bars()))
+
+
+def test_quick_keys(page, base: str, created: list[str]) -> None:
+    """Keys that change what the next note will be must only reach the notes typed after them."""
+    score_id = open_blank(page, base, created)
+    with_slow_server(page, True)
+    page.keyboard.press("5")
+    page.keyboard.type("cd", delay=0)
+    page.keyboard.press("6")
+    page.keyboard.type("e", delay=0)
+    page.keyboard.press("5")
+    page.keyboard.press(".")
+    page.keyboard.type("f", delay=0)
+    page.keyboard.press(".")
+    page.keyboard.type("g", delay=0)
+    settle(page)
+    with_slow_server(page, False)
+    root = saved_score(base, score_id)
+    written = [(note.findtext("pitch/step"), note.findtext("type"), len(note.findall("dot"))) for note in root.iter("note") if note.find("pitch") is not None]
+    check("each length reaches only the notes after it", written == [("C", "quarter", 0), ("D", "quarter", 0), ("E", "half", 0), ("F", "quarter", 1), ("G", "quarter", 0)], written)
+    with_slow_server(page, True)
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("a")
+    settle(page)
+    with_slow_server(page, False)
+    steps = pitched(read_notes(base, score_id))
+    check("arrows and the next note stay in order", steps == ["C5", "D5", "E5", "A5", "G5"], steps)
+    with_slow_server(page, True)
+    page.keyboard.type("bc", delay=0)
+    page.keyboard.press("Escape")
+    settle(page)
+    with_slow_server(page, False)
+    check("notes typed just before stopping are kept", pitched(read_notes(base, score_id)) == ["C5", "D5", "E5", "A5", "B5", "C6"], pitched(read_notes(base, score_id)))
+
+
+def test_triplets(page, base: str, created: list[str]) -> None:
+    score_id = open_blank(page, base, created)
+    page.keyboard.press("5")
+    page.keyboard.press("Control+3")
+    settle(page)
+    check("a triplet asks for eighths", page.evaluate("() => editor.type") == "eighth", page.evaluate("() => editor.type"))
+    page.keyboard.type("cde", delay=0)
+    settle(page)
+    root = saved_score(base, score_id)
+    members = [note for note in root.find("part").find("measure").findall("note") if note.find("time-modification") is not None]
+    check("typing fills the triplet", [note.findtext("pitch/step") for note in members] == ["C", "D", "E"], len(members))
+    check("the triplet is drawn with its number", page.locator("#pages g.tupletNum").count() == 1)
+    check("the triplet is beamed", page.locator("#pages g.beam").count() >= 1)
+    check("the bar still adds up", page.is_hidden("#barChecks"))
+    page.keyboard.press("5")
+    page.keyboard.press("g")
+    settle(page)
+    notes = read_notes(base, score_id)
+    check("the note after a triplet is ordinary", notes[3][1] == "G" and notes[3][3] == "quarter", notes[3])
+    page.keyboard.press("Escape")
+    first = page.locator("#pages g.note").first
+    click_on(page, first)
+    page.keyboard.press("Control+3")
+    settle(page)
+    check("a triplet can be taken away again", not list(saved_score(base, score_id).iter("time-modification")))
+    page.keyboard.press("Control+z")
+    settle(page)
+    check("undo brings the triplet back", len(list(saved_score(base, score_id).iter("time-modification"))) == 3)
+    page.click("#tripletButton")
+    settle(page)
+    check("the triplet button does the same", not list(saved_score(base, score_id).iter("time-modification")))
+
+
+def test_selection(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = open_blank(page, base, created)
+    page.keyboard.press("5")
+    page.keyboard.type("cdefg", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    notes = page.locator("#pages g.note")
+    click_on(page, notes.nth(0))
+    box = notes.nth(2).locator(".notehead").bounding_box()
+    page.keyboard.down("Shift")
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.keyboard.up("Shift")
+    settle(page)
+    highlighted = lambda: page.locator("#pages g.selected").count()
+    check("shift-click selects a stretch", highlighted() == 3, highlighted())
+    page.keyboard.press("Shift+ArrowRight")
+    settle(page)
+    check("shift and an arrow grow it", highlighted() == 4, highlighted())
+    page.keyboard.press("Shift+ArrowLeft")
+    settle(page)
+    check("shift and the other arrow shrink it", highlighted() == 3, highlighted())
+    if shots:
+        page.screenshot(path=str(shots / "selection.png"), full_page=True)
+    version = page.evaluate("() => score.canUndo")
+    page.keyboard.press("ArrowUp")
+    settle(page)
+    check("an action moves the whole stretch", pitched(read_notes(base, score_id))[:4] == ["D5", "E5", "F5", "F5"], pitched(read_notes(base, score_id)))
+    check("the selection is still there after the edit", highlighted() == 3, highlighted())
+    page.keyboard.press("Control+z")
+    settle(page)
+    check("one undo reverses the whole stretch", pitched(read_notes(base, score_id))[:4] == ["C5", "D5", "E5", "F5"] and version)
+    page.keyboard.press("Control+c")
+    settle(page)
+    check("copying enables paste", page.is_enabled("#paste"))
+    rest_in_bar_three = page.evaluate("""() => {
+        const measures = [...document.querySelectorAll("#pages g.measure")];
+        return measures[2].querySelector("g.rest, g.mRest").id;
+    }""")
+    click_on(page, page.locator(f"[id='{rest_in_bar_three}']"))
+    page.keyboard.press("Control+v")
+    settle(page)
+    placed = [(bar, step) for bar, step, *_ in read_notes(base, score_id) if bar == 2 and step != "rest"]
+    check("paste writes into the chosen bar", [step for _, step in placed] == ["C", "D", "E"], placed)
+    page.keyboard.press("Control+a")
+    settle(page)
+    check("select all takes every note", highlighted() >= 8, highlighted())
+    click_on(page, page.locator("#pages g.note").nth(0))
+    check("clicking again drops the stretch", highlighted() == 1, highlighted())
+    click_on(page, page.locator("#pages g.note").nth(1))
+    page.keyboard.press("Control+x")
+    settle(page)
+    check("cut leaves a rest behind", pitched(read_notes(base, score_id))[:2] == ["C5", "E5"], pitched(read_notes(base, score_id))[:3])
+
+    other = open_blank(page, base, created)
+    page.keyboard.press("Escape")
+    click_on(page, page.locator("#pages g.rest, #pages g.mRest").first)
+    check("the clip survives opening another score", page.is_enabled("#paste"))
+    page.keyboard.press("Control+v")
+    settle(page)
+    check("the last thing cut is what gets pasted", pitched(read_notes(base, other)) == ["D5"], pitched(read_notes(base, other)))
+
+
+def test_lyrics(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = open_blank(page, base, created)
+    page.keyboard.press("5")
+    page.keyboard.type("cdef", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    click_on(page, page.locator("#pages g.note").first)
+    page.keyboard.press("Control+l")
+    check("the lyric box opens", page.is_visible("#lyricInput"))
+    page.keyboard.type("hal-le-lu now", delay=20)
+    page.keyboard.press("Enter")
+    settle(page)
+    root = saved_score(base, score_id)
+    found = [(item.findtext("syllabic"), item.findtext("text")) for item in root.iter("lyric")]
+    check("words and syllables land on the right notes", found == [("begin", "hal"), ("middle", "le"), ("end", "lu"), ("single", "now")], found)
+    check("the lyric box closes", page.is_hidden("#lyricInput"))
+    check("lyrics are drawn", "hal" in page.inner_text("#pages"))
+    check("typing a lyric played nothing and wrote no notes", len(pitched(read_notes(base, score_id))) == 4)
+    click_on(page, page.locator("#pages g.note .notehead").nth(1))
+    page.keyboard.press("Control+l")
+    settle(page)
+    check("reopening shows the syllable", page.input_value("#lyricInput") == "le", page.input_value("#lyricInput"))
+    page.keyboard.press("Escape")
+    check("escape leaves the lyric alone", any(item.findtext("text") == "le" for item in saved_score(base, score_id).iter("lyric")))
+    if shots:
+        page.screenshot(path=str(shots / "lyrics.png"), full_page=True)
+
+    click_on(page, page.locator("#pages g.note").last)
+    page.keyboard.press("Control+l")
+    settle(page)
+    page.keyboard.type("wonderfully-overlong")
+    page.keyboard.press("Enter")
+    settle(page)
+    click_on(page, page.locator("#pages g.note").last)
+    page.keyboard.press("n")
+    settle(page)
+    head = page.locator("#pages g.note").last.locator(".notehead").bounding_box()
+    caret = page.locator("#caret").bounding_box()
+    middle_gap = abs(caret["x"] + caret["width"] / 2 - (head["x"] + head["width"] / 2))
+    check("the caret sits on the note, not on its long lyric", middle_gap < 8, middle_gap)
+    page.keyboard.press("Escape")
+
+    # A hyphen on the last note has no next note to go to, and the letters after it must stay in the box.
+    notes_before = page.locator("#pages g.note").count()
+    for label, delay in (("at typing speed", 150), ("all at once", 0)):
+        click_on(page, page.locator("#pages g.note").last)
+        page.keyboard.press("Control+l")
+        settle(page)
+        page.keyboard.type("won-der", delay=delay)
+        page.keyboard.press("Enter")
+        settle(page)
+        last_lyric = list(saved_score(base, score_id).iter("lyric"))[-1].findtext("text")
+        check(f"the word stays whole on the last note, {label}", last_lyric == "won-der", last_lyric)
+        check(f"its letters write no notes, {label}", page.locator("#pages g.note").count() == notes_before)
+        check(f"the box closes after it, {label}", not page.is_visible("#lyricInput"))
+    click_on(page, page.locator("#pages g.note").last)
+    page.keyboard.press("Control+l")
+    settle(page)
+    page.keyboard.type("end-", delay=150)
+    settle(page)
+    page.keyboard.press("Escape")
+    finished = list(saved_score(base, score_id).iter("lyric"))[-1]
+    check("a hyphen left on the last note joins nothing", (finished.findtext("text"), finished.findtext("syllabic")) in (("end", "single"), ("end", "end")), finished.findtext("syllabic"))
+    page.keyboard.press("Escape")
+    settle(page)
+
+    score_id = open_blank(page, base, created)
+    page.keyboard.press("5")
+    page.keyboard.type("cdef", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    click_on(page, page.locator("#pages g.note").first)
+    with_slow_server(page, True)
+    page.keyboard.press("Control+l")
+    settle(page)
+    page.keyboard.type("one two three four", delay=0)
+    page.keyboard.press("Enter")
+    settle(page)
+    with_slow_server(page, False)
+    found = [item.findtext("text") for item in saved_score(base, score_id).iter("lyric")]
+    check("words typed faster than the server stay on their own notes", found == ["one", "two", "three", "four"], found)
+
+
+def test_titles_and_repeats(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = open_blank(page, base, created, bars=4)
+    page.keyboard.press("Escape")
+    page.fill("#titleInput", "Test Song")
+    page.fill("#composerInput", "A. Writer")
+    page.keyboard.press("Enter")
+    settle(page)
+    page.locator("#composerInput").blur()
+    settle(page)
+    root = saved_score(base, score_id)
+    check("the title is saved", root.findtext("work/work-title") == "Test Song", root.findtext("work/work-title"))
+    printed = page.evaluate("""() => document.querySelector("#pages .pgHead")?.textContent ?? "" """)
+    check("title and composer are printed", "Test Song" in printed and "A. Writer" in printed, printed.split())
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    check("the title is shown again after reloading", page.input_value("#titleInput") == "Test Song")
+
+    rests = page.locator("#pages g.mRest, #pages g.rest")
+    click_on(page, rests.nth(1))
+    page.select_option("#repeatChoice", "backward")
+    settle(page)
+    click_on(page, page.locator("#pages g.mRest, #pages g.rest").nth(1))
+    page.select_option("#repeatChoice", "1")
+    settle(page)
+    click_on(page, page.locator("#pages g.mRest, #pages g.rest").nth(2))
+    page.select_option("#repeatChoice", "2")
+    settle(page)
+    played = json.loads(fetch_text(base, f"/api/scores/{score_id}/playback"))["total"]
+    root = saved_score(base, score_id)
+    check("repeats are saved", len(list(root.iter("repeat"))) == 1 and len(list(root.iter("ending"))) >= 2)
+    check("the repeat plays bars 1, 2, 1, 3, 4", played == 20, played)
+    check("the menu goes back to its label", page.input_value("#repeatChoice") == "")
+    page.keyboard.press("Control+z")
+    page.keyboard.press("Control+z")
+    settle(page)
+    click_on(page, page.locator("#pages g.mRest, #pages g.rest").nth(1))
+    bar_three = page.locator("#pages g.mRest, #pages g.rest").nth(2).bounding_box()
+    page.keyboard.down("Shift")
+    page.mouse.click(bar_three["x"] + bar_three["width"] / 2, bar_three["y"] + bar_three["height"] / 2)
+    page.keyboard.up("Shift")
+    settle(page)
+    page.select_option("#repeatChoice", "1")
+    settle(page)
+    measures = saved_score(base, score_id).find("part").findall("measure")
+    starts = [len(measure.findall("barline[@location='left']/ending")) for measure in measures]
+    stops = [len(measure.findall("barline[@location='right']/ending")) for measure in measures]
+    check("an ending covers a selected stretch of bars", starts == [0, 1, 0, 0] and stops == [0, 0, 1, 0], (starts, stops))
+    if shots:
+        page.screenshot(path=str(shots / "repeats.png"), full_page=True)
+    listed = json.loads(fetch_text(base, "/api/scores"))
+    check("the score list uses the title", any(item.get("title") == "Test Song" for item in listed))
+
+
+# Render what playback would send to the speakers, then measure which pitch sounds in each stretch.
+HEAR = """async () => {
+    const data = await (await fetch(`/api/scores/${scoreId}/playback`)).json();
+    const beat = 60 / data.tempo;
+    const rate = 44100;
+    const audio = new OfflineAudioContext(1, Math.ceil((data.total * beat + 0.3) * rate), rate);
+    schedule(audio, data, 0, 0);
+    const samples = (await audio.startRendering()).getChannelData(0);
+    const strength = (from, to, midi) => {
+        const frequency = 440 * 2 ** ((midi - 69) / 12);
+        const step = 2 * Math.PI * frequency / rate;
+        let real = 0, imaginary = 0;
+        for (let index = from; index < to; index++) {
+            real += samples[index] * Math.cos(index * step);
+            imaginary += samples[index] * Math.sin(index * step);
+        }
+        return Math.hypot(real, imaginary) / (to - from);
+    };
+    const heard = [];
+    for (let at = 0; at < data.total; at += 0.5) {
+        const from = Math.floor((at + 0.1) * beat * rate);
+        const to = Math.floor((at + 0.4) * beat * rate);
+        let best = null, loudest = 0.01;
+        for (let midi = 36; midi <= 96; midi++) {
+            const level = strength(from, to, midi);
+            if (level > loudest) { best = midi; loudest = level; }
+        }
+        heard.push(best);
+    }
+    // A tied note keeps sounding, so compare the sound across each join with the sound after it.
+    const steady = position => {
+        const at = Math.floor(position * beat * rate);
+        const width = Math.floor(0.03 * rate);
+        return strength(at - width, at + width, 79) / strength(at + width * 3, at + width * 5, 79);
+    };
+    return { heard, tempo: data.tempo, seconds: samples.length / rate, plainJoin: steady(5), tiedJoin: steady(6) };
+}"""
+
+
+def test_sound(page, base: str, created: list[str]) -> None:
+    score_id = open_blank(page, base, created, bars=3)
+    page.keyboard.press("5")
+    page.keyboard.type("cd", delay=0)
+    page.keyboard.press("6")
+    page.keyboard.press("e")
+    settle(page)
+    page.keyboard.press("5")
+    page.keyboard.type("ggg", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    click_on(page, page.locator("#pages g.note").nth(3))
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("t")
+    settle(page)
+    bar_two = page.evaluate("""() => document.querySelectorAll("#pages g.measure")[1].querySelector("g.note").id""")
+    click_on(page, page.locator(f"[id='{bar_two}']"))
+    page.select_option("#repeatChoice", "backward")
+    settle(page)
+    first = page.evaluate(HEAR)
+    heard = first["heard"]
+    check("each note sounds at its written pitch, on its own beat", heard[:6] == [72, 72, 74, 74, 76, 76], heard[:8])
+    check("a half note keeps sounding", heard[6:8] == [76, 76], heard[:8])
+    check("the next bar starts on time", heard[8:14] == [79] * 6, heard[8:16])
+    check("a rest is silent", heard[14:16] == [None, None], heard[14:16])
+    check("the repeat plays the start again", heard[16:24] == heard[:8], heard[16:24])
+    check("the last bar is silent, as written", heard[32:] == [None] * 8, heard[32:])
+    check("the audio is as long as the score", abs(first["seconds"] - (20 * 60 / first["tempo"] + 0.3)) < 0.1, first["seconds"])
+    check("a repeated note starts again", first["plainJoin"] < 0.8, first["plainJoin"])
+    check("a tied note keeps sounding", first["tiedJoin"] > 0.9, first["tiedJoin"])
+    click_on(page, page.locator("#pages g.note").nth(2))
+    page.click("#play")
+    page.wait_for_function("() => document.querySelector('#pages .playing')")
+    check("the playing note lights up", page.locator("#pages .playing").count() >= 1)
+    check("playback starts from the selected note", page.get_attribute("#play", "data-notes") == "8", page.get_attribute("#play", "data-notes"))
+    page.click("#play")
+    check("playback stops", page.locator("#pages .playing").count() == 0)
+
+
+def test_phone(context, base: str, shots: Path | None, created: list[str]) -> None:
+    page = context.new_page()
+    page.set_viewport_size({"width": 390, "height": 800})
+    page.goto(base)
+    page.click("#blankOpen")
+    page.fill("#blankBars", "4")
+    page.click("#blankForm button[type=submit]")
+    page.wait_for_selector("#pages svg")
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    page.locator("#pitches button").first.click()
+    settle(page)
+    check("note buttons work on a phone", pitched(read_notes(base, score_id)) == ["C5"])
+    overflow = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+    check("nothing overflows at phone width", overflow == 0, overflow)
+    size = page.locator("#pages g.note").first.bounding_box()
+    check("notes are big enough to tap on a phone", size["width"] >= 8, size["width"])
+    if shots:
+        page.screenshot(path=str(shots / "phone.png"))
+    page.close()
+
+
+def test_recognized(page, base: str, shots: Path | None, created: list[str]) -> None:
+    page.goto(base)
+    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.wait_for_selector("#pages svg", timeout=120000)
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    page.wait_for_selector(".box")
+    boxes = page.locator(".box").count()
+    chords = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]
+    check("a recognized sheet shows its chord boxes", boxes == len(chords) and boxes > 0, boxes)
+    click_on(page, page.locator("#pages g.note").first)
+    page.click("#addBar")
+    settle(page)
+    after = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]
+    check("adding a bar keeps every chord linked to its box", sum(chord["box"] is not None for chord in after) == len(chords))
+    check("chord boxes survive on the page", page.locator(".box").count() == boxes)
+    check("chords after the new bar moved along", after[0]["measure"] == chords[0]["measure"] + 1, (chords[0]["measure"], after[0]["measure"]))
+    if shots:
+        page.screenshot(path=str(shots / "recognized.png"), full_page=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--port", type=int, default=8011)
+    parser.add_argument("--shots", type=Path)
+    parser.add_argument("--clean", action="store_true", help="delete the scores this test created")
+    parser.add_argument("--browser", choices=["chromium", "firefox"], default="chromium")
+    arguments = parser.parse_args()
+    base = f"http://127.0.0.1:{arguments.port}"
+    if arguments.shots:
+        arguments.shots.mkdir(parents=True, exist_ok=True)
+
+    created: list[str] = []
+    try:
+        with sync_playwright() as driver:
+            chosen = {"executable_path": os.environ.get("XRNSHEET_BROWSER")} if arguments.browser == "chromium" else {}
+            browser = getattr(driver, arguments.browser).launch(**chosen)
+            context = browser.new_context(viewport={"width": 1360, "height": 900})
+            page = context.new_page()
+            problems: list[str] = []
+            page.on("pageerror", lambda error: problems.append(str(error)))
+            page.on("console", lambda item: problems.append(item.text) if item.type == "error" else None)
+            test_writing(page, base, arguments.shots, created)
+            test_clicking_notes(page, base, arguments.shots, created)
+            test_end_of_score(page, base, created)
+            test_quick_keys(page, base, created)
+            test_triplets(page, base, created)
+            test_selection(page, base, arguments.shots, created)
+            test_lyrics(page, base, arguments.shots, created)
+            test_titles_and_repeats(page, base, arguments.shots, created)
+            test_sound(page, base, created)
+            test_phone(context, base, arguments.shots, created)
+            test_recognized(page, base, arguments.shots, created)
+            check("no errors in the page", not problems, problems[:4])
+            browser.close()
+    finally:
+        print("scores created:", " ".join(created))
+        if arguments.clean:
+            for score_id in created:
+                shutil.rmtree(ROOT / "data" / "jobs" / score_id, ignore_errors=True)
+    print(f"{len(FAILURES)} failed: {FAILURES}" if FAILURES else "all passed")
+    raise SystemExit(1 if FAILURES else 0)
+
+
+if __name__ == "__main__":
+    main()
