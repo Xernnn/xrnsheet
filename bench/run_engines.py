@@ -100,13 +100,13 @@ def find_outputs(out_dir: Path) -> list[Path]:
     return sorted([*out_dir.rglob("*.musicxml"), *out_dir.rglob("*.mxl")])
 
 
-def evaluate(engine: str, image: Path) -> dict:
+def evaluate(engine: str, image: Path, cached: bool = False) -> dict:
     out_dir = RESULTS_DIR / engine / image.stem
     out_dir.mkdir(parents=True, exist_ok=True)
     timing_file = out_dir / "seconds.txt"
 
     outputs = find_outputs(out_dir)
-    if not outputs:
+    if not outputs and not cached:
         started = time.monotonic()
         try:
             ENGINES[engine](image, out_dir)
@@ -151,6 +151,9 @@ def evaluate(engine: str, image: Path) -> dict:
         "predicted_notes": result.predicted_notes,
         "truth_chords": result.truth_chords,
         "predicted_chords": result.predicted_chords,
+        "time_right": result.time_right,
+        "bars_full": result.bars_full,
+        "truth_time": result.truth_time,
     }
 
 
@@ -174,12 +177,25 @@ def print_summary(rows: list[dict]) -> None:
             f"{mean(group, 'pitch_class_f1'):>7}{mean(group, 'note_f1'):>7}"
             f"{mean(group, 'chord_recall'):>8}{mean(group, 'chord_placed'):>8}{mean(group, 'seconds'):>7}"
         )
+    print_time_summary(rows)
+
+
+def print_time_summary(rows: list[dict]) -> None:
+    """Show time signatures by signature, because always answering 4/4 would score well overall."""
+    groups = defaultdict(list)
+    for row in rows:
+        if row.get("truth_time"):
+            groups[(row["engine"], row["truth_time"])].append(row)
+    print(f"\n{'engine':<13}{'signature':<11}{'sheets':>6}{'time':>7}{'bars full':>11}")
+    for (engine, signature), group in sorted(groups.items()):
+        print(f"{engine:<13}{signature:<11}{len(group):>6}{mean(group, 'time_right'):>7}{mean(group, 'bars_full'):>11}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--only", default="", help="only images whose name contains this text")
     parser.add_argument("--engine", choices=sorted(ENGINES), help="only run this engine")
+    parser.add_argument("--cached", action="store_true", help="only score existing outputs, never run an engine")
     arguments = parser.parse_args()
 
     engines = [arguments.engine] if arguments.engine else DEFAULT_ENGINES
@@ -188,7 +204,7 @@ def main() -> None:
         for engine in engines:
             if ENGINES[engine] is run_external and not list((ROOT / "data" / "external" / engine).glob(f"{image.stem}.*")):
                 continue
-            row = evaluate(engine, image)
+            row = evaluate(engine, image, arguments.cached)
             rows.append(row)
             print(f"{engine:<10} {image.stem:<34} pitch={row.get('pitch_f1', 0):.2f} note={row.get('note_f1', 0):.2f}", flush=True)
 
