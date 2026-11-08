@@ -10,6 +10,8 @@ Upload a sheet, check the result beside the original, fix notes and chord symbol
 
 It works well on clean, computer-rendered sheets. It's weak on real handwriting, and it hasn't been tested on real phone photos or real printed pages yet. See [the project report](docs/PROJECT_REPORT.md) for the full results, and [the knowledge guide](docs/KNOWLEDGE_GUIDE.md) for the ideas behind them.
 
+<img src="docs/screenshots/editor.png" alt="The editor with a score written from scratch: Twinkle, Twinkle, Little Star in 4/4, with chord symbols C, F and G7 above the notes and the lyrics below">
+
 ## Setup
 
 Requires Python 3.11+ and `rsvg-convert`. Install [PyTorch](https://pytorch.org/get-started/locally/) for your machine first if you want GPU training.
