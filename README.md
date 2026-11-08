@@ -1,4 +1,8 @@
-# xrnsheet
+<p align="center">
+  <img src="app/static/icon.svg" width="72" height="72" alt="">
+</p>
+
+<h1 align="center">xrnsheet</h1>
 
 Turn a photo or PDF of sheet music into notation you can edit and reprint.
 
