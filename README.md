@@ -153,6 +153,16 @@ The note reader in this repository (`--notes own`), on the same synthetic pages:
 
 It reads one melody per staff, which is why classical music scores so low, and why homr stays the default. It takes about 4 seconds a page. It reads hand-style time signatures badly, and the notes score doesn't measure that. On real handwriting it found only a small share of the notes.
 
+### The chord reader alone
+
+On chord crops in fonts it never trained on, against two general OCR engines, and then how much of
+that holds up on a real handwritten page. That page shaped the fixes, so its numbers are a
+development result, not a clean accuracy.
+
+<img src="docs/figures/chord_accuracy.png" alt="Chord accuracy on fonts held out of training: our final model 99.7 to 100% in every condition, RapidOCR 77 to 97%, Tesseract 6 to 55%">
+
+<img src="docs/figures/real_gap.png" alt="From synthetic images to a real page: our final model drops from 99.9% on held-out fonts to 77% on chords cropped by hand and 38% end to end; RapidOCR from 91% to 49% and 11%">
+
 ## Licences
 
 Check these before shipping a commercial product.
