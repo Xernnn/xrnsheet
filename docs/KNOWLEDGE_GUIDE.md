@@ -355,6 +355,22 @@ Fine-tuning changed which chords were right, but not how many. The best case, 43
 
 **Test where the edges are, at different speeds, in more than one browser.** Typing `won-der` on the last note had a bug in every browser. The hyphen moves to the next note, there isn't one, so the box closed. In Chromium the rest of the word was typed before the reply came back and vanished. In Firefox the reply came first, so the letters reached the editor as commands. The same bug looked different because of timing, and only the second form made a test fail.
 
+**Intervals have two parts.** A semitone count alone can't tell D♯ from E♭. An interval is a number of letter steps plus a number of semitones: a minor third is 2 letters and 3 semitones, so C always lands on E♭. Keys sit on a line of fifths, where each step adds a sharp, and moving a score moves it along that line. If that lands somewhere unreadable, such as 8 flats, moving 12 places gives a key that sounds the same with fewer accidentals.
+
+**Transposing instruments.** A B♭ trumpet playing a written C sounds a B♭, so its part is written a tone higher, two sharps further on. A score stores what's written, plus how far that is from what sounds, and playback adds the difference back.
+
+**Attach things to what they mean.** A staccato belongs to a note and goes with it. A dynamic belongs to a moment. Choosing wrongly means a dynamic vanishes when someone rewrites the note under it. Two-ended marks, such as slurs and hairpins, also need their ends paired up, by number, after anything that could remove one.
+
+**MIDI files.** A MIDI file stores events, like "key down" and "key up", with the wait before each one in ticks. A wait can be any size, so it's written in pieces of 7 bits, with the top bit meaning "more follows". That's why the numbers in the file aren't plain bytes.
+
+**A failed test has two possible culprits.** When a random test fails, either the code or the rule is wrong. Three of my rules were too strict. The way to decide is to state what a person would actually need, and to check whether the problem was there before the edit.
+
+**Mutation testing needs a control.** Putting a bug in and seeing a test fail only counts if that test passes without the bug. Run the unchanged code first, freeze the copy you test, and count only real test failures. A bug that nothing catches means one of two things: a missing test, or code that does nothing. The second is worth deleting.
+
+**Tests can pass for the wrong reason.** Of 51 bugs I put back, 10 got through, and 9 of those were tests that looked right. The usual cause is testing where a behaviour doesn't show: the middle of a bar when the bug is at the end, or a queue with nothing waiting in it. Overflow is the trap in numeric code. A 16-bit sample can't exceed 32,767, so checking that it doesn't proves nothing, and a too-loud value silently wraps round to a wrong one. Check the value you expect, not a limit the type already guarantees.
+
+**Test on data you didn't make.** My benchmark pieces went through a pipeline I control. Scores from the music21 corpus came from other software, and the first thing they showed was notes with no `<voice>` tag.
+
 **Keep it simple until a number says otherwise.** The server redraws the whole score on every edit, which sounds wasteful. I measured it before building anything cleverer, and Verovio redraws 192 bars in 185 ms.
 
 ## 15. Repairing output with rules
@@ -429,6 +445,13 @@ This is also the second reason for my own note reader. On melody sheets it can r
 37. Why can't the repair tell `2/2` from `4/4`?
 38. Why does a whole-bar rest get no vote on the length of a bar?
 39. How did a browser difference expose a bug that was in every browser?
+40. Why can't you transpose by adding semitones to each note?
+41. Should a dynamic belong to a note or to a moment? What goes wrong if you choose badly?
+42. A random test failed, and the editor was right. How did you tell?
+43. One bug you put back went unnoticed. What are the two possible reasons, and which was it?
+44. Why does a mutation test need a control run?
+45. Why test on scores from another source when you already have a benchmark?
+46. Your check that audio never clips could not fail. Why not, and what did you test instead?
 
 My short answer to question 11: on print it wasn't needed, and the honest conclusion is to use the free reader there. I still learned the most from building it, and the only place it may have an edge is handwriting, which is where I have the least evidence.
 
@@ -460,6 +483,8 @@ My short answer to question 11: on print it wasn't needed, and the honest conclu
 | McNemar's test | A paired test using only disagreements |
 | Morphological opening | Erasing, then regrowing, shapes to keep only those of a chosen form |
 | MusicXML | The shared file format for notation |
+| Interval | A distance between notes, as letter steps plus semitones |
+| Line of fifths | Keys in order, where each step adds a sharp or removes a flat |
 | Mutation testing | Breaking code on purpose to check that tests notice |
 | Negative sample | An example of what the target is not |
 | OMR | Optical music recognition |

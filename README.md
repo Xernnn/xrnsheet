@@ -43,7 +43,7 @@ To read notes with the model in this repository and not homr, which only works f
 .venv/bin/python -m app.server --notes own
 ```
 
-To write music with no photo behind it, choose "Or start a blank score" on the start page and pick a key, time, staff and number of bars.
+To write music with no photo behind it, choose "Or start a blank score" on the start page and pick a key, time, instrument and number of bars. You can also open a `.musicxml`, `.xml` or `.mxl` file from another program the same way as a photo, and it goes straight to the editor.
 
 The keys follow MuseScore. Press `N` to start entering notes, pick a length, and type the letters or click the staff. A new bar appears when you write past the last one.
 
@@ -56,25 +56,40 @@ The keys follow MuseScore. Press `N` to start entering notes, pick a length, and
 | `.` | Dotted |
 | `0` | Rest |
 | `T` | Tie to the next note |
-| Ctrl+`3` | Make a triplet from the chosen length, or take one away |
+| Ctrl+`3` | Make a triplet from the chosen length, or take one away. Ctrl+`5`, `6` and `7` make other tuplets |
 | `#` `-` `=` | Sharp, flat, natural. `b` also means flat when you aren't entering notes |
 | ↑ ↓ | Move a note. With Ctrl, move an octave |
 | ← → | Previous or next note |
 | Shift+click, Shift+← → | Select a stretch of notes |
 | Ctrl+A | Select the whole staff |
 | Ctrl+C, Ctrl+X, Ctrl+V | Copy, cut, paste, also between scores |
-| Ctrl+L | Type lyrics. Space moves on, `-` joins syllables, Enter finishes. On the last note both stay in the word |
+| Ctrl+L | Type lyrics. Space moves on, `-` joins syllables, ↓ ↑ change verse, Enter finishes. On the last note both stay in the word |
+| `S` | Slur a stretch, or this note to the next |
+| `<` `>` | Crescendo, diminuendo over a stretch |
+| Shift+`S` `V` `N` `O` | Staccato, accent, tenuto, marcato |
+| `/` | Add a grace note before this note |
+| `R` | Repeat this note or stretch |
+| `J` | Swap for the same note under another name, as C♯ for D♭ |
+| `X` | Flip the stem |
+| Ctrl+Alt+`1` to `4` | Write in that voice, or move the selection to it |
+| Enter | Start a new line at this bar |
 | Space | Play or stop, from the selected note |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | Delete, Ctrl+Delete | Turn into a rest, or remove the beat and pull later notes in |
 | Esc | Stop entering notes, or close the chord editor |
 | Click the staff | While entering notes, place a note there. Shift+click adds it to a chord |
+| Drag a selected note | Move it up or down |
+| Click a dynamic, tempo, text, slur or hairpin | Change or remove it |
 
 A longer note overwrites what comes after it, and a shorter one leaves a rest, so every bar stays full. Bars that don't add up to the time signature are listed above the score, which is usually how a misread rhythm shows itself. Click one to go there, then fix it with "Remove beat" or "Insert beat". The toolbar also adds and deletes bars, and changes the key or time from the selected bar. A new time signature doesn't move notes between bars: the ones that no longer fit are listed for you to fix.
 
 A note too long for its bar carries into the next one, tied. A selected stretch moves, deletes or copies as one undo step, within one voice.
 
-Play sounds the notes and the chord symbols, starting from the selected note. It follows repeats and first and second endings, but not D.C. or D.S.
+Play sounds the notes and the chord symbols, starting from the selected note. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, and articulations and ornaments. The menu beside Play slows it down or speeds it up.
+
+The row of menus above the score adds marks, dynamics, tempos, text, rehearsal letters, jumps and clefs. "Transpose…" moves the selection, or the whole score if nothing is selected, by an interval, for a B♭, E♭ or F instrument, or to a key, and the chord symbols move with it. "Instruments…" adds a part, and a transposing instrument gets its own key. "Layout…" sets how many bars go on a line, and "Time…" also makes the first bar a pickup. A part can be printed alone, and the MIDI link saves a file for other music programs. A MIDI keyboard works while entering notes, and keys pressed together make a chord.
+
+A staff can hold four voices. Choose one with V1 to V4 or Ctrl+Alt and a number, and the arrows stay in that voice. If you write a rest in an extra voice, it stays there so you can carry on, and Delete removes it.
 
 To write a triplet, pick the length it should fill, press Ctrl+`3`, and type its three notes. A quarter gives eighth-note triplets. A triplet can't be cut in half, so selecting or copying any note of one takes the whole triplet.
 
@@ -190,7 +205,7 @@ Check these before shipping a commercial product.
 |---|---|---|
 | homr, Audiveris | AGPL-3.0 | Running them as a closed online service may require sharing source code. `--notes own` runs with no homr, for melody sheets only |
 | Verovio | LGPL-3.0 | |
-| music21 | BSD-3-Clause | The benchmark pieces come from its corpus |
+| music21 | BSD-3-Clause | The benchmark pieces come from its corpus, and two tests open a chorale from it. Corpus files aren't copied into this repository |
 | RapidOCR | Apache-2.0 | |
 | Fonts in `data/fonts/` | SIL Open Font License | Used to generate training images |
 | JAZZMUS dataset | CC BY-NC 4.0 | Not used here. It's non-commercial, and access must be requested |

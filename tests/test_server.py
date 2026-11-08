@@ -237,7 +237,7 @@ def test_a_blank_score_is_listed_as_blank(client):
 def test_impossible_blank_scores_are_refused(client):
     assert client.post("/api/scores/blank", json={"measures": 0}).status_code in (400, 422)
     assert client.post("/api/scores/blank", json={"beat_type": 5}).status_code in (400, 422)
-    assert client.post("/api/scores/blank", json={"clef": "alto-sax"}).status_code in (400, 422)
+    assert client.post("/api/scores/blank", json={"clef": "kazoo"}).status_code in (400, 422)
 
 
 def test_a_blank_score_cannot_be_marked_checked(client):
@@ -476,3 +476,123 @@ def test_repeats_and_endings_change_how_a_score_plays(client):
     assert client.post(f"{url}/bars", json={"action": "ending", "note": bars[2], "number": 2}).status_code == 200
     assert client.get(f"{url}/playback").json()["total"] == 16
     assert written
+
+
+NEW_EDITS = [
+    ("marks", {"action": "toggle", "name": "staccato", "notes": ["note0"]}),
+    ("marks", {"action": "toggle", "name": "fermata", "notes": ["note0", "note1"]}),
+    ("marks", {"action": "slur", "notes": ["note0", "note2"]}),
+    ("marks", {"action": "hairpin", "name": "crescendo", "notes": ["note0", "note2"]}),
+    ("marks", {"action": "dynamic", "name": "pp", "notes": ["note1"]}),
+    ("marks", {"action": "tempo", "text": "Allegro 132", "notes": ["note0"]}),
+    ("marks", {"action": "text", "name": "staff", "text": "solo", "notes": ["note0"]}),
+    ("marks", {"action": "rehearsal", "notes": ["note0"]}),
+    ("marks", {"action": "swing", "on": True, "notes": ["note0"]}),
+    ("marks", {"action": "jump", "name": "dc", "notes": ["note3"]}),
+    ("marks", {"action": "grace", "notes": ["note1"]}),
+    ("transpose", {"interval": "M2", "direction": "up"}),
+    ("transpose", {"interval": "m3", "direction": "down", "first": "note1", "last": "note2"}),
+    ("transpose", {"key": 3}),
+    ("voice", {"notes": ["note1"], "voice": 2}),
+    ("parts", {"action": "add", "name": "trumpet"}),
+    ("bars", {"action": "clef", "clef": "bass", "note": "note0"}),
+    ("bars", {"action": "barsPerLine", "count": 4, "note": "note0"}),
+]
+
+
+@pytest.mark.parametrize(("route", "body"), NEW_EDITS, ids=lambda item: item if isinstance(item, str) else f"{item.get('action', '')}{item.get('name', '')}")
+def test_new_edits_undo_and_redo_exactly(client, ready_score, route, body):
+    url = f"/api/scores/{ready_score}"
+    before = client.get(f"{url}/score.musicxml").text
+    response = client.post(f"{url}/{route}", json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["canUndo"] is True
+    after = client.get(f"{url}/score.musicxml").text
+    assert after != before
+    client.post(f"{url}/undo")
+    assert client.get(f"{url}/score.musicxml").text == before
+    client.post(f"{url}/redo")
+    assert client.get(f"{url}/score.musicxml").text == after
+
+
+REFUSED_EDITS = [
+    ("marks", {"action": "explode", "notes": ["note0"]}),
+    ("marks", {"action": "toggle", "name": "kazoo", "notes": ["note0"]}),
+    ("marks", {"action": "toggle", "name": "staccato", "notes": []}),
+    ("marks", {"action": "toggle", "name": "staccato", "notes": ["note99"]}),
+    ("marks", {"action": "dynamic", "name": "loud", "notes": ["note0"]}),
+    ("marks", {"action": "tempo", "text": "9000", "notes": ["note0"]}),
+    ("marks", {"action": "jump", "name": "elsewhere", "notes": ["note0"]}),
+    ("marks", {"action": "remove", "id": "mark99"}),
+    ("marks", {"action": "label", "id": "mark99", "text": "x"}),
+    ("transpose", {"interval": "P9"}),
+    ("transpose", {"interval": "M2", "direction": "sideways"}),
+    ("transpose", {"key": 99}),
+    ("voice", {"notes": ["note0"], "voice": 9}),
+    ("voice", {"notes": ["note0"], "voice": 1}),
+    ("parts", {"action": "add", "name": "kazoo"}),
+    ("parts", {"action": "remove", "note": "note0"}),
+    ("parts", {"action": "juggle"}),
+    ("bars", {"action": "clef", "clef": "kazoo", "note": "note0"}),
+    ("bars", {"action": "barsPerLine", "count": 99, "note": "note0"}),
+    ("bars", {"action": "pickup", "count": 2}),
+    ("bars", {"action": "pickup", "count": 16}),
+]
+
+
+@pytest.mark.parametrize(("route", "body"), REFUSED_EDITS, ids=lambda item: item if isinstance(item, str) else "-".join(str(value) for value in item.values())[:40])
+def test_refused_edits_explain_themselves_and_save_nothing(client, ready_score, route, body):
+    url = f"/api/scores/{ready_score}"
+    before = client.get(f"{url}/score.musicxml").text
+    response = client.post(f"{url}/{route}", json=body)
+    assert response.status_code == 422, response.text
+    assert isinstance(response.json()["detail"], str) and response.json()["detail"]
+    assert client.get(url).json()["canUndo"] is False
+    assert client.get(f"{url}/score.musicxml").text == before
+
+
+def test_a_musicxml_file_opens_ready_to_edit(client, ready_score):
+    text = client.get(f"/api/scores/{ready_score}/score.musicxml").content
+    opened = client.post("/api/scores", files={"file": ("tune.musicxml", io.BytesIO(text))}).json()
+    score = client.get(f"/api/scores/{opened['id']}").json()
+    assert score["status"] == "ready"
+    assert score["pages"] and "Dm7" in score["chords"][0]["text"]
+
+
+@pytest.mark.parametrize(("name", "data"), [("broken.musicxml", b"<nonsense"), ("broken.mxl", b"not a zip"), ("page.xml", b"<html/>")])
+def test_a_broken_score_file_is_refused_at_upload(client, name, data):
+    response = client.post("/api/scores", files={"file": (name, io.BytesIO(data))})
+    assert response.status_code == 415
+    assert "detail" in response.json()
+
+
+def test_a_part_prints_alone_and_a_missing_part_is_refused(client, ready_score):
+    url = f"/api/scores/{ready_score}"
+    client.post(f"{url}/parts", json={"action": "add", "name": "trumpet"})
+    assert client.get(f"{url}/score.pdf?part=1").content.startswith(b"%PDF")
+    assert client.get(f"{url}/score.pdf?part=7").status_code in (404, 422)
+
+
+def test_midi_downloads_with_its_own_type(client, ready_score):
+    response = client.get(f"/api/scores/{ready_score}/score.mid")
+    assert response.content.startswith(b"MThd")
+    assert response.headers["content-type"] == "audio/midi"
+
+
+def test_marks_carry_through_copy_and_paste_over_the_server(client, ready_score):
+    url = f"/api/scores/{ready_score}"
+    client.post(f"{url}/marks", json={"action": "toggle", "name": "accent", "notes": ["note0"]})
+    copied = client.post(f"{url}/copy", json={"first": "note0", "last": "note0"}).json()
+    assert client.post(f"{url}/paste", json={"at": "note3", "events": copied["events"]}).status_code == 200
+    assert client.get(f"{url}/score.musicxml").text.count("<accent") == 2
+
+
+def test_clickable_marks_are_listed_with_the_score(client, ready_score):
+    url = f"/api/scores/{ready_score}"
+    client.post(f"{url}/marks", json={"action": "dynamic", "name": "pp", "notes": ["note1"]})
+    listed = client.get(url).json()["marks"]
+    assert [(item["kind"], item["text"]) for item in listed] == [("dynamic", "pp")]
+    done = client.post(f"{url}/marks", json={"action": "label", "id": listed[0]["id"], "text": "ff"}).json()
+    assert done["marks"][0]["text"] == "ff"
+    gone = client.post(f"{url}/marks", json={"action": "remove", "id": listed[0]["id"]}).json()
+    assert gone["marks"] == []

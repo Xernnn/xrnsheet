@@ -9,16 +9,40 @@ const LENGTHS = [
   { key: "1", type: "64th", label: "64th note" },
 ];
 const AFTER = "after:"; // A cursor past the last note of the score.
-const GROUP_ACTIONS = new Set(["up", "down", "octaveUp", "octaveDown", "sharp", "flat", "natural", "delete", "clear"]);
+const GROUP_ACTIONS = new Set(["up", "down", "octaveUp", "octaveDown", "sharp", "flat", "natural", "delete", "clear", "respell", "flip"]);
 const REACH_IN_STEPS = 10; // How far off a staff a click still counts as on it.
 const EVENTS = "g.note, g.rest, g.mRest";
-const editor = { on: false, type: "quarter", dots: 0, cursor: null, last: null, trail: [], future: [] };
+const VOICES = 4;
+const MOST_VERSES = 6;
+const CHORD_WINDOW_MS = 40; // Keys of a MIDI keyboard pressed this close together are one chord.
+const DRAG_START_PX = 4;
+const CURVE_REACH_PX = 6; // A slur is hair-thin, so a click this close to it counts.
+const CURVE_SAMPLE_PX = 4;
+const AUDIO_RATE = 44100;
+const AUDIO_TAIL_SECONDS = 0.5;
+// General MIDI groups its sounds in eights, so the group says what kind of instrument this is.
+// They're rough stand-ins to tell parts apart, and the levels even out how loud each wave sounds.
+const FAMILY_SOUNDS = {
+  5: { wave: "sawtooth", level: 0.7 }, // Strings.
+  6: { wave: "sawtooth", level: 0.7 }, // Ensembles and voices.
+  7: { wave: "sawtooth", level: 0.7 }, // Brass.
+  8: { wave: "square", level: 0.5 }, // Reeds.
+  9: { wave: "sine", level: 1.2 }, // Flutes.
+};
+const USUAL_SOUND = { wave: "triangle", level: 1 };
+const EXPRESSIONS = { staff: "Text, e.g. solo", expression: "Expression, e.g. dolce" };
+const editor = { on: false, type: "quarter", dots: 0, voice: 1, cursor: null, last: null, trail: [], future: [] };
 let player = null;
 let range = null; // A selected stretch: { first, last, ids }.
 let clipboard = readClipboard();
 let lyricNote = null;
 let lyricSoFar = "";
+let lyricVerse = 1;
 let hint = "";
+let dragged = false;
+let drag = null;
+let lastMidiKey = 0;
+let midiAsked = false;
 
 function noteIcon(type) {
   const open = type === "whole" || type === "half";
@@ -53,6 +77,25 @@ function allEvents() {
   return [...document.querySelectorAll(`#pages ${EVENTS.replaceAll(", ", ", #pages ")}`)].filter(element => stepOf(element) === element);
 }
 
+function layerNumber(element) {
+  const layer = element?.closest("g.layer");
+  return layer ? [...layer.parentElement.children].filter(child => child.classList.contains("layer")).indexOf(layer) : 0;
+}
+
+// The arrows follow one voice through a bar. A bar without that voice is walked through as it is.
+function eventsInVoice(staff, layer) {
+  const onStaff = allEvents().filter(element => staff < 0 || staffNumber(element) === staff);
+  const layersIn = new Map();
+  for (const element of onStaff) {
+    const bar = element.closest("g.measure");
+    layersIn.set(bar, (layersIn.get(bar) ?? new Set()).add(layerNumber(element)));
+  }
+  return onStaff.filter(element => {
+    const here = layersIn.get(element.closest("g.measure"));
+    return !here.has(layer) || layerNumber(element) === layer;
+  });
+}
+
 function staffNumber(element) {
   const staff = element?.closest("g.staff");
   return staff ? [...staff.parentElement.children].filter(child => child.classList.contains("staff")).indexOf(staff) : -1;
@@ -77,6 +120,11 @@ function updateTools() {
     button.setAttribute("aria-pressed", String(editor.on && button.dataset.type === editor.type));
   });
   $("dotButton").setAttribute("aria-pressed", String(editor.on && editor.dots > 0));
+  document.querySelectorAll("#voices button").forEach(button => {
+    button.setAttribute("aria-pressed", String(editor.on && Number(button.dataset.voice) === editor.voice));
+    button.disabled = !editor.on && !target;
+  });
+  for (const id of ["markChoice", "dynamicChoice", "tempoChoice", "textChoice", "jumpChoice", "clefChoice"]) $(id).disabled = !target;
   $("inputToggle").setAttribute("aria-pressed", String(editor.on));
   $("inputToggle").textContent = editor.on ? "Stop entering" : "Enter notes";
   $("pitches").hidden = !editor.on;
@@ -156,7 +204,9 @@ function setInput(on) {
   editor.on = on;
   document.body.classList.toggle("inputting", on);
   if (on) {
+    setUpMidi();
     editor.cursor = selected ?? allEvents()[0]?.id ?? null;
+    editor.voice = editor.cursor ? layerNumber(document.getElementById(editor.cursor)) + 1 : 1;
     editor.last = null;
     editor.trail = [];
     editor.future = [];
@@ -179,7 +229,7 @@ function writeAt(step) {
   return enqueue(async () => {
     const at = editor.cursor;
     if (!at) return;
-    await send(`notes/${at}`, { action: "write", type: editor.type, dots: editor.dots, step });
+    await send(`notes/${at}`, { action: "write", type: editor.type, dots: editor.dots, step, voice: editor.voice });
   });
 }
 
@@ -221,7 +271,7 @@ function drawGhost(x, y) {
 function placeNote(spot, stack) {
   return enqueue(async () => {
     if (stack && spot.isNote) await send(`notes/${spot.id}`, { action: "stack", line: spot.line });
-    else await send(`notes/${spot.id}`, { action: "write", type: editor.type, dots: editor.dots, line: spot.line });
+    else await send(`notes/${spot.id}`, { action: "write", type: editor.type, dots: editor.dots, line: spot.line, voice: editor.voice });
   });
 }
 
@@ -248,13 +298,13 @@ function chooseDot() {
   });
 }
 
-function toggleTriplet() {
+function toggleTuplet(actual = 3) {
   return enqueue(async () => {
     if (editor.on && editor.cursor) {
       editor.last = null;
-      await send(`notes/${editor.cursor}`, { action: "tuplet", type: editor.type, dots: editor.dots });
+      await send(`notes/${editor.cursor}`, { action: "tuplet", type: editor.type, dots: editor.dots, actual });
     } else if (!editor.on && selected) {
-      await send(`notes/${selected}`, { action: "tupletHere" });
+      await send(`notes/${selected}`, { action: "tupletHere", actual });
     }
   });
 }
@@ -264,7 +314,7 @@ function moveAlong(delta, extend = false) {
     const position = editor.on ? editor.cursor : range?.last ?? selected;
     const current = stepOf(document.getElementById(plainId(position)));
     const staff = staffNumber(current);
-    const list = allEvents().filter(element => staff < 0 || staffNumber(element) === staff);
+    const list = eventsInVoice(staff, layerNumber(current));
     // A cursor past the last note is one place further on than that note.
     const index = list.indexOf(current) + (position?.startsWith(AFTER) ? 1 : 0) + delta;
     if (editor.on && index === list.length && current) { moveCursor(AFTER + list.at(-1).id); return; }
@@ -372,12 +422,28 @@ function openLyric(id) {
   input.focus();
   // Whoever is typing quickly has already started on this syllable, so leave it alone.
   if (input.value) return;
-  input.value = element.querySelector(".syl")?.textContent.trim() ?? "";
+  input.value = element.querySelectorAll(".verse")[lyricVerse - 1]?.querySelector(".syl")?.textContent.trim() ?? "";
   input.select();
 }
 
+function changeVerse(by) {
+  return enqueue(async () => {
+    if (!lyricNote) return;
+    const input = $("lyricInput");
+    await send(`lyrics/${lyricNote}`, { text: input.value, joined: null, verse: lyricVerse });
+    lyricVerse = Math.max(1, Math.min(MOST_VERSES, lyricVerse + by));
+    input.value = "";
+    hint = `Verse ${lyricVerse}`;
+    openLyric(lyricNote);
+    updateTools();
+  });
+}
+
 function startLyrics() {
-  return enqueue(async () => openLyric(actionTarget()));
+  return enqueue(async () => {
+    lyricVerse = 1;
+    openLyric(actionTarget());
+  });
 }
 
 function closeLyric() {
@@ -397,11 +463,199 @@ function saveLyric(joined, moveOn, separator = "") {
   return enqueue(async () => {
     if (!lyricNote) return;
     const word = (lyricSoFar + text).replace(/[ -]+$/, "");
-    const data = await send(`lyrics/${lyricNote}`, { text: word, joined });
+    const data = await send(`lyrics/${lyricNote}`, { text: word, joined, verse: lyricVerse });
     if (moveOn && data.next) openLyric(data.next);
     else if (moveOn) lyricSoFar = input.placeholder = word + separator;
     else closeLyric();
   });
+}
+
+function markTarget() {
+  if (range) return range.ids;
+  const id = actionTarget();
+  return id ? [id] : [];
+}
+
+function markAction(action, extra = {}) {
+  return enqueue(async () => {
+    const notes = markTarget();
+    if (!notes.length) { message("Choose a note first."); return; }
+    return send("marks", { action, notes, ...extra });
+  });
+}
+
+function addGrace() {
+  return enqueue(async () => {
+    const notes = markTarget();
+    if (!notes.length) { message("Choose a note first."); return; }
+    const data = await send("marks", { action: "grace", notes });
+    if (!editor.on && data.written) select(data.written);
+  });
+}
+
+function chooseVoice(number) {
+  return enqueue(async () => {
+    if (editor.on) {
+      editor.voice = number;
+      updateTools();
+    } else if (markTarget().length) {
+      await send("voice", { notes: markTarget(), voice: number });
+    }
+  });
+}
+
+function repeatSelection() {
+  return enqueue(async () => {
+    const first = range?.first ?? actionTarget();
+    if (!first) return;
+    const data = await askServer("copy", { first, last: range?.last ?? first });
+    const at = editor.on ? editor.cursor : data.next;
+    range = null;
+    await send("paste", { at, events: data.events });
+  });
+}
+
+function transposeBy(choice) {
+  return enqueue(async () => {
+    const [interval, direction] = choice.split(":");
+    const first = range?.first ?? (selected && !editor.on ? selected : null);
+    const body = interval === "key" ? { key: Number(direction), direction: "closest" } : { interval, direction, first, last: range?.last ?? first };
+    await send("transpose", body);
+  });
+}
+
+// A small box for typing, shared with chords, so a mark's text is changed where it's drawn.
+function askForText(placeholder, newMark, value = "") {
+  return enqueue(async () => {
+    const id = actionTarget();
+    const note = id && document.getElementById(id);
+    if (!note) { message("Choose a note first."); return; }
+    openEditor(headBox(note), null, value);
+    editing = { newMark: { ...newMark, notes: [id] } };
+    $("chordInput").placeholder = placeholder;
+  });
+}
+
+// A slur or hairpin carried over a line break is drawn in two pieces, and the second has only a class.
+function markIdOf(element) {
+  return element.dataset.mark || element.id || [...element.classList].find(name => name.startsWith("id-"))?.slice(3);
+}
+
+function openMark(element) {
+  const mark = score.marks.find(item => item.id === markIdOf(element));
+  if (!mark) return;
+  const box = element.getBoundingClientRect();
+  openEditor(box, null, mark.text);
+  editing = { mark: mark.id };
+  $("chordDelete").hidden = false;
+  $("chordInput").hidden = $("chordSave").hidden = !mark.text || mark.kind === "jump" || mark.kind === "repeat-sign";
+  $("chordInput").placeholder = "";
+  element.classList.add("selected");
+}
+
+// Verovio makes up its own ids for these, so they're matched up by order within each bar. If a
+// bar doesn't draw the number expected, it's safer to leave its marks unclickable than to guess.
+function tagMarks() {
+  const groups = new Map();
+  for (const mark of score.marks ?? []) {
+    if (mark.drawn === "slur" || mark.drawn === "hairpin") continue;
+    const key = `${mark.bar}/${mark.drawn}`;
+    groups.set(key, [...(groups.get(key) ?? []), mark]);
+  }
+  for (const [key, marks] of groups) {
+    const [bar, drawn] = key.split("/");
+    const shown = document.getElementById(bar)?.querySelectorAll(`g.${drawn}`) ?? [];
+    if (shown.length !== marks.length) continue;
+    shown.forEach((element, index) => { element.dataset.mark = marks[index].id; });
+  }
+}
+
+// A slur's box covers the notes under it, so this measures to the curve itself. It's also why a
+// click is never left to the browser, which only finds a curve this thin some of the time.
+function slurNear(x, y) {
+  const reach = CURVE_REACH_PX;
+  for (const slur of document.querySelectorAll("#pages g.slur")) {
+    const box = slur.getBoundingClientRect();
+    if (x < box.left - reach || x > box.right + reach || y < box.top - reach || y > box.bottom + reach) continue;
+    for (const path of slur.querySelectorAll("path")) {
+      const matrix = path.getScreenCTM();
+      const length = path.getTotalLength();
+      const samples = Math.ceil((box.width + box.height) / CURVE_SAMPLE_PX) * 2;
+      for (let step = 0; step <= samples; step++) {
+        const { x: pathX, y: pathY } = path.getPointAtLength(length * step / samples);
+        const point = new DOMPoint(pathX, pathY).matrixTransform(matrix);
+        if (Math.hypot(point.x - x, point.y - y) <= reach) return slur;
+      }
+    }
+  }
+  return null;
+}
+
+function markAt(event) {
+  if (event.target.closest("g.note, g.rest, g.mRest")) return null;
+  return event.target.closest("g[data-mark], g.slur, g.hairpin")
+    ?? slurNear(event.clientX, event.clientY)
+    ?? nearest("#pages g[data-mark], #pages g.hairpin", event.clientX, event.clientY, 4);
+}
+
+function drawParts() {
+  const names = score.parts ?? [];
+  const choice = $("partPdf");
+  choice.hidden = names.length < 2;
+  if (choice.hidden) return;
+  choice.replaceChildren(new Option("Print a part…", ""), ...names.map((name, index) => new Option(name || `Instrument ${index + 1}`, index)));
+}
+
+function startDrag(event) {
+  if (editor.on || event.shiftKey) return;
+  const note = event.target.closest("g.note");
+  if (!note || note.id !== selected) return;
+  const staff = note.closest("g.staff");
+  drag = { id: note.id, y: event.clientY, step: staffLines(staff).step, note, steps: 0 };
+}
+
+function moveDrag(event) {
+  if (!drag) return;
+  const distance = drag.y - event.clientY;
+  if (!drag.moved && Math.abs(distance) < DRAG_START_PX) return;
+  drag.moved = true;
+  drag.steps = Math.round(distance / drag.step);
+  drag.note.style.transform = `translateY(${-drag.steps * drag.step}px)`;
+}
+
+function endDrag() {
+  if (!drag) return;
+  const { id, steps, moved, note } = drag;
+  drag = null;
+  note.style.transform = "";
+  if (!moved) return;
+  dragged = true;
+  if (steps) enqueue(() => send(`notes/${id}`, { action: "moveBy", steps }));
+}
+
+// Keys pressed together stack into a chord, the way they would on paper.
+function midiKey(number) {
+  return enqueue(async () => {
+    if (!editor.on || !editor.cursor) return;
+    const now = performance.now();
+    const together = now - lastMidiKey < CHORD_WINDOW_MS && editor.last;
+    lastMidiKey = now;
+    if (together) await send(`notes/${editor.last}`, { action: "stack", midi: number });
+    else await send(`notes/${editor.cursor}`, { action: "write", type: editor.type, dots: editor.dots, midi: number, voice: editor.voice });
+  });
+}
+
+// Asked for only when someone starts writing, as a browser may show a permission prompt for it.
+function setUpMidi() {
+  if (midiAsked) return;
+  midiAsked = true;
+  navigator.requestMIDIAccess?.().then(access => {
+    const listen = input => {
+      input.onmidimessage = ({ data }) => { if ((data[0] & 0xf0) === 0x90 && data[2] > 0) midiKey(data[1]); };
+    };
+    access.inputs.forEach(listen);
+    access.onstatechange = ({ port }) => { if (port.type === "input" && port.state === "connected") listen(port); };
+  }).catch(() => {});
 }
 
 // Undo and redo also put the cursor back, so entering notes can carry straight on.
@@ -442,17 +696,77 @@ function tone(audio, midi, at, length, volume, wave) {
   oscillator.stop(end + 0.02);
 }
 
+// Turns places in quarter notes into seconds, which takes adding up every tempo before them.
+function clockFor(data, speed) {
+  const changes = data.tempos?.length ? data.tempos : [{ start: 0, bpm: data.tempo }];
+  let seconds = 0;
+  const marks = changes.map((change, index) => {
+    if (index) seconds += (change.start - changes[index - 1].start) * 60 / (changes[index - 1].bpm * speed);
+    return { ...change, seconds };
+  });
+  return place => {
+    const mark = marks.findLast(item => item.start <= place) ?? marks[0];
+    return mark.seconds + (place - mark.start) * 60 / (mark.bpm * speed);
+  };
+}
+
+function soundOf(data, note) {
+  const program = data.programs?.[note.part] ?? 1;
+  return FAMILY_SOUNDS[Math.floor((program - 1) / 8)] ?? USUAL_SOUND;
+}
+
 // Works with speakers or with an offline context, which is how the tests check what would be heard.
-function schedule(audio, data, from, zero) {
-  const beat = 60 / data.tempo;
+function schedule(audio, data, from, zero, speed = 1) {
+  const clock = clockFor(data, speed);
+  const at = place => zero + clock(place) - clock(from);
   const notes = data.notes.filter(note => note.start >= from);
-  for (const note of notes) tone(audio, note.midi, zero + (note.start - from) * beat, note.length * beat, 0.16, "triangle");
+  for (const note of notes) {
+    const { wave, level } = soundOf(data, note);
+    tone(audio, note.midi, at(note.start), at(note.start + note.length) - at(note.start), 0.4 * note.volume ** 2 * level, wave);
+  }
   const chords = data.chords.filter(chord => chord.start + chord.length > from);
   for (const chord of chords) {
     const begins = Math.max(chord.start, from);
-    for (const midi of chord.midi) tone(audio, midi, zero + (begins - from) * beat, (chord.start + chord.length - begins) * beat, 0.045, "sine");
+    for (const midi of chord.midi) tone(audio, midi, at(begins), at(chord.start + chord.length) - at(begins), 0.045, "sine");
   }
-  return { notes, chords, beat };
+  return { notes, chords, at };
+}
+
+// A plain 16-bit WAV, which any program can open.
+function wavFile(samples, rate) {
+  const peak = Math.max(1, samples.reduce((top, sample) => Math.max(top, Math.abs(sample)), 0));
+  const file = new DataView(new ArrayBuffer(44 + samples.length * 2));
+  const write = (at, word) => [...word].forEach((letter, index) => file.setUint8(at + index, letter.charCodeAt(0)));
+  write(0, "RIFF");
+  file.setUint32(4, 36 + samples.length * 2, true);
+  write(8, "WAVEfmt ");
+  file.setUint32(16, 16, true);
+  file.setUint16(20, 1, true); // Plain samples, not compressed.
+  file.setUint16(22, 1, true); // One channel.
+  file.setUint32(24, rate, true);
+  file.setUint32(28, rate * 2, true);
+  file.setUint16(32, 2, true);
+  file.setUint16(34, 16, true);
+  write(36, "data");
+  file.setUint32(40, samples.length * 2, true);
+  samples.forEach((sample, index) => file.setInt16(44 + index * 2, sample / peak * 0x7fff, true));
+  return new Blob([file], { type: "audio/wav" });
+}
+
+// Made by the same code as Play, so the file sounds just as the score does, only faster than real time.
+function saveAudio() {
+  return enqueue(async () => {
+    const data = await (await fetch(`/api/scores/${scoreId}/playback`)).json();
+    const seconds = clockFor(data, 1)(data.total) + AUDIO_TAIL_SECONDS;
+    const audio = new OfflineAudioContext(1, Math.ceil(seconds * AUDIO_RATE), AUDIO_RATE);
+    schedule(audio, data, 0, 0);
+    const rendered = await audio.startRendering();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(wavFile(rendered.getChannelData(0), AUDIO_RATE));
+    link.download = "score.wav";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  });
 }
 
 function clearPlaying() {
@@ -475,14 +789,15 @@ async function startPlaying() {
   const audio = new (window.AudioContext || window.webkitAudioContext)();
   const chosen = data.notes.find(note => note.id === plainId(editor.on ? editor.cursor : selected));
   const from = chosen ? chosen.start : 0;
-  const { notes, chords, beat } = schedule(audio, data, from, audio.currentTime + 0.1);
+  const { notes, chords, at } = schedule(audio, data, from, audio.currentTime + 0.1, Number($("speed").value));
+  const started = audio.currentTime + 0.1;
   const timers = notes.map(note => setTimeout(() => {
     clearPlaying();
     const element = document.getElementById(note.id);
     element?.classList.add("playing");
     element?.scrollIntoView({ block: "nearest" });
-  }, 100 + (note.start - from) * beat * 1000));
-  timers.push(setTimeout(stopPlaying, 300 + (data.total - from) * beat * 1000));
+  }, (at(note.start) - started + 0.1) * 1000));
+  timers.push(setTimeout(stopPlaying, (at(data.total) - started + 0.3) * 1000));
   player = { audio, timers };
   $("play").textContent = "Stop";
   $("play").dataset.notes = notes.length;
@@ -515,8 +830,52 @@ function setUpToolbar() {
   $("keyChoice").append(...options);
   $("blankKey").append(...options.map(option => new Option(option.text, option.value)));
   $("blankKey").value = "0";
+  $("voices").replaceChildren(...Array.from({ length: VOICES }, (_, index) => {
+    const button = document.createElement("button");
+    button.dataset.voice = index + 1;
+    button.textContent = `V${index + 1}`;
+    button.title = `Write in voice ${index + 1}, or move the selection to it (Ctrl+Alt+${index + 1})`;
+    button.addEventListener("click", () => chooseVoice(index + 1));
+    return button;
+  }));
+  $("transposeKeys").append(...names.map((name, index) => new Option(`To ${name} major`, `key:${index - 7}`)));
+  const whenChosen = (id, act) => $(id).addEventListener("change", event => {
+    if (event.target.value) act(event.target.value);
+    event.target.value = "";
+    event.target.blur();
+  });
+  whenChosen("markChoice", name => markAction("toggle", { name }));
+  whenChosen("dynamicChoice", name => markAction("dynamic", { name }));
+  whenChosen("tempoChoice", choice => {
+    if (choice === "type") askForText("Tempo, e.g. Allegro 132", { action: "tempo" });
+    else if (choice === "swing" || choice === "straight") markAction("swing", { on: choice === "swing" });
+    else markAction("tempo", { text: choice });
+  });
+  whenChosen("textChoice", choice => {
+    if (choice === "rehearsal") markAction("rehearsal");
+    else askForText(EXPRESSIONS[choice], { action: "text", name: choice });
+  });
+  whenChosen("jumpChoice", name => markAction("jump", { name }));
+  whenChosen("clefChoice", clef => barAction("clef", { clef }));
+  whenChosen("transposeChoice", transposeBy);
+  whenChosen("partChoice", name => enqueue(() => send("parts", name === "remove" ? { action: "remove", note: actionTarget() } : { action: "add", name })));
+  whenChosen("layoutChoice", choice => (choice === "break" ? barAction("break") : barAction("barsPerLine", { count: Number(choice) })));
+  $("partPdf").addEventListener("change", event => {
+    if (event.target.value !== "") window.open(`/api/scores/${scoreId}/score.pdf?part=${event.target.value}`);
+    event.target.value = "";
+  });
+  $("slurButton").addEventListener("click", () => markAction("slur"));
+  $("crescButton").addEventListener("click", () => markAction("hairpin", { name: "crescendo" }));
+  $("dimButton").addEventListener("click", () => markAction("hairpin", { name: "diminuendo" }));
+  $("graceButton").addEventListener("click", addGrace);
+  const instruments = [...$("partChoice").querySelectorAll("optgroup option")];
+  $("blankClef").append(...instruments.filter(option => option.value !== "piano").map(option => new Option(option.text, option.value)));
+  $("pages").addEventListener("pointerdown", startDrag);
+  window.addEventListener("pointermove", moveDrag);
+  window.addEventListener("pointerup", endDrag);
+  $("audio").addEventListener("click", saveAudio);
   $("dotButton").addEventListener("click", chooseDot);
-  $("tripletButton").addEventListener("click", toggleTriplet);
+  $("tripletButton").addEventListener("click", () => toggleTuplet());
   $("inputToggle").addEventListener("click", toggleInput);
   $("addBar").addEventListener("click", () => barAction("insert"));
   $("deleteBar").addEventListener("click", () => barAction("delete"));
@@ -529,8 +888,10 @@ function setUpToolbar() {
     event.target.blur();
   });
   $("timeChoice").addEventListener("change", event => {
-    if (event.target.value) {
-      const [beats, beat_type] = event.target.value.split("/").map(Number);
+    const choice = event.target.value;
+    if (choice.startsWith("pickup:")) barAction("pickup", { count: Number(choice.slice("pickup:".length)) });
+    else if (choice) {
+      const [beats, beat_type] = choice.split("/").map(Number);
       barAction("time", { beats, beat_type });
     }
     event.target.value = "";
@@ -562,6 +923,8 @@ function setUpToolbar() {
     if (event.key === " ") { event.preventDefault(); saveLyric(false, true, " "); }
     else if (event.key === "-") { event.preventDefault(); saveLyric(true, true, "-"); }
     else if (event.key === "Enter") { event.preventDefault(); saveLyric(null, false); }
+    else if (event.key === "ArrowDown") { event.preventDefault(); changeVerse(1); }
+    else if (event.key === "ArrowUp") { event.preventDefault(); changeVerse(-1); }
     else if (event.key === "Escape") closeLyric();
   });
 }
@@ -586,9 +949,11 @@ function setUpBlankForm() {
 }
 
 const PITCH_KEYS = { "#": "sharp", "+": "sharp", "-": "flat", "=": "natural" };
+const MARK_KEYS = { S: "staccato", V: "accent", N: "tenuto", O: "marcato" };
 
 function handleControlKey(event) {
   const key = event.key.toLowerCase();
+  if (event.altKey && /^[1-4]$/.test(key)) { event.preventDefault(); chooseVoice(Number(key)); return; }
   const actions = {
     z: () => (event.shiftKey ? redoEdit() : undoEdit()),
     y: redoEdit,
@@ -597,7 +962,10 @@ function handleControlKey(event) {
     v: pasteHere,
     a: selectEverything,
     l: startLyrics,
-    3: toggleTriplet,
+    3: () => toggleTuplet(3),
+    5: () => toggleTuplet(5),
+    6: () => toggleTuplet(6),
+    7: () => toggleTuplet(7),
     arrowup: () => noteAction("octaveUp"),
     arrowdown: () => noteAction("octaveDown"),
     delete: () => noteAction("close"),
@@ -618,6 +986,15 @@ document.addEventListener("keydown", event => {
     return;
   }
   if (key === " ") { handled(); togglePlaying(); return; }
+  if (MARK_KEYS[key]) { handled(); markAction("toggle", { name: MARK_KEYS[key] }); return; }
+  if (key === "s") { handled(); markAction("slur"); return; }
+  if (key === "<") { handled(); markAction("hairpin", { name: "crescendo" }); return; }
+  if (key === ">") { handled(); markAction("hairpin", { name: "diminuendo" }); return; }
+  if (key === "/") { handled(); addGrace(); return; }
+  if (key === "r") { handled(); repeatSelection(); return; }
+  if (key === "j") { handled(); noteAction("respell"); return; }
+  if (key === "x") { handled(); noteAction("flip"); return; }
+  if (key === "Enter" && !editor.on) { handled(); barAction("break"); return; }
   if (key === "n" || key === "N") { handled(); toggleInput(); return; }
   if (key === "ArrowLeft") { handled(); moveAlong(-1, event.shiftKey); return; }
   if (key === "ArrowRight") { handled(); moveAlong(1, event.shiftKey); return; }

@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from fractions import Fraction
 from collections.abc import Callable
 from pathlib import Path
 
@@ -30,15 +31,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from chords.fonts import ROOT
-from pipeline import edit, structure
+from pipeline import edit, marks, structure, transpose
 from pipeline.engrave import export_pdf, render_pages
 from pipeline.merge import merge_pages
-from pipeline.musicxml import to_text
+from pipeline.midi_file import midi_bytes
+from pipeline.musicxml import read_score_file, to_text
 from pipeline.playback import playback
+from pipeline.rhythm import fit_divisions
 
 JOB_DIR = ROOT / "data" / "jobs"
 STATIC_DIR = Path(__file__).parent / "static"
-ALLOWED_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".pdf"}
+IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".pdf"}
+SCORE_TYPES = {".musicxml", ".xml", ".mxl"}
+ALLOWED_TYPES = IMAGE_TYPES | SCORE_TYPES
 MAX_UPLOAD_BYTES = 40 * 1024 * 1024
 MAX_PDF_PAGES = 40
 PAGE_TIMEOUT_SECONDS = 600
@@ -66,11 +71,45 @@ class NoteEdit(BaseModel):
     dots: int = 0
     step: str | None = None
     line: int | None = None  # A place on the staff, in steps down from the top line.
+    voice: int | None = None  # Which voice of the staff to write in, counting from 1.
+    midi: int | None = None  # A key pressed on a MIDI keyboard.
+    steps: int = 0
+    actual: int = 3  # How many notes a tuplet holds.
 
 
 class GroupEdit(BaseModel):
     action: str
     notes: list[str]
+
+
+class MarkEdit(BaseModel):
+    action: str
+    name: str = ""
+    notes: list[str] = []
+    text: str = ""
+    id: str | None = None
+    unit: str = "quarter"
+    dots: int = 0
+    on: bool = True
+
+
+class TransposeEdit(BaseModel):
+    interval: str | None = None
+    direction: str = "up"
+    key: int | None = None
+    first: str | None = None
+    last: str | None = None
+
+
+class VoiceEdit(BaseModel):
+    notes: list[str]
+    voice: int
+
+
+class PartEdit(BaseModel):
+    action: str
+    name: str = ""
+    note: str | None = None
 
 
 class Stretch(BaseModel):
@@ -84,8 +123,12 @@ class CopiedEvent(BaseModel):
     pitches: list[tuple[str, int, int]] = []
     tie: bool = False
     triplet: int | None = None
+    actual: int = 3
     chord: str | None = None
     lyric: dict | None = None
+    marks: list[str] = []
+    dynamic: str | None = None
+    slur: list[int] = []
 
 
 class Paste(BaseModel):
@@ -96,11 +139,15 @@ class Paste(BaseModel):
 class Lyric(BaseModel):
     text: str
     joined: bool | None = False
+    verse: int = 1
 
 
 class Title(BaseModel):
     title: str = ""
     composer: str = ""
+
+
+SIXTEENTHS_PER_QUARTER = 4
 
 
 class BarEdit(BaseModel):
@@ -111,6 +158,8 @@ class BarEdit(BaseModel):
     beats: int = 4
     beat_type: int = 4
     number: int = 0
+    clef: str = ""
+    count: int = 0
 
 
 class BlankScore(BaseModel):
@@ -241,10 +290,12 @@ def recognize_job(folder: Path, upload: Path) -> None:
 async def create_score(file: UploadFile) -> dict:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_TYPES:
-        raise HTTPException(415, "Please upload a photo or a PDF.")
+        raise HTTPException(415, "Please upload a photo, a PDF or a MusicXML file.")
     data = await file.read()
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "That file is too large. The limit is 40 MB.")
+    if suffix in SCORE_TYPES:
+        return open_score_file(data, suffix)
     if suffix != ".pdf" and cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE) is None:
         raise HTTPException(415, "That file couldn't be opened as an image.")
     score_id = uuid.uuid4().hex
@@ -254,6 +305,27 @@ async def create_score(file: UploadFile) -> dict:
     upload.write_bytes(data)
     write_status(folder, "processing")
     threading.Thread(target=recognize_job, args=(folder, upload), daemon=True).start()
+    return {"id": score_id}
+
+
+def open_score_file(data: bytes, suffix: str) -> dict:
+    """Open a score written elsewhere. It's kept like one written here, with no photo behind it."""
+    try:
+        root = read_score_file(data, suffix)
+        fit_divisions(root)
+        edit.ensure_note_ids(root)
+        marks.ensure_mark_ids(root)
+        structure.ensure_measure_ids(root)
+        playback(root)
+        render_pages(to_text(root))
+    except (ValueError, TypeError, AttributeError, ZeroDivisionError) as error:
+        message = str(error) if isinstance(error, ValueError) and "MusicXML" in str(error) else "That score couldn't be opened."
+        raise HTTPException(415, message) from error
+    score_id = uuid.uuid4().hex
+    folder = JOB_DIR / score_id
+    folder.mkdir(parents=True)
+    save_version(folder, root)
+    write_status(folder, "ready")
     return {"id": score_id}
 
 
@@ -269,12 +341,14 @@ def source_pages(folder: Path) -> list[int]:
 
 def describe(folder: Path, status: dict) -> dict:
     root = current_root(folder)
+    edit.ensure_note_ids(root)
+    marks.ensure_mark_ids(root)
     read_info: dict[tuple[int, float], dict] = {}
     for item in read_chord_file(folder):
         read_info.setdefault((item["measure"], round(float(item["onset"]), 3)), item)  # Only the first was placed.
     chords = []
     for chord in edit.list_chords(root):
-        found = read_info.get((chord["origin"], chord["onset"]))
+        found = read_info.get((chord["origin"], chord["onset"])) if chord["part"] == 0 else None
         unchanged = found is not None and found["chord"] == chord["text"]
         chords.append(chord | {
             "confidence": found["confidence"] if unchanged else None,
@@ -290,6 +364,9 @@ def describe(folder: Path, status: dict) -> dict:
         "checked": (folder / "checked.json").exists(),
         "blank": not (folder / "recognized").exists(),
         "barChecks": structure.check_measures(root),
+        "marks": marks.list_marks(root),
+        "parts": structure.part_names(root),
+        "barsPerLine": structure.bars_per_line(root),
     } | structure.title_of(root)
 
 
@@ -368,11 +445,14 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None])
     with edit_lock:
         root = current_root(folder)
         structure.ensure_measure_ids(root)
+        edit.ensure_note_ids(root)
+        marks.ensure_mark_ids(root)
         try:
             extra = change(root)
         except edit.EditError as error:
             raise HTTPException(422, str(error)) from error
         edit.ensure_note_ids(root)
+        marks.ensure_mark_ids(root)
         save_version(folder, root)
         return describe(folder, read_status(folder)) | (extra or {})
 
@@ -391,10 +471,13 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "clear": lambda root: edit.clear_marks(root, note_id),
         "length": lambda root: edit.change_length(root, note_id, body.type, body.dots),
         "dot": lambda root: edit.toggle_dot(root, note_id),
-        "write": lambda root: edit.write_note(root, note_id, body.type, body.dots, body.step, body.line),
-        "stack": lambda root: {"written": edit.add_pitch(root, note_id, body.step or "", body.line)},
-        "tuplet": lambda root: edit.toggle_tuplet(root, note_id, edit.length_of(body.type, body.dots)),
-        "tupletHere": lambda root: edit.toggle_tuplet(root, note_id),
+        "write": lambda root: edit.write_note(root, note_id, body.type, body.dots, body.step, body.line, body.voice, body.midi),
+        "moveBy": lambda root: edit.move_note(root, note_id, body.steps),
+        "respell": lambda root: edit.respell_note(root, note_id),
+        "flip": lambda root: edit.flip_stem(root, note_id),
+        "stack": lambda root: {"written": edit.add_pitch(root, note_id, body.step or "", body.line, body.midi)},
+        "tuplet": lambda root: edit.toggle_tuplet(root, note_id, edit.length_of(body.type, body.dots), body.actual),
+        "tupletHere": lambda root: edit.toggle_tuplet(root, note_id, actual=body.actual),
         "tie": lambda root: edit.toggle_tie(root, note_id),
         "close": lambda root: {"cursor": edit.close_gap(root, note_id)},
         "insert": lambda root: {"cursor": edit.insert_rest(root, note_id, body.type, body.dots)},
@@ -414,6 +497,8 @@ GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {
     "natural": lambda root, note: edit.set_accidental(root, note, 0),
     "delete": edit.delete_note,
     "clear": edit.clear_marks,
+    "respell": edit.respell_note,
+    "flip": edit.flip_stem,
 }
 
 
@@ -437,6 +522,72 @@ def change_group(score_id: str, body: GroupEdit) -> dict:
     return apply_edit(score_id, change)
 
 
+def first_and_last(body: MarkEdit) -> tuple[str, str]:
+    if not body.notes:
+        raise edit.EditError("Choose a note first.")
+    return body.notes[0], body.notes[-1]
+
+
+MARK_ACTIONS: dict[str, Callable[[ET.Element, MarkEdit], dict | None]] = {
+    "toggle": lambda root, body: marks.toggle_mark(root, body.notes, body.name),
+    "slur": lambda root, body: marks.toggle_slur(root, *first_and_last(body)),
+    "hairpin": lambda root, body: marks.toggle_hairpin(root, *first_and_last(body), body.name),
+    "dynamic": lambda root, body: marks.set_dynamic(root, first_and_last(body)[0], body.name),
+    "tempo": lambda root, body: marks.set_tempo(root, first_and_last(body)[0], body.text, body.unit, body.dots),
+    "text": lambda root, body: marks.add_text(root, first_and_last(body)[0], body.text, body.name or "staff"),
+    "rehearsal": lambda root, body: marks.add_rehearsal(root, first_and_last(body)[0], body.text),
+    "swing": lambda root, body: marks.set_swing(root, first_and_last(body)[0], body.on),
+    "jump": lambda root, body: marks.set_jump(root, first_and_last(body)[0], body.name),
+    "grace": lambda root, body: {"written": marks.add_grace(root, first_and_last(body)[0], body.on)},
+    "remove": lambda root, body: marks.remove_placed(root, body.id or ""),
+    "label": lambda root, body: marks.set_label(root, body.id or "", body.text),
+}
+
+
+@app.post("/api/scores/{score_id}/marks")
+def change_marks(score_id: str, body: MarkEdit) -> dict:
+    if body.action not in MARK_ACTIONS:
+        raise HTTPException(422, "Unknown mark")
+    return apply_edit(score_id, lambda root: MARK_ACTIONS[body.action](root, body))
+
+
+@app.post("/api/scores/{score_id}/transpose")
+def change_pitch(score_id: str, body: TransposeEdit) -> dict:
+    """Transpose a selection if one is given, or else the whole score, key signatures included."""
+
+    def change(root: ET.Element) -> None:
+        if body.key is not None:
+            transpose.transpose_score_to_key(root, body.key, body.direction)
+            return
+        interval = transpose.named_interval(body.interval or "", body.direction)
+        if body.first:
+            transpose.transpose_stretch(root, body.first, body.last or body.first, interval)
+        else:
+            transpose.transpose_score(root, interval)
+
+    return apply_edit(score_id, change)
+
+
+@app.post("/api/scores/{score_id}/voice")
+def change_voice(score_id: str, body: VoiceEdit) -> dict:
+    return apply_edit(score_id, lambda root: edit.move_to_voice(root, body.notes, body.voice))
+
+
+@app.post("/api/scores/{score_id}/parts")
+def change_parts(score_id: str, body: PartEdit) -> dict:
+    def change(root: ET.Element) -> None:
+        if body.action == "add":
+            structure.add_part(root, body.name)
+        elif body.action == "remove":
+            if not body.note:
+                raise edit.EditError("Click a note in the instrument to remove first.")
+            structure.remove_part(root, structure.part_of(root, body.note))
+        else:
+            raise HTTPException(422, "Unknown instrument action")
+
+    return apply_edit(score_id, change)
+
+
 @app.post("/api/scores/{score_id}/range")
 def find_range(score_id: str, body: Stretch) -> dict:
     """List what's between two notes. Nothing is changed, so nothing is saved."""
@@ -449,19 +600,19 @@ def find_range(score_id: str, body: Stretch) -> dict:
 @app.post("/api/scores/{score_id}/copy")
 def copy_notes(score_id: str, body: Stretch) -> dict:
     try:
-        return edit.copy_range(current_root(job_folder(score_id)), body.first, body.last)
+        return marks.copy_stretch(current_root(job_folder(score_id)), body.first, body.last)
     except edit.EditError as error:
         raise HTTPException(422, str(error)) from error
 
 
 @app.post("/api/scores/{score_id}/paste")
 def paste_notes(score_id: str, body: Paste) -> dict:
-    return apply_edit(score_id, lambda root: edit.paste(root, body.at, [item.model_dump() for item in body.events]))
+    return apply_edit(score_id, lambda root: marks.paste_stretch(root, body.at, [item.model_dump() for item in body.events]))
 
 
 @app.post("/api/scores/{score_id}/lyrics/{note_id}")
 def change_lyric(score_id: str, note_id: str, body: Lyric) -> dict:
-    return apply_edit(score_id, lambda root: edit.set_lyric(root, note_id, body.text, body.joined))
+    return apply_edit(score_id, lambda root: edit.set_lyric(root, note_id, body.text, body.joined, body.verse))
 
 
 @app.post("/api/scores/{score_id}/title")
@@ -485,11 +636,22 @@ def change_bars(score_id: str, body: BarEdit) -> dict:
             structure.set_key(root, index or 0, body.fifths)
         elif body.action == "time":
             structure.set_time(root, index or 0, body.beats, body.beat_type)
+        elif body.action == "pickup":
+            structure.set_pickup(root, Fraction(body.count, SIXTEENTHS_PER_QUARTER))
         elif body.action in ("forward", "backward"):
             structure.toggle_repeat(root, index or 0, body.action)
         elif body.action == "ending":
             first = index or 0
             structure.set_ending(root, first, structure.bar_of(root, body.last) if body.last else first, body.number)
+        elif body.action == "clef":
+            if not body.note:
+                raise edit.EditError("Click a note in the staff to change first.")
+            spot = edit.locate(root, body.note)
+            structure.set_clef(root, index or 0, structure.part_of(root, body.note), spot.key[0], body.clef)
+        elif body.action == "break":
+            structure.toggle_line_break(root, index or 0)
+        elif body.action == "barsPerLine":
+            structure.set_bars_per_line(root, body.count)
         else:
             raise HTTPException(422, "Unknown bar action")
 
@@ -541,12 +703,27 @@ def download_musicxml(score_id: str) -> Response:
     return Response(text, media_type="application/vnd.recordare.musicxml+xml", headers=headers)
 
 
+@app.get("/api/scores/{score_id}/score.mid")
+def download_midi(score_id: str) -> Response:
+    data = midi_bytes(playback(current_root(job_folder(score_id))))
+    return Response(data, media_type="audio/midi", headers={"Content-Disposition": 'attachment; filename="score.mid"'})
+
+
 @app.get("/api/scores/{score_id}/score.pdf")
-def download_pdf(score_id: str) -> FileResponse:
+def download_pdf(score_id: str, part: int | None = None) -> FileResponse:
+    """Print the score, or one player's part."""
     folder = job_folder(score_id)
-    path = folder / "score.pdf"
-    export_pdf(to_text(current_root(folder)), path)
-    return FileResponse(path, media_type="application/pdf", filename="score.pdf")
+    root = current_root(folder)
+    name = "score.pdf"
+    if part is not None:
+        try:
+            root = structure.only_part(root, part)
+        except edit.EditError as error:
+            raise HTTPException(404, str(error)) from error
+        name = f"part_{part + 1}.pdf"
+    path = folder / name
+    export_pdf(to_text(root), path)
+    return FileResponse(path, media_type="application/pdf", filename=name)
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

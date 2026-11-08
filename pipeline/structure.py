@@ -3,7 +3,9 @@
 This is also where bars are checked against the time signature.
 """
 
+import copy
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from fractions import Fraction
 
 from pipeline.rhythm import (
@@ -11,26 +13,102 @@ from pipeline.rhythm import (
     EditError,
     alteration_in_key,
     contexts,
+    fifths_of,
     fit_divisions,
     is_tied,
     line_end,
     make_bar_rest,
     read_measure,
+    repair_slurs,
     repair_ties,
+    repair_wedges,
     respell,
+    rests,
     units,
+    write_measure,
 )
 
 START_DIVISIONS = 96  # Fits every plain, dotted and triplet length a person can enter.
 MOST_BARS = 1000
 ATTRIBUTE_ORDER = ["footnote", "level", "divisions", "key", "time", "staves", "part-symbol", "instruments", "clef", "staff-details", "transpose", "for-part", "directive", "measure-style"]
 BEAT_TYPES = {1, 2, 4, 8, 16, 32}
-CLEFS = {"treble": [("G", "2")], "bass": [("F", "4")], "piano": [("G", "2"), ("F", "4")]}
+CLEF_SHAPES = {"treble": ("G", "2", 0), "treble8": ("G", "2", -1), "bass": ("F", "4", 0), "alto": ("C", "3", 0), "tenor": ("C", "4", 0)}
 # The voice numbers MusicXML files conventionally use, four to a staff.
 VOICES_PER_STAFF = 4
+MOST_KEY = 7
+MOST_PARTS = 40
+BREAK_PREFIX = "linebreak"  # Marks a line break a person asked for, unlike those a page was read with.
+BARS_PER_LINE = "xrnsheet-bars-per-line"
+MOST_BARS_PER_LINE = 16
+
+
+@dataclass(frozen=True)
+class Instrument:
+    """What a part needs to know: its staves, and how far it sounds from how it's written."""
+
+    label: str
+    clefs: tuple[str, ...] = ("treble",)
+    steps: int = 0
+    semitones: int = 0
+    octaves: int = 0
+    program: int = 1  # General MIDI, counted from 1.
+    hidden_name: bool = False
+
+
+INSTRUMENTS = {
+    "treble": Instrument("Music", hidden_name=True),
+    "bass": Instrument("Music", ("bass",), hidden_name=True),
+    "piano": Instrument("Piano", ("treble", "bass"), hidden_name=True),
+    "voice": Instrument("Voice", program=53),
+    "guitar": Instrument("Guitar", ("treble8",), program=25),
+    "bass-guitar": Instrument("Bass Guitar", ("bass",), octaves=-1, program=34),
+    "violin": Instrument("Violin", program=41),
+    "viola": Instrument("Viola", ("alto",), program=42),
+    "cello": Instrument("Cello", ("bass",), program=43),
+    "double-bass": Instrument("Double Bass", ("bass",), octaves=-1, program=44),
+    "flute": Instrument("Flute", program=74),
+    "oboe": Instrument("Oboe", program=69),
+    "clarinet": Instrument("Clarinet in B♭", steps=-1, semitones=-2, program=72),
+    "alto-sax": Instrument("Alto Saxophone", steps=-5, semitones=-9, program=66),
+    "tenor-sax": Instrument("Tenor Saxophone", steps=-1, semitones=-2, octaves=-1, program=67),
+    "baritone-sax": Instrument("Baritone Saxophone", steps=-5, semitones=-9, octaves=-1, program=68),
+    "trumpet": Instrument("Trumpet in B♭", steps=-1, semitones=-2, program=57),
+    "horn": Instrument("Horn in F", steps=-4, semitones=-7, program=61),
+    "trombone": Instrument("Trombone", ("bass",), program=58),
+}
 BARLINE_ORDER = ["bar-style", "footnote", "level", "wavy-line", "segno", "coda", "fermata", "ending", "repeat"]
 REPEAT_SIDES = {"forward": ("left", "heavy-light"), "backward": ("right", "light-heavy")}
 MOST_TITLE_LETTERS = 200
+
+
+def read_setting(root: ET.Element, name: str) -> str | None:
+    """Read something the app keeps with a score that isn't music, stored as a named field."""
+    return next((field.text for field in root.iter("miscellaneous-field") if field.get("name") == name), None)
+
+
+def write_setting(root: ET.Element, name: str, value: str | None) -> None:
+    """Store a named field, or remove it when there's no value."""
+    identification = root.find("identification")
+    if identification is None:
+        if value is None:
+            return
+        identification = ET.Element("identification")
+        before = [index for index, child in enumerate(root) if child.tag in ("work", "movement-number", "movement-title")]
+        root.insert(before[-1] + 1 if before else 0, identification)
+    fields = identification.find("miscellaneous")
+    if fields is None:
+        fields = ET.SubElement(identification, "miscellaneous")
+    found = next((field for field in fields if field.get("name") == name), None)
+    if value is None and found is not None:
+        fields.remove(found)
+    elif value is not None:
+        if found is None:
+            found = ET.SubElement(fields, "miscellaneous-field", name=name)
+        found.text = value
+    if len(fields) == 0:
+        identification.remove(fields)
+    if len(identification) == 0:
+        root.remove(identification)
 
 
 def ensure_measure_ids(root: ET.Element) -> None:
@@ -67,6 +145,37 @@ def renumber(part: ET.Element) -> None:
     first = 0 if measures and measures[0].get("implicit") == "yes" else 1
     for number, measure in enumerate(measures, start=first):
         measure.set("number", str(number))
+
+
+def set_pickup(root: ET.Element, quarters: Fraction) -> None:
+    """Make the first bar a pickup of this many quarter notes, or a whole bar again if it's 0.
+
+    Rests come and go to fit. Notes never do, so a pickup too short for them is refused.
+    """
+    fit_divisions(root)
+    for part in root.findall("part"):
+        context = next(contexts(part))
+        if quarters >= context.length:
+            raise EditError("A pickup has to be shorter than a bar.")
+        end = quarters or context.length
+        timeline = read_measure(context.measure, context.divisions)
+        if any(mark.onset >= end for mark in timeline.marks):
+            raise EditError("There are marks past the end of that pickup. Remove them first.")
+        for key, line in timeline.lines.items():
+            kept = sorted((event for event in line if not event.is_rest or event.in_tuplet), key=lambda event: event.onset)
+            if any(event.end > end for event in kept):
+                raise EditError("There are notes past the end of that pickup. Delete them first.")
+            filled, position = [], Fraction(0)
+            for event in kept:
+                filled += [*rests(position, event.onset, context, key), event]
+                position = event.end
+            timeline.lines[key] = [*filled, *rests(position, end, context, key)]
+        write_measure(context.measure, timeline, context.divisions)
+        if quarters:
+            context.measure.set("implicit", "yes")
+        else:
+            context.measure.attrib.pop("implicit", None)
+        renumber(part)
 
 
 def blank_measure(length: Fraction, divisions: int, staves: int) -> ET.Element:
@@ -161,6 +270,24 @@ def delete_measure(root: ET.Element, index: int) -> None:
         part.remove(doomed)
         renumber(part)
         repair_ties(part, max(index - 1, 0))
+        repair_slurs(part)
+        repair_wedges(part)
+
+
+def key_offset(steps: int, semitones: int) -> int:
+    """Return how many sharps a part is written with beyond the key it sounds in.
+
+    A trumpet sounds a tone lower than written, so its music is written with two sharps more.
+    """
+    return -fifths_of(steps, semitones)
+
+
+def key_for_part(part: ET.Element, fifths: int) -> int:
+    """Return a part's written key, wrapped round to a key that exists if it goes past seven."""
+    found = part.find("measure/attributes/transpose")
+    offset = 0 if found is None else key_offset(int(found.findtext("diatonic") or 0), int(found.findtext("chromatic") or 0))
+    written = fifths + offset
+    return written - 12 * (1 if written > 0 else -1) if abs(written) > MOST_KEY else written
 
 
 def reread_notes(context: Context, tied: dict[tuple[str, str, str], str | None]) -> None:
@@ -194,19 +321,44 @@ def reread_notes(context: Context, tied: dict[tuple[str, str, str], str | None])
             tied[where] = str(alter) if is_tied(note, "start") else None
 
 
+def set_clef(root: ET.Element, index: int, part_number: int, staff: str, name: str) -> None:
+    """Change a staff's clef from this bar on. Notes keep their pitch, so they move on the staff."""
+    if name not in CLEF_SHAPES:
+        raise EditError("That isn't a clef this app knows.")
+    parts = root.findall("part")
+    known = list(contexts(parts[part_number]))
+    if not 0 <= index < len(known):
+        raise EditError(f"No bar number {index + 1}")
+    measure = known[index].measure
+    for attributes in measure.findall("attributes"):
+        for found in attributes.findall("clef"):
+            if found.get("number", "1") == staff:
+                attributes.remove(found)
+        if len(attributes) == 0:
+            measure.remove(attributes)
+    sign, line, shift = CLEF_SHAPES[name]
+    clef = ET.Element("clef", number=staff) if known[index].staves > 1 else ET.Element("clef")
+    ET.SubElement(clef, "sign").text = sign
+    ET.SubElement(clef, "line").text = line
+    if shift:
+        ET.SubElement(clef, "clef-octave-change").text = str(shift)
+    set_attribute(ensure_attributes(measure), clef)
+
+
 def set_key(root: ET.Element, index: int, fifths: int) -> None:
     """Set the key from this bar until the next key change."""
-    if not -7 <= fifths <= 7:
+    if not -MOST_KEY <= fifths <= MOST_KEY:
         raise EditError("A key has at most seven sharps or flats.")
     for part in root.findall("part"):
         known = list(contexts(part))
         if not 0 <= index < len(known):
             raise EditError(f"No bar number {index + 1}")
         measure = known[index].measure
+        written = key_for_part(part, fifths)
         drop_attribute(measure, "key")
-        if index == 0 or known[index - 1].fifths != fifths:
+        if index == 0 or known[index - 1].fifths != written:
             key = ET.Element("key")
-            ET.SubElement(key, "fifths").text = str(fifths)
+            ET.SubElement(key, "fifths").text = str(written)
             set_attribute(ensure_attributes(measure), key)
         tied: dict[tuple[str, str, str], str | None] = {}
         changed = []
@@ -258,15 +410,18 @@ def check_measures(root: ET.Element) -> list[dict]:
     found: dict[int, dict] = {}
     for part in root.findall("part"):
         known = list(contexts(part))
+        filled = [max((line_end(line) for line in read_measure(item.measure, item.divisions).lines.values()), default=Fraction(0)) for item in known]
         for context in known:
             timeline = read_measure(context.measure, context.divisions)
             ends = [line_end(line) for line in timeline.lines.values()]
             if not ends:
                 continue
             problem = None
+            # Printed editions split a bar across a repeat or a line, as bars "4" and "4a".
+            split = any(0 <= other < len(known) and filled[other] + filled[context.index] == context.length for other in (context.index - 1, context.index + 1))
             if max(ends) > context.length:
                 problem = "long"
-            elif max(ends) < context.length and not context.is_pickup and context.index > 0:
+            elif max(ends) < context.length and not context.is_pickup and context.index > 0 and not split:
                 is_last = context.index == len(known) - 1
                 first = read_measure(known[0].measure, known[0].divisions)
                 started_short = max((line_end(line) for line in first.lines.values()), default=known[0].length) < known[0].length
@@ -404,42 +559,196 @@ def set_title(root: ET.Element, title: str, composer: str) -> None:
         root.insert(before_list + (offset if title else 0), credit)
 
 
+def part_attributes(instrument: Instrument, divisions: int, fifths: int, beats: int, beat_type: int) -> ET.Element:
+    """Make the opening of a part: what it counts in, its key and time, and its clefs."""
+    attributes = ET.Element("attributes")
+    ET.SubElement(attributes, "divisions").text = str(divisions)
+    ET.SubElement(ET.SubElement(attributes, "key"), "fifths").text = str(fifths)
+    time = ET.SubElement(attributes, "time")
+    ET.SubElement(time, "beats").text = str(beats)
+    ET.SubElement(time, "beat-type").text = str(beat_type)
+    staves = len(instrument.clefs)
+    if staves > 1:
+        ET.SubElement(attributes, "staves").text = str(staves)
+    for number, name in enumerate(instrument.clefs, start=1):
+        sign, line, shift = CLEF_SHAPES[name]
+        element = ET.SubElement(attributes, "clef", number=str(number)) if staves > 1 else ET.SubElement(attributes, "clef")
+        ET.SubElement(element, "sign").text = sign
+        ET.SubElement(element, "line").text = line
+        if shift:
+            ET.SubElement(element, "clef-octave-change").text = str(shift)
+    if instrument.steps or instrument.semitones or instrument.octaves:
+        transpose = ET.SubElement(attributes, "transpose")
+        ET.SubElement(transpose, "diatonic").text = str(instrument.steps)
+        ET.SubElement(transpose, "chromatic").text = str(instrument.semitones)
+        if instrument.octaves:
+            ET.SubElement(transpose, "octave-change").text = str(instrument.octaves)
+    return attributes
+
+
+def score_part(part_id: str, instrument: Instrument) -> ET.Element:
+    element = ET.Element("score-part", id=part_id)
+    ET.SubElement(element, "part-name", {"print-object": "no"} if instrument.hidden_name else {}).text = instrument.label
+    inner = ET.SubElement(element, "score-instrument", id=f"{part_id}-I1")
+    ET.SubElement(inner, "instrument-name").text = instrument.label
+    midi = ET.SubElement(element, "midi-instrument", id=f"{part_id}-I1")
+    ET.SubElement(midi, "midi-program").text = str(instrument.program)
+    return element
+
+
 def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str = "treble", measures: int = 16) -> ET.Element:
-    """Make an empty score to write in from scratch."""
-    if clef not in CLEFS:
-        raise EditError("Choose a treble, bass or piano staff.")
+    """Make an empty score to write in from scratch, for a kind of staff or an instrument."""
+    if clef not in INSTRUMENTS:
+        raise EditError("Choose a treble, bass or piano staff, or an instrument.")
     if not 1 <= measures <= MOST_BARS:
         raise EditError(f"A score can have 1 to {MOST_BARS} bars.")
     if beat_type not in BEAT_TYPES or not 1 <= beats <= 32:
         raise EditError("That isn't a time signature this app can use.")
-    if not -7 <= fifths <= 7:
+    if not -MOST_KEY <= fifths <= MOST_KEY:
         raise EditError("A key has at most seven sharps or flats.")
+    instrument = INSTRUMENTS[clef]
     root = ET.Element("score-partwise", version="4.0")
-    score_part = ET.SubElement(ET.SubElement(root, "part-list"), "score-part", id="P1")
-    ET.SubElement(score_part, "part-name", {"print-object": "no"}).text = "Music"
+    ET.SubElement(root, "part-list").append(score_part("P1", instrument))
     part = ET.SubElement(root, "part", id="P1")
-    staves = len(CLEFS[clef])
     for index in range(measures):
-        measure = blank_measure(Fraction(beats * 4, beat_type), START_DIVISIONS, staves)
+        measure = blank_measure(Fraction(beats * 4, beat_type), START_DIVISIONS, len(instrument.clefs))
         part.append(measure)
-        if index:
-            continue
-        attributes = ET.Element("attributes")
-        ET.SubElement(attributes, "divisions").text = str(START_DIVISIONS)
-        ET.SubElement(ET.SubElement(attributes, "key"), "fifths").text = str(fifths)
-        time = ET.SubElement(attributes, "time")
-        ET.SubElement(time, "beats").text = str(beats)
-        ET.SubElement(time, "beat-type").text = str(beat_type)
-        if staves > 1:
-            ET.SubElement(attributes, "staves").text = str(staves)
-        for number, (sign, line) in enumerate(CLEFS[clef], start=1):
-            element = ET.SubElement(attributes, "clef", number=str(number)) if staves > 1 else ET.SubElement(attributes, "clef")
-            ET.SubElement(element, "sign").text = sign
-            ET.SubElement(element, "line").text = line
-        measure.insert(0, attributes)
+        if index == 0:
+            measure.insert(0, part_attributes(instrument, START_DIVISIONS, fifths, beats, beat_type))
     renumber(part)
     ensure_measure_ids(root)
     return root
+
+
+def new_part_id(root: ET.Element) -> str:
+    used = {part.get("id") for part in root.findall("part")}
+    number = len(used) + 1
+    while f"P{number}" in used:
+        number += 1
+    return f"P{number}"
+
+
+def add_part(root: ET.Element, name: str) -> None:
+    """Add an instrument below the others, with the same bars, keys, times and repeats."""
+    if name not in INSTRUMENTS:
+        raise EditError("That isn't an instrument this app knows.")
+    parts = root.findall("part")
+    if len(parts) >= MOST_PARTS:
+        raise EditError(f"A score can have at most {MOST_PARTS} instruments.")
+    fit_divisions(root)
+    instrument = INSTRUMENTS[name]
+    known = list(contexts(parts[0]))
+    top_offset = 0
+    found = parts[0].find("measure/attributes/transpose")
+    if found is not None:
+        top_offset = key_offset(int(found.findtext("diatonic") or 0), int(found.findtext("chromatic") or 0))
+    offset = key_offset(instrument.steps, instrument.semitones) - top_offset
+    part_id = new_part_id(root)
+    root.find("part-list").append(score_part(part_id, instrument))
+    part = ET.Element("part", id=part_id)
+    list_position = list(root).index(parts[-1]) + 1
+    root.insert(list_position, part)
+    prefix = f"p{len(parts)}"
+    staves = len(instrument.clefs)
+    for context in known:
+        timeline = read_measure(context.measure, context.divisions)
+        length = max((line_end(line) for line in timeline.lines.values()), default=context.length) if context.is_pickup else context.length
+        measure = blank_measure(length, START_DIVISIONS, staves)
+        measure.set("id", prefix + (context.measure.get("id") or f"m{context.index}"))
+        if context.is_pickup:
+            measure.set("implicit", "yes")
+        written = context.fifths + offset
+        written = written - 12 * (1 if written > 0 else -1) if abs(written) > MOST_KEY else written
+        if context.index == 0:
+            measure.insert(0, part_attributes(instrument, START_DIVISIONS, written, context.beats, context.beat_type))
+        else:
+            carried = context.measure.find("attributes/key"), context.measure.find("attributes/time")
+            if carried[0] is not None:
+                key = ET.Element("key")
+                ET.SubElement(key, "fifths").text = str(written)
+                set_attribute(ensure_attributes(measure), key)
+            if carried[1] is not None:
+                set_attribute(ensure_attributes(measure), copy.deepcopy(carried[1]))
+        for barline in context.measure.findall("barline"):
+            if barline.get("location") == "left":
+                measure.insert(0, copy.deepcopy(barline))
+            else:
+                measure.append(copy.deepcopy(barline))
+        part.append(measure)
+    renumber(part)
+
+
+def remove_part(root: ET.Element, index: int) -> None:
+    parts = root.findall("part")
+    if len(parts) < 2:
+        raise EditError("A score needs at least one instrument.")
+    if not 0 <= index < len(parts):
+        raise EditError("There's no such instrument.")
+    doomed = parts[index]
+    listing = root.find("part-list")
+    for entry in listing.findall("score-part"):
+        if entry.get("id") == doomed.get("id"):
+            listing.remove(entry)
+    root.remove(doomed)
+
+
+def part_names(root: ET.Element) -> list[str]:
+    return [entry.findtext("part-name") or "" for entry in root.findall("part-list/score-part")]
+
+
+def part_of(root: ET.Element, note_id: str) -> int:
+    for index, part in enumerate(root.findall("part")):
+        if any(note.get("id") == note_id for note in part.iter("note")):
+            return index
+    raise EditError(f"No note with id {note_id}")
+
+
+def only_part(root: ET.Element, index: int) -> ET.Element:
+    """Return a copy of the score with one instrument, for printing that player's part."""
+    parts = root.findall("part")
+    if not 0 <= index < len(parts):
+        raise EditError("There's no such instrument.")
+    single = copy.deepcopy(root)
+    kept = single.findall("part")[index]
+    for part in single.findall("part"):
+        if part is not kept:
+            single.remove(part)
+    listing = single.find("part-list")
+    for entry in listing.findall("score-part"):
+        if entry.get("id") != kept.get("id"):
+            listing.remove(entry)
+    return single
+
+
+def toggle_line_break(root: ET.Element, index: int) -> None:
+    """Start a new line at this bar, or stop doing so."""
+    for part in root.findall("part")[:1]:
+        measures = part.findall("measure")
+        if not 0 <= index < len(measures):
+            raise EditError(f"No bar number {index + 1}")
+        if index == 0:
+            raise EditError("The first bar already starts a line.")
+        measure = measures[index]
+        existing = [found for found in measure.findall("print") if (found.get("id") or "").startswith(BREAK_PREFIX)]
+        for found in existing:
+            measure.remove(found)
+        if not existing:
+            number = sum((found.get("id") or "").startswith(BREAK_PREFIX) for found in root.iter("print"))
+            used = {found.get("id") for found in root.iter("print")}
+            while f"{BREAK_PREFIX}{number}" in used:
+                number += 1
+            measure.insert(0, ET.Element("print", {"new-system": "yes", "id": f"{BREAK_PREFIX}{number}"}))
+
+
+def set_bars_per_line(root: ET.Element, count: int) -> None:
+    """Keep this many bars on each line, or leave it to the page if the count is 0."""
+    if not 0 <= count <= MOST_BARS_PER_LINE:
+        raise EditError(f"A line can have up to {MOST_BARS_PER_LINE} bars.")
+    write_setting(root, BARS_PER_LINE, str(count) if count else None)
+
+
+def bars_per_line(root: ET.Element) -> int:
+    return int(read_setting(root, BARS_PER_LINE) or 0)
 
 
 def surviving_bars(root: ET.Element) -> set[int | None]:

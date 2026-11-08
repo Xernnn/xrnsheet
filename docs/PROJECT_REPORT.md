@@ -313,6 +313,36 @@ So I traced the lost boxes, which is what I should have done first. Each suggest
 
 So the photo drop is explained but not fixed. A photo's boxes come out taller, which pushes the gap between close chords under the limit for splitting them. A fix has to avoid cutting handwriting, and I don't have one yet.
 
+## Step 15: Closing the gap with MuseScore
+
+I compared the editor with MuseScore feature by feature and built most of what a working musician would notice: transposition, four voices on a staff, slurs and hairpins, articulations and ornaments, dynamics, tempo marks, text, grace notes, clefs, 17 instruments in several parts, line breaks, pickup bars, tuplets of 5, 6 and 7, lyric verses, opening MusicXML files, MIDI and audio export, a MIDI keyboard, and dragging notes. Playback now follows dynamics, tempo changes, swing, articulations, ornaments, and D.C. and D.S.
+
+**Transposing is about names, not numbers.** Adding 3 semitones to C gives a note that could be called D♯ or E♭, and only one is right in the new key. So an interval has two parts, letter steps and semitones, and C up a minor third is always E♭. Chord symbols move the same way, and a key that would need too many flats is swapped for the one that sounds the same.
+
+**Some marks belong to notes and some belong to moments.** A staccato sits on a note, so it goes when the note goes. A dynamic or a hairpin belongs to a moment in the bar, so it stays when you change the notes around it. That split decided where each mark lives in the file and what has to be repaired after an edit.
+
+**A mark can be hard to click.** Verovio makes up its own ids for most marks, so I match them to the file by their order in each bar, and leave a bar unclickable if the count disagrees, not guess. A slur is too thin for a click to land on, and its box covers the notes under it, so the app measures the distance to the curve itself. A slur across a line break is drawn in two pieces, and the second has no id, only a class. That would have failed silently, so I checked it.
+
+**Random edits found what I hadn't thought of.** I gave the random test all the new edits, plus new rules: a slur has both ends, a tie leads somewhere, and every score can be drawn, played and saved as MIDI. It failed straight away. Moving a note to another voice crashed on any file with no `<voice>` tag, which is normal in files from other programs. Ties were checked against the next note in the same voice, which might be bars away. Playback also read each bar voice by voice, so a tie from voice 2 into voice 1 reached its end before its start and sounded twice.
+
+**Not every failure was a bug.** Three times the rule was wrong and the editor was right. An extra voice holding only rests looked like a leftover, but someone who types a rest and then a note needs it to survive, so the true rule is that it can always be removed. A dangling tie on Joplin was already in the file before any edit. Voice 5 is usually the main voice of a piano's lower staff. Each time I checked before changing the code, and the check decided which side to fix.
+
+**Looking at the page again.** A dotted tempo printed an empty box where the dot belongs, the private-font problem from earlier. Every test passed, because the text around it was right. It only showed when I rendered one and looked at it. My notes also said rendering raises an error on any unmapped symbol, and it didn't. That check now exists in the tests, and it covers lengths a person can't pick but a file can name.
+
+**Real scores.** The benchmark's pieces came through a pipeline I control, so I also opened 67 scores from the music21 corpus, none of them used in development, and made 19 edits on each. All 67 survived, with 1,212 edits applied and 61 refused with a reason. The bar check flagged 147 bars as too long. I checked those instead of assuming: Monteverdi's parts really do disagree inside a bar, and a Beethoven bar really does hold one sixteenth too many.
+
+**Bugs put back.** I put back 51 bugs, and 41 were caught at once. The other 10 were the most useful part of the stage.
+
+One was removing hairpin repair from every edit. Nothing noticed because the code did nothing: a hairpin belongs to a moment, so a note edit can't hurt it. I deleted the code instead of writing a test to justify it.
+
+The other 9 were weak tests, and each looked fine when I read it. My check that audio never clips couldn't fail, because a 16-bit number can't go over its limit: it wraps round, and a loud sample came out as near silence. My check that arrows stay in a voice passed because, in the middle of a bar, document order happens to agree. Only the last note shows the bug, where the arrow jumped back to the start of the bar. A test that a key waits its turn had nothing waiting. A short drag stayed close enough to reselect the note, which hid the bug. Tests can sit on top of a behaviour without touching it. One gap mattered more than the rest: nothing checked that a transposed sheet stays out of retraining, and that guard is what stops deliberate chord changes becoming wrong training labels. All 50 real bugs are now caught.
+
+The run also taught me about running it. One bug showed as caught when the failure was a typing error of mine in a test file, because the run copied live files. It now works from a frozen copy, starts with a control run that has no bug added, and counts only a failed test.
+
+**Real files say what they say.** The bar check's 26 "short" flags on those 67 scores aren't mistakes in the music: nearly all are one part of a quartet stopping early in the file with no rest written. The flag is accurate about the file, and a musician wouldn't call it an error.
+
+**Limits.** The sound is simple waveforms, so parts can be told apart but nothing sounds like the real instrument. There's no fingering, pedal or 8va line, no cross-staff notes, and a printed part is a copy, not linked to the score. No person has used any of this yet.
+
 ## Final results
 
 Synthetic pages, as chord recall / correct placement, with homr reading the notes. Audiveris runs as it comes, and the RapidOCR column is my pipeline with RapidOCR as the reader.
@@ -339,7 +369,7 @@ homr's scores are inflated, because its training data overlaps with how my image
 
 ![Chord accuracy on held-out fonts](figures/chord_accuracy.png)
 
-A page takes 15 to 30 seconds on CPU with homr, and about 4 with my note reader. In the finished editor, a typed note takes a median of 27 ms on a 32-bar score and 68 ms on 200 bars, including redrawing every page. The test suite has 731 tests, plus a browser test with 118 checks that passes in Chromium and Firefox. Results for my note reader are in step 10.
+A page takes 15 to 30 seconds on CPU with homr, and about 4 with my note reader. In the finished editor, a typed note takes a median of 25 ms on a 32-bar score and 60 ms on 200 bars, including redrawing every page. The test suite has 731 tests, plus a browser test with 118 checks that passes in Chromium and Firefox. Results for my note reader are in step 10.
 
 ### What it runs on
 
@@ -361,6 +391,9 @@ Everything ran on one laptop: an Intel i7-12700H, 23 GB of RAM, and an NVIDIA RT
 - **I half-fixed a bar.** The first voice repair moved what it could, and the note score fell. A repair now fixes a whole bar or leaves it alone.
 - **I tested at one speed in one browser.** Two whole classes of bug only appeared with a slowed server or in Firefox.
 - **My rule checks had a blind spot.** I checked that every bar adds up after every edit, which felt thorough. A broken triplet passed all of it, because its lengths still added up. Only putting bugs back showed the gap.
+- **I counted a typing error as a caught bug.** A mutation run reported a catch that was really my own broken test file. A check needs a control, or it can't tell the two apart.
+- **I wrote a test that couldn't fail, again.** "The audio never goes over the limit" is always true of a 16-bit number. Reading a test isn't enough to know it works. Only breaking the code shows that.
+- **I wrote a note about a safety check that didn't exist.** My notes said rendering stopped on any unknown music symbol. It never did, and a dotted tempo printed an empty box.
 
 ## What doesn't work yet
 
@@ -371,7 +404,8 @@ Everything ran on one laptop: an Intel i7-12700H, 23 GB of RAM, and an NVIDIA RT
 - **Placement with homr is weaker than recall.** About 5 points are lost, mostly late on the page, where note counts stop matching. homr 0.7 doesn't report barlines. A newer unreleased version reports positions directly, but I couldn't install it in this setup.
 - **Retraining isn't shown to help.** The tools work, but a few dozen corrections made no measurable difference.
 - **False symbols appear.** homr adds about one false fermata per page. "Clear marks" fixes them one click at a time.
-- **Nobody has used the editor on a real piece.** Its tests show that it does what I specified, not that it's pleasant to use. D.C. and D.S. aren't followed, a range covers one voice, and no person has listened to playback.
+- **Nobody has used the editor on a real piece.** Its tests show that it does what I specified, not that it's pleasant to use. A range covers one voice, and no person has listened to playback.
+- **The editor's sound is basic,** and it has no fingering, pedal or 8va lines, no cross-staff notes, and no linked parts.
 - **The bar repairs rest on one piece.** The signature repair has only ever changed Schubert.
 - **Simulated photos still lose chords with my note reader.** Close chords stay glued together, and the fix I tried added false chords on the real page.
 - **Evidence is thin.** One real page, one short strip, and my own transcription.
@@ -382,7 +416,7 @@ Everything ran on one laptop: an Intel i7-12700H, 23 GB of RAM, and an NVIDIA RT
 2. **Use it on my own sheets for two or three weeks,** with 5 to 10 pages set aside first as a test I never tune on. `bench/real_report.py` then gives the first honest accuracy on real sheets.
 3. **Test Soundslice** on the same sheets, using `--engine soundslice`. If it already reads chords well, the startup case changes.
 4. **Teach the note reader handwriting.** It has never seen any, so this needs hand-drawn training data. JAZZMUS could be used for testing and learning, but not for a commercial model.
-5. **Add more than one voice per staff,** which is what classical music needs.
+5. **Teach my note reader more than one voice per staff,** which is what classical music needs. The editor can already hold four.
 6. **Train a chord detector**, if real labels appear. Most losses are in the boxes, and step 14 shows that hand-written rules are reaching their limit.
 7. **Use the free reader on print** and keep my model for handwriting, if real data supports that.
 

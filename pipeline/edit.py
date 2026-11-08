@@ -17,6 +17,7 @@ from chords.vocab import parse_chord
 from pipeline.musicxml import chord_from_harmony, harmony_element
 from pipeline.rhythm import (
     LENGTHS,
+    NATURAL_SEMITONES,
     STEPS,
     Context,
     EditError,
@@ -50,7 +51,7 @@ from pipeline.rhythm import (
     write_measure,
     write_offset,
 )
-from pipeline.structure import insert_measure, origin_of
+from pipeline.structure import VOICES_PER_STAFF, insert_measure, origin_of
 
 # Where the first note on an empty staff lands: the middle of that clef's staff.
 CLEF_MIDDLE = {"G": ("B", 4), "F": ("D", 3), "C": ("C", 4)}
@@ -58,6 +59,8 @@ ENTERED_LENGTHS = {"whole", "half", "quarter", "eighth", "16th", "32nd", "64th"}
 MOST_DOTS = 2
 AFTER = "after:"
 MOST_LYRIC_LETTERS = 60
+MOST_VERSES = 6
+TUPLET_SIZES = {3, 5, 6, 7}
 SYLLABLES = {(False, False): "single", (False, True): "begin", (True, True): "middle", (True, False): "end"}
 Pitch = tuple[str, int, int]
 
@@ -206,6 +209,106 @@ def locate_cursor(root: ET.Element, cursor: str) -> Spot:
     if cursor.startswith(AFTER):
         return next_bar(root, locate(root, cursor.removeprefix(AFTER)))
     return locate(root, cursor)
+
+
+def voices_on_staff(part: ET.Element, staff: str) -> list[str]:
+    """Return the voices a staff uses, lowest first. Files number them in different ways."""
+    used = {
+        note.findtext("voice") or "1"
+        for note in part.iter("note")
+        if (note.findtext("staff") or "1") == staff
+    }
+    return sorted(used, key=int)
+
+
+def voice_number(spot: Spot) -> int:
+    """Say which voice of its staff this is, counting from 1."""
+    return voices_on_staff(spot.part, spot.key[0]).index(spot.key[1]) + 1
+
+
+def key_for_voice(spot: Spot, number: int) -> tuple[str, str]:
+    """Return the voice to write in. A new voice takes the next free number, four to a staff at most."""
+    if not 1 <= number <= VOICES_PER_STAFF:
+        raise EditError(f"A staff has {VOICES_PER_STAFF} voices.")
+    used = voices_on_staff(spot.part, spot.key[0])
+    return spot.key[0], used[number - 1] if number <= len(used) else str(int(used[-1]) + 1)
+
+
+def bar_end(spot: Spot) -> Fraction:
+    """Return where this bar ends, which in a pickup is where its music ends."""
+    written = max((line_end(line) for line in spot.timeline.lines.values()), default=Fraction(0))
+    return written if spot.context.is_pickup else max(spot.context.length, written)
+
+
+def in_voice(spot: Spot, number: int) -> Spot:
+    """Return this same moment in another voice, opening that voice with rests if it's new here.
+
+    A rest lying across the moment is split, so something can be written from exactly there.
+    """
+    key = key_for_voice(spot, number)
+    if key == spot.key:
+        return spot
+    onset, end = spot.event.onset, bar_end(spot)
+    line = spot.timeline.lines.setdefault(key, [])
+    covering = next((event for event in line if event.onset <= onset < event.end), None)
+    if covering is not None and covering.onset == onset:
+        return Spot(spot.part, spot.context, spot.timeline, key, covering, covering.notes[0], spot.is_pickup)
+    if covering is not None and not covering.is_rest:
+        raise EditError("That voice is already playing a note here.")
+    if covering is not None and covering.in_tuplet:
+        raise EditError("That voice has a triplet here.")
+    if covering is not None:
+        line.remove(covering)
+        made = [*rests(covering.onset, onset, spot.context, key), *rests(onset, covering.end, spot.context, key)]
+    else:
+        before = max((event.end for event in line if event.end <= onset), default=Fraction(0))
+        after = min((event.onset for event in line if event.onset > onset), default=end)
+        made = [*rests(before, onset, spot.context, key), *rests(onset, after, spot.context, key)]
+    line.extend(made)
+    line.sort(key=lambda event: event.onset)
+    event = next(event for event in line if event.onset == onset)
+    return Spot(spot.part, spot.context, spot.timeline, key, event, event.notes[0], spot.is_pickup)
+
+
+def drop_empty_voice(spot: Spot) -> None:
+    """Take a bar's extra voice away once it holds only rests, so they don't clutter the staff."""
+    if voices_on_staff(spot.part, spot.key[0]).index(spot.key[1]) == 0:
+        return
+    if all(event.is_rest for event in spot.line):
+        del spot.timeline.lines[spot.key]
+
+
+def move_to_voice(root: ET.Element, note_ids: list[str], number: int) -> None:
+    """Move notes into another voice of their staff, as when a line turns out to be two."""
+    fit_divisions(root)
+    done = False
+    for note_id in note_ids:
+        spot = locate(root, note_id)
+        if spot.event.is_rest or spot.event.notes[0].get("id") != note_id:
+            continue
+        target = in_voice(spot, number)
+        if target.key == spot.key:
+            continue
+        event = spot.event
+        if event.in_tuplet:
+            raise EditError("Notes in a triplet can't change voice yet.")
+        for note in [*event.grace, *event.notes]:
+            # Files from other programs often leave the voice out when there's only one.
+            if note.find("voice") is None:
+                place(note, ET.Element("voice"))
+            note.find("voice").text = target.key[1]
+        spot.line.remove(event)
+        spot.timeline.lines[target.key] = overwrite(target.line, event, spot.context, target.key)
+        spot.line.extend(rests(event.onset, event.end, spot.context, spot.key))
+        spot.line.sort(key=lambda item: item.onset)
+        drop_empty_voice(spot)
+        write_measure(spot.context.measure, spot.timeline, spot.context.divisions)
+        repair_tuplets(spot.context)
+        respell(spot.context)
+        finish_edit(root, spot.part, spot.context.index, spot.context.index)
+        done = True
+    if not done:
+        raise EditError("Those notes are already in that voice.")
 
 
 def make_stack(length: Fraction, context: Context, key: tuple[str, str], pitches: list[Pitch], tuplet: Tuplet | None = None) -> list[ET.Element]:
@@ -371,6 +474,21 @@ def alter_in_force(spot: Spot, step: str, octave: int) -> int:
     return alter
 
 
+def pitch_of_key(number: int, fifths: int) -> Pitch:
+    """Name a key of a MIDI keyboard, spelling black keys the way the key signature leans."""
+    if not 12 <= number <= 127:
+        raise EditError("That key is out of range.")
+    octave, semitone = number // 12 - 1, number % 12
+    natural = next((step for step, value in NATURAL_SEMITONES.items() if value == semitone), None)
+    if natural is not None:
+        return natural, 0, octave
+    if fifths < 0:
+        step = next(step for step, value in NATURAL_SEMITONES.items() if value == semitone + 1)
+        return step, -1, octave
+    step = next(step for step, value in NATURAL_SEMITONES.items() if value == semitone - 1)
+    return step, 1, octave
+
+
 def pitch_on_line(spot: Spot, line: int) -> Pitch:
     """Return the pitch at a place on the staff, counted in steps down from the top line."""
     height = spot.context.tops.get(spot.key[0], diatonic("F", 5)) - line
@@ -380,19 +498,25 @@ def pitch_on_line(spot: Spot, line: int) -> Pitch:
     return step, alter_in_force(spot, step, octave), octave
 
 
-def write_note(root: ET.Element, at_id: str, type_name: str, dots: int, step: str | None, line: int | None = None) -> dict:
+def write_note(root: ET.Element, at_id: str, type_name: str, dots: int, step: str | None, line: int | None = None, voice: int | None = None, midi: int | None = None) -> dict:
     """Write a note, or a rest if there's no step, over whatever is at this event.
 
     A letter says which note but not which octave, so it takes the nearest to the note before,
     which is what you almost always mean. A click gives the exact staff line instead.
+    A voice number writes at this same moment in that voice, and a key of a MIDI keyboard says
+    exactly which note it is.
     """
     if step is not None and step not in STEPS:
         raise EditError("A note is a letter from A to G.")
     fit_divisions(root)
     spot = locate_cursor(root, at_id)
+    if voice is not None:
+        spot = in_voice(spot, voice)
     length = length_of(type_name, dots)
     pitches: list[Pitch] = []
-    if line is not None:
+    if midi is not None:
+        pitches = [pitch_of_key(midi, spot.context.fifths)]
+    elif line is not None:
         pitches = [pitch_on_line(spot, line)]
     elif step is not None:
         octave = round((previous_height(spot) - STEPS.index(step)) / 7)
@@ -401,25 +525,73 @@ def write_note(root: ET.Element, at_id: str, type_name: str, dots: int, step: st
     return {"written": written.head[0].get("id"), "cursor": written.cursor}
 
 
-def add_pitch(root: ET.Element, note_id: str, step: str, line: int | None = None) -> str:
+def respell_note(root: ET.Element, note_id: str) -> None:
+    """Swap a note for the same sound under another name, as C sharp for D flat."""
+    note = find_note(root, note_id)
+    pitch = note.find("pitch")
+    if pitch is None:
+        raise EditError("Rests have no pitch to respell.")
+    step, alter = pitch.findtext("step"), int(float(pitch.findtext("alter") or 0))
+    octave = int(pitch.findtext("octave"))
+    sound = 12 * octave + NATURAL_SEMITONES[step] + alter
+    # Up a letter name, or down one for a note with a flat, whichever leaves fewer accidentals.
+    choices = []
+    for change in (1, -1):
+        height = diatonic(step, octave) + change
+        other, other_octave = STEPS[height % 7], height // 7
+        other_alter = sound - 12 * other_octave - NATURAL_SEMITONES[other]
+        if abs(other_alter) <= 2:
+            choices.append((abs(other_alter), other_alter < 0 if alter > 0 else other_alter > 0, other, other_alter, other_octave))
+    if not choices:
+        raise EditError("This note has no other spelling.")
+    _, _, other, other_alter, other_octave = min(choices)
+    pitch.find("step").text = other
+    pitch.find("octave").text = str(other_octave)
+    write_alter(pitch, other_alter)
+    part, context = context_of(root, note)
+    respell(context)
+    repair_ties(part, context.index)
+
+
+def flip_stem(root: ET.Element, note_id: str) -> None:
+    """Turn a note's stem the other way. The drawing decides when nothing has been said."""
+    spot = locate(root, note_id)
+    if spot.event.is_rest:
+        raise EditError("Rests have no stem.")
+    first = spot.event.notes[0].find("stem")
+    # Verovio puts stems of notes on or above the middle line down, so that's the one to go against.
+    middle = spot.context.tops.get(spot.key[0], diatonic("F", 5)) - 4
+    drawn_down = height_of(spot.event.notes[0]) >= middle
+    now = first.text if first is not None else ("down" if drawn_down else "up")
+    for note in spot.event.notes:
+        for found in note.findall("stem"):
+            note.remove(found)
+        stem = ET.Element("stem")
+        stem.text = "up" if now == "down" else "down"
+        place(note, stem)
+
+
+def add_pitch(root: ET.Element, note_id: str, step: str, line: int | None = None, midi: int | None = None) -> str:
     """Stack a note on the ones already at this event, to build a chord on one stem.
 
-    A letter goes above the top note. A click gives the exact staff line instead.
+    A letter goes above the top note. A click or a MIDI key gives the exact note instead.
     """
-    if line is None and step not in STEPS:
+    if line is None and midi is None and step not in STEPS:
         raise EditError("A note is a letter from A to G.")
     fit_divisions(root)
     spot = locate(root, note_id)
     if spot.event.is_rest:
         raise EditError("Add a note here first, then stack others on it.")
-    if line is None:
+    if midi is not None:
+        step, alter, octave = pitch_of_key(midi, spot.context.fifths)
+    elif line is not None:
+        step, alter, octave = pitch_on_line(spot, line)
+    else:
         top = max(height_of(note) for note in spot.event.notes)
         octave = (top - STEPS.index(step)) // 7 + 1
         alter = alteration_in_key(step, spot.context.fifths)
-    else:
-        step, alter, octave = pitch_on_line(spot, line)
-        if any(height_of(note) == diatonic(step, octave) for note in spot.event.notes):
-            raise EditError("That note is already in this chord.")
+    if (midi is not None or line is not None) and any(height_of(note) == diatonic(step, octave) for note in spot.event.notes):
+        raise EditError("That note is already in this chord.")
     note = copy.deepcopy(spot.event.notes[0])
     note.attrib.pop("id", None)
     for tag in ("tie", "accidental", "beam", "notations", "lyric", "chord"):
@@ -587,10 +759,15 @@ def set_accidental(root: ET.Element, note_id: str, alter: int) -> None:
 
 
 def delete_note(root: ET.Element, note_id: str) -> None:
-    """Remove a note. Its time has to stay filled, so a lone note becomes a rest."""
+    """Remove a note. Its time has to stay filled, so a lone note becomes a rest.
+
+    Only a staff's first voice has to fill its bars. An extra voice can simply stop, so one of its
+    rests can be removed, and it leaves the bar with its last note.
+    """
     note = find_note(root, note_id)
     if note.find("pitch") is None:
-        raise EditError("This is already a rest")
+        delete_extra_rest(root, note_id)
+        return
     part, context = context_of(root, note)
     if note.find("grace") is not None:
         context.measure.remove(note)
@@ -603,6 +780,8 @@ def delete_note(root: ET.Element, note_id: str) -> None:
             second.remove(second.find("chord"))
         context.measure.remove(note)
     else:
+        for grace in spot.event.grace:
+            context.measure.remove(grace)
         pitch_index = list(note).index(note.find("pitch"))
         note.remove(note.find("pitch"))
         note.insert(pitch_index, ET.Element("rest"))
@@ -613,15 +792,43 @@ def delete_note(root: ET.Element, note_id: str) -> None:
     respell(context)
     repair_ties(part, context.index)
     repair_slurs(part)
+    spot = empty_extra_voice(part, context)
+    if spot is not None:
+        drop_empty_voice(spot)
+        write_measure(context.measure, spot.timeline, context.divisions)
 
 
-def make_tuplet(root: ET.Element, note_id: str, length: Fraction | None = None, keep_note: bool = True) -> dict:
-    """Turn a length into a triplet of three rests, with any note already here as the first.
+def empty_extra_voice(part: ET.Element, context: Context) -> Spot | None:
+    """Return an extra voice in this bar that holds only rests, if there is one."""
+    timeline = read_measure(context.measure, context.divisions)
+    for key, line in timeline.lines.items():
+        if voices_on_staff(part, key[0]).index(key[1]) > 0 and all(event.is_rest for event in line):
+            return Spot(part, context, timeline, key, line[0], line[0].notes[0])
+    return None
+
+
+def delete_extra_rest(root: ET.Element, note_id: str) -> None:
+    spot = locate(root, note_id)
+    if voices_on_staff(spot.part, spot.key[0]).index(spot.key[1]) == 0:
+        raise EditError("This is already a rest")
+    if spot.event.in_tuplet:
+        raise EditError("Rests in a triplet can't be removed this way.")
+    spot.line.remove(spot.event)
+    if not spot.line or all(event.is_rest for event in spot.line):
+        del spot.timeline.lines[spot.key]
+    write_measure(spot.context.measure, spot.timeline, spot.context.divisions)
+    respell(spot.context)
+
+
+def make_tuplet(root: ET.Element, note_id: str, length: Fraction | None = None, keep_note: bool = True, actual: int = 3) -> dict:
+    """Turn a length into a tuplet of rests, with any note already here as the first.
 
     Without a length, it divides the event at this place. The result says which note length the
-    triplet uses, because that's what the writer will want next.
+    tuplet uses, because that's what the writer will want next.
     """
-    fit_divisions(root)
+    if actual not in TUPLET_SIZES:
+        raise EditError("That isn't a tuplet this app can write.")
+    fit_divisions(root, actual)
     spot = locate_cursor(root, note_id)
     context, key, onset = spot.context, spot.key, spot.event.onset
     span = spot.event.length if length is None else length
@@ -629,11 +836,12 @@ def make_tuplet(root: ET.Element, note_id: str, length: Fraction | None = None, 
         raise EditError("Triplets inside triplets aren't supported.")
     if onset + span > context.length:
         raise EditError("That triplet is too long to fit in this bar.")
-    written = span / 2
+    tuplet = Tuplet.of(actual)
+    written = span / tuplet.normal
     name, dots = type_of(written)
     if dots:
         raise EditError("A triplet needs a length without a dot.")
-    tuplet = Tuplet(unit=name)
+    tuplet = Tuplet.of(actual, name)
     pitches = pitches_of(spot.event) if keep_note else []
     spot.timeline.lines[key] = [event for event in overwrite(spot.line, Event(onset, span, []), context, key) if event.notes]
     members = []
@@ -659,24 +867,24 @@ def remove_tuplet(root: ET.Element, note_id: str) -> str:
     return gap[0].notes[0].get("id")
 
 
-def toggle_tuplet(root: ET.Element, note_id: str, length: Fraction | None = None) -> dict:
-    """Make a triplet here, or undo the one that's already here."""
+def toggle_tuplet(root: ET.Element, note_id: str, length: Fraction | None = None, actual: int = 3) -> dict:
+    """Make a tuplet here, or undo the one that's already here."""
     if not note_id.startswith(AFTER) and locate(root, note_id).event.in_tuplet:
         return {"cursor": remove_tuplet(root, note_id)}
-    return make_tuplet(root, note_id, length)
+    return make_tuplet(root, note_id, length, actual=actual)
 
 
-def lyric_of(note: ET.Element) -> ET.Element | None:
-    return next((found for found in note.findall("lyric") if found.get("number", "1") == "1"), None)
+def lyric_of(note: ET.Element, verse: int = 1) -> ET.Element | None:
+    return next((found for found in note.findall("lyric") if found.get("number", "1") == str(verse)), None)
 
 
-def link_syllables(part: ET.Element, key: tuple[str, str]) -> None:
+def link_syllables(part: ET.Element, key: tuple[str, str], verse: int = 1) -> None:
     """Work out each syllable's place in its word, which depends on the syllables around it."""
     joined = False
     for context in contexts(part):
         line = read_measure(context.measure, context.divisions).lines.get(key, [])
         for event in sorted(line, key=lambda item: item.onset):
-            lyric = lyric_of(event.notes[0])
+            lyric = lyric_of(event.notes[0], verse)
             if lyric is None:
                 continue
             carries_on = lyric.findtext("syllabic") in ("begin", "middle")
@@ -695,35 +903,42 @@ def next_note_id(spot: Spot) -> str | None:
     return None
 
 
-def store_lyric(spot: Spot, text: str, joined: bool | None) -> None:
+def store_lyric(spot: Spot, text: str, joined: bool | None, verse: int = 1) -> None:
     """Put a word or syllable under a note. `joined` means the word carries on at the next note."""
     if spot.event.is_rest:
         raise EditError("Lyrics go under notes, not rests.")
+    if not 1 <= verse <= MOST_VERSES:
+        raise EditError(f"A note can have up to {MOST_VERSES} verses.")
     text = text.strip()
     if len(text) > MOST_LYRIC_LETTERS:
         raise EditError("That's too long for one note.")
     note = spot.event.notes[0]
-    existing = lyric_of(note)
+    existing = lyric_of(note, verse)
     if joined is None:
         joined = existing is not None and existing.findtext("syllabic") in ("begin", "middle")
     if existing is not None:
         note.remove(existing)
     if text:
-        lyric = ET.Element("lyric", number="1")
+        lyric = ET.Element("lyric", number=str(verse))
         ET.SubElement(lyric, "syllabic").text = "begin" if joined else "single"
         ET.SubElement(lyric, "text").text = text
-        place(note, lyric)
-    link_syllables(spot.part, spot.key)
+        # Verses stay in order under the note, because that's the order they're drawn in.
+        later = [found for found in note.findall("lyric") if int(found.get("number", "1")) > verse]
+        if later:
+            note.insert(list(note).index(later[0]), lyric)
+        else:
+            place(note, lyric)
+    link_syllables(spot.part, spot.key, verse)
 
 
-def set_lyric(root: ET.Element, note_id: str, text: str, joined: bool | None = False) -> dict:
+def set_lyric(root: ET.Element, note_id: str, text: str, joined: bool | None = False, verse: int = 1) -> dict:
     """Store a syllable someone typed, and say which note comes next.
 
     `joined` of None keeps how it was joined. A word typed on the last note has nothing to join.
     """
     spot = locate(root, note_id)
     following = next_note_id(spot)
-    store_lyric(spot, text, joined if following else False)
+    store_lyric(spot, text, joined if following else False, verse)
     return {"next": following}
 
 
@@ -778,10 +993,16 @@ def copy_range(root: ET.Element, first_id: str, last_id: str) -> dict:
                 "pitches": [list(pitch) for pitch in pitches_of(event)],
                 "tie": any(is_tied(note, "start") for note in event.notes) and number == len(written) - 1,
                 "triplet": triplet,
+                "actual": event.tuplet.actual if event.in_tuplet else 3,
                 "chord": chord_on(context, event) if number == 0 else None,
                 "lyric": None if lyric is None or number else {"text": lyric.findtext("text") or "", "joined": lyric.findtext("syllabic") in ("begin", "middle")},
+                "source": event.notes[0].get("id") if number == 0 else None,
             })
-    return {"events": items}
+    context, _, event = chosen[-1]
+    part = locate(root, event.notes[0].get("id")).part
+    key = locate(root, event.notes[0].get("id")).key
+    after = next_id(part, context, key, event.end) or AFTER + event.notes[-1].get("id")
+    return {"events": items, "next": after}
 
 
 def checked_pitches(item: dict) -> list[Pitch]:
@@ -815,19 +1036,22 @@ def paste(root: ET.Element, at_id: str, items: list[dict]) -> dict:
     cursor = at_id
     tied: list[ET.Element] = []
     written: Written | None = None
+    placed: list[str] = []
     triplets_done: set[int] = set()
     for number, item in enumerate(items):
         triplet = item["triplet"]
         if triplet is not None and triplet not in triplets_done:
             triplets_done.add(triplet)
             span = sum((length_of(other["type"], other["dots"]) for other in items if other["triplet"] == triplet), Fraction(0))
-            cursor = make_tuplet(root, cursor, span * Tuplet().scale, keep_note=False)["cursor"]
+            actual = item.get("actual", 3)
+            cursor = make_tuplet(root, cursor, span * Tuplet.of(actual).scale, keep_note=False, actual=actual)["cursor"]
         spot = locate_cursor(root, cursor)
         first_bar = spot.context.index if first_bar is None else first_bar
         written = write_at(root, spot, length_of(item["type"], item["dots"]), checked_pitches(item))
         tie_together(tied, written.head)
         tied = written.tail if item["tie"] and number + 1 < len(items) else []
         cursor = written.cursor
+        placed.append(written.head[0].get("id"))
         landed = locate(root, written.head[0].get("id"))
         if item["chord"]:
             set_chord_at(root, landed, item["chord"])
@@ -837,53 +1061,56 @@ def paste(root: ET.Element, at_id: str, items: list[dict]) -> dict:
     for context in list(contexts(part))[first_bar : last_bar + 1]:
         respell(context)
     finish_edit(root, part, first_bar, last_bar)
-    return {"written": written.tail[0].get("id"), "cursor": cursor}
+    return {"written": written.tail[0].get("id"), "cursor": cursor, "placed": placed}
 
 
 def clear_marks(root: ET.Element, note_id: str) -> None:
-    """Remove fermatas, ornaments and articulations, keeping slurs and ties.
+    """Remove fermatas, ornaments, articulations and bowings, keeping slurs and ties.
 
     Chord text just above a staff is sometimes misread as one of these, about once a page.
     """
     notations = find_note(root, note_id).find("notations")
     removed = 0
     if notations is not None:
-        for tag in ("fermata", "ornaments", "articulations"):
+        for tag in ("fermata", "ornaments", "articulations", "technical", "arpeggiate"):
             for child in notations.findall(tag):
                 notations.remove(child)
                 removed += 1
     if not removed:
         raise EditError("This note has no marks to clear")
+    if len(notations) == 0:
+        find_note(root, note_id).remove(notations)
 
 
 def list_chords(root: ET.Element) -> list[dict]:
-    """List chords in document order, which matches their order on the rendered page."""
+    """List chords in the order they're drawn, which goes bar by bar through every part."""
     chords = []
-    part = root.find("part")
-    divisions = 1.0
-    for measure_index, measure in enumerate(part.findall("measure")):
-        position = 0.0
-        for child in measure:
-            length = float(child.findtext("duration") or 0)
-            if child.tag == "attributes":
-                divisions = float(child.findtext("divisions") or divisions)
-            elif child.tag == "harmony":
-                chord = chord_from_harmony(child)
-                onset = round(position + float(offset_of(child, int(divisions))), 3)
-                chords.append({
-                    "index": len(chords),
-                    "text": str(chord) if chord else "?",
-                    "measure": measure_index,
-                    "origin": origin_of(measure, measure_index),
-                    "onset": onset,
-                })
-            elif child.tag == "backup":
-                position -= length / divisions
-            elif child.tag == "forward":
-                position += length / divisions
-            elif child.tag == "note" and child.find("chord") is None and child.find("grace") is None:
-                position += length / divisions
-    return chords
+    for part_number, part in enumerate(root.findall("part")):
+        divisions = 1.0
+        for measure_index, measure in enumerate(part.findall("measure")):
+            position = 0.0
+            for child in measure:
+                length = float(child.findtext("duration") or 0)
+                if child.tag == "attributes":
+                    divisions = float(child.findtext("divisions") or divisions)
+                elif child.tag == "harmony":
+                    chord = chord_from_harmony(child)
+                    onset = round(position + float(offset_of(child, int(divisions))), 3)
+                    chords.append({
+                        "text": str(chord) if chord else "?",
+                        "measure": measure_index,
+                        "origin": origin_of(measure, measure_index),
+                        "onset": onset,
+                        "part": part_number,
+                    })
+                elif child.tag == "backup":
+                    position -= length / divisions
+                elif child.tag == "forward":
+                    position += length / divisions
+                elif child.tag == "note" and child.find("chord") is None and child.find("grace") is None:
+                    position += length / divisions
+    chords.sort(key=lambda chord: (chord["measure"], chord["part"]))
+    return [chord | {"index": index} for index, chord in enumerate(chords)]
 
 
 def require_chord(text: str):
@@ -894,7 +1121,12 @@ def require_chord(text: str):
 
 
 def harmony_at(root: ET.Element, index: int) -> tuple[ET.Element, ET.Element]:
-    harmonies = [(measure, harmony) for measure in root.find("part").findall("measure") for harmony in measure.findall("harmony")]
+    placed = []
+    for part_number, part in enumerate(root.findall("part")):
+        for measure_index, measure in enumerate(part.findall("measure")):
+            placed.extend((measure_index, part_number, measure, harmony) for harmony in measure.findall("harmony"))
+    placed.sort(key=lambda item: item[:2])
+    harmonies = [item[2:] for item in placed]
     if not 0 <= index < len(harmonies):
         raise EditError(f"No chord number {index}")
     return harmonies[index]

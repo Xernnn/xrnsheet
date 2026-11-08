@@ -36,6 +36,8 @@ NOTE_ORDER = [
 ]
 SHARP_ORDER = "FCGDAEB"
 STEPS = "CDEFGAB"
+NATURAL_SEMITONES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+FIFTHS_FROM_C = {"F": -1, "C": 0, "G": 1, "D": 2, "A": 3, "E": 4, "B": 5}
 CLEF_PITCHES = {"G": ("G", 4), "F": ("F", 3), "C": ("C", 4)}
 ACCIDENTAL_NAMES = {-2: "flat-flat", -1: "flat", 0: "natural", 1: "sharp", 2: "double-sharp"}
 # These can sit between two notes' start times, because MusicXML gives them an offset.
@@ -58,6 +60,11 @@ class Tuplet:
     actual: int = 3
     normal: int = 2
     unit: str | None = None
+
+    @classmethod
+    def of(cls, actual: int, unit: str | None = None) -> "Tuplet":
+        """Make the usual tuplet of this many notes: 3 in the time of 2, 5 in the time of 4."""
+        return cls(actual, 2 ** (actual.bit_length() - 1), unit)
 
     @property
     def scale(self) -> Fraction:
@@ -143,6 +150,13 @@ class Context:
         return self.measure.get("implicit") == "yes"
 
 
+def fifths_of(steps: int, semitones: int) -> int:
+    """Return how far round the circle of fifths an interval moves a key."""
+    step = STEPS[steps % 7]
+    alter = semitones - NATURAL_SEMITONES[step] - 12 * (steps // 7)
+    return FIFTHS_FROM_C[step] + 7 * alter
+
+
 def diatonic(step: str, octave: int) -> int:
     """Number a pitch by its place on the staff, so one step up is always one more."""
     return STEPS.index(step) + 7 * octave
@@ -174,8 +188,11 @@ def contexts(part: ET.Element) -> Iterator[Context]:
         yield Context(index, measure, divisions, beats, beat_type, fifths, dict(clefs), staves, dict(tops))
 
 
-def fit_divisions(root: ET.Element) -> None:
-    """Rescale a score so that any length a person can enter is a whole number of divisions."""
+def fit_divisions(root: ET.Element, also_divides_by: int = 1) -> None:
+    """Rescale a score so that any length a person can enter is a whole number of divisions.
+
+    A quintuplet needs that number to divide by 5, which most scores never need, so it's asked for.
+    """
     for part in root.findall("part"):
         factor = 1
         for measure in part.findall("measure"):
@@ -183,7 +200,7 @@ def fit_divisions(root: ET.Element) -> None:
                 found = attributes.find("divisions")
                 if found is not None:
                     current = int(found.text)
-                    factor = lcm(current, SMALLEST_DIVISIONS) // current
+                    factor = lcm(current, SMALLEST_DIVISIONS, also_divides_by) // current
                     found.text = str(current * factor)
             if factor == 1:
                 continue
@@ -600,21 +617,44 @@ def set_tie(note: ET.Element, kind: str, wanted: bool) -> None:
         notations.insert(0, ET.Element("tied", type=kind))
 
 
+def notes_starting(timeline: Timeline, onset: Fraction) -> list[ET.Element]:
+    return [note for line in timeline.lines.values() for event in line if event.onset == onset for note in event.notes]
+
+
+def notes_ending(timeline: Timeline, end: Fraction) -> list[ET.Element]:
+    return [note for line in timeline.lines.values() for event in line if event.end == end for note in event.notes]
+
+
+def bar_ending_notes(timeline: Timeline) -> list[ET.Element]:
+    return [note for line in timeline.lines.values() if line for note in max(line, key=lambda event: event.end).notes]
+
+
 def repair_ties(part: ET.Element, index: int) -> None:
-    """Remove half-ties around an edited measure, left when the note at one end has gone."""
+    """Remove half-ties around an edited measure, left when the note at one end has gone.
+
+    A tie joins two sounds, so its other end is whatever sounds at that moment, in any voice. The
+    next note in the same voice won't do: that voice may not play again for bars.
+    """
     known = list(contexts(part))
-    lines: dict[tuple[str, str], list[Event]] = {}
-    for context in known[max(index - 1, 0) : index + 2]:
-        for key, line in read_measure(context.measure, context.divisions).lines.items():
-            lines.setdefault(key, []).extend(sorted(line, key=lambda event: event.onset))
-    for line in lines.values():
-        for before, after in zip(line, line[1:]):
-            for note in before.notes:
-                if is_tied(note, "start") and not any(same_pitch(note, other) and is_tied(other, "stop") for other in after.notes):
-                    set_tie(note, "start", False)
-            for note in after.notes:
-                if is_tied(note, "stop") and not any(same_pitch(note, other) and is_tied(other, "start") for other in before.notes):
-                    set_tie(note, "stop", False)
+    timelines = {number: read_measure(known[number].measure, known[number].divisions) for number in range(max(index - 2, 0), min(index + 3, len(known)))}
+    for number in range(max(index - 1, 0), min(index + 2, len(known))):
+        timeline = timelines[number]
+        for line in timeline.lines.values():
+            ordered = sorted(line, key=lambda event: event.onset)
+            for position, event in enumerate(ordered):
+                if position + 1 < len(ordered):
+                    after = [*ordered[position + 1].notes, *notes_starting(timeline, event.end)]
+                else:
+                    after = notes_starting(timelines[number + 1], Fraction(0)) if number + 1 in timelines else []
+                if position:
+                    before = [*ordered[position - 1].notes, *notes_ending(timeline, event.onset)]
+                else:
+                    before = bar_ending_notes(timelines[number - 1]) if number - 1 in timelines else []
+                for note in event.notes:
+                    if is_tied(note, "start") and not any(same_pitch(note, other) and is_tied(other, "stop") for other in after):
+                        set_tie(note, "start", False)
+                    if is_tied(note, "stop") and not any(same_pitch(note, other) and is_tied(other, "start") for other in before):
+                        set_tie(note, "stop", False)
 
 
 def repair_slurs(part: ET.Element) -> None:
@@ -636,3 +676,24 @@ def repair_slurs(part: ET.Element) -> None:
                         unmatched.append((notations, slur))
     for notations, slur in [*unmatched, *waiting.values()]:
         notations.remove(slur)
+
+
+def repair_wedges(part: ET.Element) -> None:
+    """Remove hairpins that have lost their start or their end."""
+    waiting: dict[str, tuple[ET.Element, ET.Element]] = {}
+    unmatched = []
+    for measure in part.findall("measure"):
+        for direction in measure.findall("direction"):
+            for wedge in direction.iter("wedge"):
+                number = wedge.get("number", "1")
+                if wedge.get("type") == "stop":
+                    if number in waiting:
+                        del waiting[number]
+                    else:
+                        unmatched.append((measure, direction))
+                elif wedge.get("type") in ("crescendo", "diminuendo"):
+                    if number in waiting:
+                        unmatched.append(waiting[number])
+                    waiting[number] = (measure, direction)
+    for measure, direction in [*unmatched, *waiting.values()]:
+        measure.remove(direction)

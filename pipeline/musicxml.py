@@ -49,6 +49,7 @@ QUALITY_TO_KIND: dict[str, tuple[str, list[tuple[int, int]]]] = {
 }
 KIND_TO_QUALITY = {kind: quality for quality, (kind, degrees) in QUALITY_TO_KIND.items() if not degrees}
 ALTER_TEXT = {-1: "b", 0: "", 1: "#"}
+MOST_UNPACKED_BYTES = 64 * 1024 * 1024  # A small compressed file can unpack to something huge.
 
 
 @dataclass
@@ -73,6 +74,24 @@ def load_root(path: Path) -> ET.Element:
             name = next(item.get("full-path") for item in container.iter("rootfile"))
             return ET.fromstring(archive.read(name))
     return ET.parse(path).getroot()
+
+
+def read_score_file(data: bytes, suffix: str) -> ET.Element:
+    """Read a MusicXML file someone opened, raising ValueError if it isn't one this app can edit."""
+    try:
+        if suffix == ".mxl":
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                container = ET.fromstring(archive.read("META-INF/container.xml"))
+                name = next(item.get("full-path") for item in container.iter("rootfile"))
+                if archive.getinfo(name).file_size > MOST_UNPACKED_BYTES:
+                    raise ValueError("That file is too large.")
+                data = archive.read(name)
+        root = ET.fromstring(data)
+    except (ET.ParseError, zipfile.BadZipFile, KeyError, StopIteration) as error:
+        raise ValueError("That file couldn't be read as MusicXML.") from error
+    if root.tag != "score-partwise" or root.find("part") is None:
+        raise ValueError("Only MusicXML scores written part by part can be opened.")
+    return root
 
 
 def to_text(root: ET.Element) -> str:

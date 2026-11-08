@@ -1,11 +1,17 @@
+import re
 import threading
 import xml.etree.ElementTree as ET
+
+import pytest
 
 from helpers import note, score
 
 from chords.vocab import Chord
+from pipeline import edit, marks, structure
 from pipeline.engrave import add_beams, drop_spelled_degrees, render_pages, replace_private_glyphs
 from pipeline.musicxml import harmony_element, to_text
+
+PRIVATE_SYMBOL = re.compile("[\ue000-\uf8ff]")
 
 
 def eighth(step="C"):
@@ -62,3 +68,24 @@ def test_rendering_works_outside_the_main_thread():
     thread.start()
     thread.join()
     assert len(results) == 1 and "<svg" in results[0][0]
+
+
+def tempo_page(unit, dots):
+    root = structure.blank_score(measures=1)
+    edit.ensure_note_ids(root)
+    marks.set_tempo(root, next(root.iter("note")).get("id"), "Allegro 96", "quarter", dots)
+    root.find(".//beat-unit").text = unit
+    return render_pages(to_text(root))[0]
+
+
+@pytest.mark.parametrize("dots", [0, 1])
+@pytest.mark.parametrize("unit", ["breve", "whole", "half", "quarter", "eighth", "16th", "32nd"])
+def test_no_private_symbol_reaches_a_tempo_mark(unit, dots):
+    """A file from another program can name any of these, and an unmapped one prints as an empty box."""
+    assert not PRIVATE_SYMBOL.search(tempo_page(unit, dots))
+
+
+def test_a_dotted_tempo_prints_its_dot():
+    plain, dotted = tempo_page("quarter", 0), tempo_page("quarter", 1)
+    assert "♩." in re.sub(r"<[^>]+>", "", dotted).replace(" ", "").replace("\n", "")
+    assert "♩." not in re.sub(r"<[^>]+>", "", plain).replace(" ", "").replace("\n", "")

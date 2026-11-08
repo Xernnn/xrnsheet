@@ -25,6 +25,7 @@ from chords.model import CHARACTER_INDEX
 from pipeline import edit
 from pipeline.chord_boxes import crop
 from pipeline.structure import surviving_bars
+from pipeline.transpose import is_transposed
 
 JOB_DIR = ROOT / "data" / "jobs"
 OUT_DIR = ROOT / "data" / "corrections"
@@ -35,7 +36,9 @@ SHORTEST_COMPARED = 8
 
 
 def checked_sheets(job_dir: Path) -> list[Path]:
-    return sorted(path.parent for path in job_dir.glob("*/checked.json"))
+    """List sheets a person has fixed. A transposed sheet doesn't count, as its chords changed on purpose."""
+    found = sorted(path.parent for path in job_dir.glob("*/checked.json"))
+    return [folder for folder in found if not is_transposed(ET.parse(versions_of(folder)[1]).getroot())]
 
 
 def versions_of(folder: Path) -> tuple[Path, Path]:

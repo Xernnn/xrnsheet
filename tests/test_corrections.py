@@ -112,6 +112,23 @@ def test_export_uses_only_checked_sheets(tmp_path):
     assert counts["corrected"] == 1 and cv2.imread(str(out / rows[0]["image"])) is not None
 
 
+def test_a_transposed_sheet_teaches_the_model_nothing(tmp_path):
+    """Its chords differ from the page on purpose, so they'd look like corrections of correct reads."""
+    from pipeline import transpose
+    from pipeline.musicxml import to_text
+
+    jobs = tmp_path / "jobs"
+    folder = write_sheet(jobs, "a" * 32, [recognized(0, 0.0, "C")], ["C"])
+    final = folder / "version_0001.musicxml"
+    root = ET.parse(final).getroot()
+    transpose.transpose_score(root, transpose.INTERVALS["M2"])
+    final.write_text(to_text(root))
+    assert corrections.checked_sheets(jobs) == []
+    transpose.transpose_score(root, -transpose.INTERVALS["M2"])
+    final.write_text(to_text(root))
+    assert corrections.checked_sheets(jobs) == [folder]
+
+
 def test_a_moved_chord_does_not_count_as_missed(tmp_path):
     jobs = tmp_path / "jobs"
     folder = write_sheet(jobs, "a" * 32, [recognized(0, 2.0, "C")], ["C"])
