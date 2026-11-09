@@ -689,9 +689,23 @@ def repair_slurs(part: ET.Element) -> None:
         notations.remove(slur)
 
 
+def remove_wedge_end(measure: ET.Element, direction: ET.Element, wedge: ET.Element) -> None:
+    """Take one end of a hairpin out of its direction, and the direction too once nothing's left.
+
+    A direction can hold more than a hairpin, such as the "p" a crescendo starts from, which stays.
+    """
+    for holder in direction.findall("direction-type"):
+        if any(child is wedge for child in holder):
+            holder.remove(wedge)
+            if len(holder) == 0:
+                direction.remove(holder)
+    if direction.find("direction-type") is None:
+        measure.remove(direction)
+
+
 def repair_wedges(part: ET.Element) -> None:
     """Remove hairpins that have lost their start or their end."""
-    waiting: dict[str, tuple[ET.Element, ET.Element]] = {}
+    waiting: dict[str, tuple[ET.Element, ET.Element, ET.Element]] = {}
     unmatched = []
     for measure in part.findall("measure"):
         for direction in measure.findall("direction"):
@@ -701,10 +715,10 @@ def repair_wedges(part: ET.Element) -> None:
                     if number in waiting:
                         del waiting[number]
                     else:
-                        unmatched.append((measure, direction))
+                        unmatched.append((measure, direction, wedge))
                 elif wedge.get("type") in ("crescendo", "diminuendo"):
                     if number in waiting:
                         unmatched.append(waiting[number])
-                    waiting[number] = (measure, direction)
-    for measure, direction in [*unmatched, *waiting.values()]:
-        measure.remove(direction)
+                    waiting[number] = (measure, direction, wedge)
+    for measure, direction, wedge in [*unmatched, *waiting.values()]:
+        remove_wedge_end(measure, direction, wedge)

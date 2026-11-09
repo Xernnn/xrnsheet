@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 from fractions import Fraction
 
 import pytest
+from helpers import note, parsed
 
 from pipeline import edit, engrave, marks, rhythm, structure
 from pipeline.musicxml import to_text
@@ -248,6 +249,43 @@ def test_hairpins_in_a_row_stay_whole():
     marks.toggle_hairpin(root, ids[2], ids[3], "diminuendo")
     edit.write_note(root, ids[0], "quarter", 0, "D")
     assert len(wedges(root)) == 4
+
+
+def crescendo_from_p_to_f(ends_in_the_next_bar=False):
+    """A crescendo whose ends share a direction with the dynamics around it, as other programs often write it."""
+    start = ('<direction placement="below"><direction-type><dynamics><p/></dynamics></direction-type>'
+             '<direction-type><wedge type="crescendo" number="1"/></direction-type><sound dynamics="54.44"/></direction>')
+    stop = ('<direction placement="below"><direction-type><wedge type="stop" number="1"/></direction-type>'
+            '<direction-type><dynamics><f/></dynamics></direction-type><sound dynamics="106.67"/></direction>')
+    first, second = start + note("C") + note("D") + note("E") + note("F"), note("G") + note("A") + note("B") + note("C", 5)
+    root = parsed(first, stop + second) if ends_in_the_next_bar else parsed(first + stop, second)
+    edit.ensure_note_ids(root)
+    marks.ensure_mark_ids(root)
+    return root
+
+
+def dynamics_left(root):
+    return [level.tag for found in root.iter("dynamics") for level in found]
+
+
+def test_removing_a_hairpin_keeps_the_dynamics_written_with_it():
+    root = crescendo_from_p_to_f()
+    marks.remove_placed(root, next(item["id"] for item in marks.list_marks(root) if item["kind"] == "hairpin"))
+    assert wedges(root) == [] and dynamics_left(root) == ["p", "f"]
+    assert [(item["kind"], item["text"]) for item in marks.list_marks(root)] == [("dynamic", "p"), ("dynamic", "f")]
+    assert drawn(root).count('class="dynam"') == 2
+
+
+def test_the_same_hairpin_again_comes_off_and_leaves_its_dynamics():
+    root = crescendo_from_p_to_f()
+    marks.toggle_hairpin(root, "note0", "note3", "crescendo")
+    assert wedges(root) == [] and dynamics_left(root) == ["p", "f"]
+
+
+def test_a_hairpin_end_left_alone_by_a_deleted_bar_keeps_its_dynamic():
+    root = crescendo_from_p_to_f(ends_in_the_next_bar=True)
+    structure.delete_measure(root, 0)
+    assert wedges(root) == [] and dynamics_left(root) == ["f"]
 
 
 @pytest.mark.parametrize(("text", "expected"), [

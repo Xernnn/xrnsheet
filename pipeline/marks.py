@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 from fractions import Fraction
 
 from pipeline.edit import Spot, copy_range, events_between, find_note, locate, next_note_id, paste
-from pipeline.rhythm import Context, EditError, Mark, contexts, make_note, place, read_measure, repair_slurs, repair_wedges, respell, write_measure
+from pipeline.rhythm import Context, EditError, Mark, contexts, make_note, place, read_measure, remove_wedge_end, repair_slurs, repair_wedges, respell, write_measure
 from pipeline.structure import element_with_text
 
 # A mark on a note: which group it sits in inside <notations>, and its tag.
@@ -311,8 +311,8 @@ def toggle_hairpin(root: ET.Element, first_id: str, last_id: str, kind: str) -> 
         if wedge.get("type") == kind:
             same_stop = [found for found in directions_at(last_spot, last_event.end, ("hairpin",)) if found.find("direction-type/wedge").get("type") == "stop" and found.find("direction-type/wedge").get("number", "1") == wedge.get("number", "1")]
             if same_stop:
-                first_context.measure.remove(direction)
-                last_context.measure.remove(same_stop[0])
+                remove_wedge_end(first_context.measure, direction, wedge)
+                remove_wedge_end(last_context.measure, same_stop[0], same_stop[0].find("direction-type/wedge"))
                 return
     number = str(free_number(start.part, "wedge", first_context.index, last_context.index))
     begin = ET.Element("wedge", {"id": new_id(root), "type": kind, "number": number})
@@ -493,8 +493,9 @@ def remove_wedge(root: ET.Element, mark_id: str) -> bool:
     for part in root.findall("part"):
         for measure in part.findall("measure"):
             for direction in measure.findall("direction"):
-                if any(wedge.get("id") == mark_id for wedge in direction.iter("wedge")):
-                    measure.remove(direction)
+                wedge = next((found for found in direction.iter("wedge") if found.get("id") == mark_id), None)
+                if wedge is not None:
+                    remove_wedge_end(measure, direction, wedge)
                     repair_wedges(part)
                     return True
     return False
