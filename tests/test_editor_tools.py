@@ -592,6 +592,46 @@ def test_a_long_title_is_refused():
         structure.set_title(root, "x" * 500, "")
 
 
+def imported(*credits):
+    """A score as another program writes one, with credits for more than the title and composer."""
+    root = blank()
+    work = ET.Element("work")
+    ET.SubElement(work, "work-title").text = "Old Song"
+    root.insert(0, work)
+    position = list(root).index(root.find("part-list"))
+    for number, (kind, words) in enumerate(credits):
+        credit = ET.Element("credit", page="1")
+        if kind:
+            ET.SubElement(credit, "credit-type").text = kind
+        ET.SubElement(credit, "credit-words", justify="center").text = words
+        root.insert(position + number, credit)
+    return root
+
+
+def credit_words(root):
+    return [credit.findtext("credit-words") for credit in root.findall("credit")]
+
+
+def test_a_new_title_keeps_the_other_credits_of_an_imported_score():
+    root = imported(("title", "Old Song"), ("subtitle", "from the musical"), ("composer", "Old Writer"), ("lyricist", "Words: A. Poet"), ("rights", "(c) 2024 Publisher"))
+    structure.set_title(root, "New Song", "New Writer")
+    assert credit_words(root) == ["New Song", "New Writer", "from the musical", "Words: A. Poet", "(c) 2024 Publisher"]
+
+
+def test_credits_that_do_not_say_what_they_are_are_known_by_their_words():
+    root = imported((None, "Old Song"), (None, "from the musical"))
+    structure.set_title(root, "New Song", "")
+    assert credit_words(root) == ["New Song", "from the musical"]
+
+
+def test_a_new_title_prints_above_an_imported_subtitle():
+    """Verovio prints credits in the order they come, and makes the first centred one the title."""
+    root = imported(("subtitle", "from the musical"), ("rights", "(c) 2024 Publisher"))
+    structure.set_title(root, "New Song", "")
+    head = engrave.render_pages(to_text(root))[0].split('class="pgHead"')[1]
+    assert head.index("New Song") < head.index("from the musical") < head.index("(c) 2024 Publisher")
+
+
 # Drawing triplets.
 
 def test_a_dotted_length_cannot_become_a_triplet():

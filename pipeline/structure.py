@@ -520,15 +520,26 @@ def title_of(root: ET.Element) -> dict:
     return {"title": (root.findtext("work/work-title") or "").strip(), "composer": (composer.text or "").strip() if composer is not None else ""}
 
 
+def prints_title(credit: ET.Element, old: set[str]) -> bool:
+    """Say whether a credit prints the title or the composer, which are the ones set_title writes."""
+    kinds = {found.text for found in credit.findall("credit-type")}
+    if kinds:
+        return bool(kinds & {"title", "composer"})
+    # Older files don't say what a credit is, so it's known by its words.
+    return " ".join((found.text or "").strip() for found in credit.findall("credit-words")).strip() in old
+
+
 def set_title(root: ET.Element, title: str, composer: str) -> None:
     """Set the title and composer, in the file and on the printed page.
 
     Verovio only prints a composer from a credit, and if a score has any credit it ignores the
-    work title, so both are written as credits as well.
+    work title, so both are written as credits as well. Any other credit, such as a subtitle or a
+    copyright line, stays as it was.
     """
     title, composer = title.strip(), composer.strip()
     if len(title) > MOST_TITLE_LETTERS or len(composer) > MOST_TITLE_LETTERS:
         raise EditError("That's too long for a title.")
+    old = {text for text in [*title_of(root).values(), (root.findtext("movement-title") or "").strip()] if text}
     work = root.find("work")
     if work is None:
         work = ET.Element("work")
@@ -548,16 +559,19 @@ def set_title(root: ET.Element, title: str, composer: str) -> None:
         creator = ET.Element("creator", type="composer")
         creator.text = composer
         identification.insert(0, creator)
-    for credit in root.findall("credit"):
+    credits = root.findall("credit")
+    replaced = [credit for credit in credits if prints_title(credit, old)]
+    # Verovio prints credits in order, so the title goes where the old one was, or above the rest.
+    position = list(root).index((replaced or credits or [root.find("part-list")])[0])
+    for credit in replaced:
         root.remove(credit)
-    before_list = list(root).index(root.find("part-list"))
     for offset, (kind, text, justify) in enumerate((("title", title, "center"), ("composer", composer, "right"))):
         if not text:
             continue
         credit = ET.Element("credit", page="1")
         ET.SubElement(credit, "credit-type").text = kind
         ET.SubElement(credit, "credit-words", justify=justify, valign="top").text = text
-        root.insert(before_list + (offset if title else 0), credit)
+        root.insert(position + (offset if title else 0), credit)
 
 
 def part_attributes(instrument: Instrument, divisions: int, fifths: int, beats: int, beat_type: int) -> ET.Element:
