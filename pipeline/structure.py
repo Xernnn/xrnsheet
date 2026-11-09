@@ -187,10 +187,22 @@ def blank_measure(length: Fraction, divisions: int, staves: int) -> ET.Element:
     return measure
 
 
+def opening_attributes(measure: ET.Element) -> list[ET.Element]:
+    """Return the attributes a bar starts with. A clef change partway through isn't one of them."""
+    found = []
+    for child in measure:
+        if child.tag in ("note", "backup", "forward"):
+            break
+        if child.tag == "attributes":
+            found.append(child)
+    return found
+
+
 def ensure_attributes(measure: ET.Element) -> ET.Element:
-    found = measure.find("attributes")
-    if found is not None:
-        return found
+    """Return the attributes a bar starts with, adding them if it has none."""
+    found = opening_attributes(measure)
+    if found:
+        return found[0]
     attributes = ET.Element("attributes")
     children = list(measure)
     position = next((index for index, child in enumerate(children) if child.tag != "print"), len(children))
@@ -227,9 +239,10 @@ def insert_measure(root: ET.Element, index: int) -> None:
         measure.set("id", new_id if part_number == 0 else f"p{part_number}{new_id}")
         measures = part.findall("measure")
         if index == 0:
-            for attributes in measures[0].findall("attributes"):
+            # Only what the first bar starts with moves. A clef change partway through stays in it.
+            for position, attributes in enumerate(opening_attributes(measures[0])):
                 measures[0].remove(attributes)
-                measure.insert(0, attributes)
+                measure.insert(position, attributes)
         if index < len(measures):
             children = list(part)
             part.insert(children.index(measures[index]), measure)
@@ -243,13 +256,14 @@ def carry_attributes(source: ET.Element, target: ET.Element) -> None:
     """Move anything still needed out of a bar about to be deleted.
 
     A key, time or clef applies until it's changed, so deleting the bar that states it would
-    silently change every bar after it.
+    silently change every bar after it. What's carried is what's in force where the bar ends, so
+    the last of each counts, and it goes at the start of the next bar unless that bar starts by
+    changing it.
     """
-    for attributes in source.findall("attributes"):
-        for child in list(attributes):
-            existing = ensure_attributes(target)
-            if not any(other.tag == child.tag and other.get("number") == child.get("number") for other in existing):
-                set_attribute(existing, child)
+    for child in reversed([child for attributes in source.findall("attributes") for child in attributes]):
+        stated = [other for attributes in opening_attributes(target) for other in attributes]
+        if not any(other.tag == child.tag and other.get("number") == child.get("number") for other in stated):
+            set_attribute(ensure_attributes(target), child)
 
 
 def delete_measure(root: ET.Element, index: int) -> None:

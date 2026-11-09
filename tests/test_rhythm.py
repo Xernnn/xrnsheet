@@ -5,7 +5,7 @@ from fractions import Fraction
 from pathlib import Path
 
 import pytest
-from helpers import harmony, note, parsed, rest, tied_note
+from helpers import FOOTER, HEADER, harmony, note, parsed, rest, tied_note
 
 from pipeline import edit, playback, rhythm, structure
 from pipeline.rhythm import EditError, contexts, fit_divisions, read_measure, write_measure
@@ -671,3 +671,52 @@ def test_a_new_key_reads_a_plain_f_after_a_sharp_tied_over_the_barline_as_f_natu
     structure.set_key(root, 0, 0)
     tied, plain = root.find("part").findall("measure")[1].findall("note")
     assert tied.findtext("pitch/alter") == "1" and plain.find("pitch/alter") is None
+
+
+def bars_with_a_clef_change(changing_bar):
+    """Three bars of 3/4, one changing to bass clef after its first beat, as piano music often does."""
+    opening = ('<attributes><divisions>2</divisions><key><fifths>2</fifths></key><time><beats>3</beats><beat-type>4</beat-type></time>'
+               '<clef><sign>G</sign><line>2</line></clef></attributes>')
+    change = '<attributes><clef><sign>F</sign><line>4</line></clef></attributes>'
+    body = "".join(
+        f'<measure number="{number + 1}">{opening if number == 0 else ""}{note("D") + change + note("D", 3) * 2 if number == changing_bar else note("D") * 3}</measure>'
+        for number in range(3)
+    )
+    root = ET.fromstring(HEADER + body + FOOTER)
+    edit.ensure_note_ids(root)
+    structure.ensure_measure_ids(root)
+    return root
+
+
+def clefs_in(bar):
+    return [found.findtext("clef/sign") for found in bar.findall("attributes") if found.find("clef") is not None]
+
+
+def test_deleting_the_first_bar_opens_the_next_with_its_signature_and_clef():
+    root = bars_with_a_clef_change(1)
+    structure.delete_measure(root, 0)
+    bar = root.find("part/measure")
+    assert [child.tag for child in bar] == ["attributes", "note", "attributes", "note", "note"]
+    assert [child.tag for child in bar.find("attributes")] == ["divisions", "key", "time", "clef"] and clefs_in(bar) == ["G", "F"]
+
+
+def test_a_deleted_bar_hands_on_the_clef_it_ends_in():
+    root = bars_with_a_clef_change(0)
+    structure.delete_measure(root, 0)
+    assert clefs_in(root.find("part/measure")) == ["F"] and next(contexts(root.find("part"))).clefs == {"1": "F"}
+
+
+def test_a_bar_added_at_the_start_leaves_a_clef_change_where_it_was():
+    root = bars_with_a_clef_change(0)
+    structure.insert_measure(root, 0)
+    added, old = root.find("part").findall("measure")[:2]
+    assert clefs_in(added) == ["G"] and added.findtext("attributes/key/fifths") == "2"
+    assert [child.tag for child in old] == ["note", "attributes", "note", "note"] and clefs_in(old) == ["F"]
+
+
+def test_a_new_key_starts_the_bar_even_if_the_bar_changes_clef_later():
+    root = bars_with_a_clef_change(1)
+    structure.set_key(root, 1, -1)
+    bar = root.find("part").findall("measure")[1]
+    assert [child.tag for child in bar] == ["attributes", "note", "attributes", "note", "note"]
+    assert bar.findtext("attributes/key/fifths") == "-1" and clefs_in(bar) == ["F"]
