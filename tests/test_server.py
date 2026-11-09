@@ -683,3 +683,11 @@ def test_sheets_still_being_read_when_the_app_stopped_are_marked_failed(client):
     data = client.get(f"/api/scores/{stopped.name}").json()
     assert data["status"] == "failed" and "again" in data["message"]
     assert client.get(f"/api/scores/{ready}").json()["status"] == "ready"
+
+
+def test_saved_files_keep_the_usual_permissions(client):
+    folder = server.JOB_DIR / blank(client)
+    ordinary = folder / "ordinary.txt"
+    ordinary.write_text("x", encoding="utf-8")
+    for path in [*folder.glob("version_*.musicxml"), folder / "status.json"]:
+        assert path.stat().st_mode & 0o777 == ordinary.stat().st_mode & 0o777

@@ -14,7 +14,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -195,15 +194,15 @@ def write_whole(path: Path, text: str) -> None:
 
     It's written beside its place first, then renamed there, which can't happen halfway.
     """
-    file = tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}")
     try:
-        with file:
+        with open(temporary, "x", encoding="utf-8") as file:
             file.write(text)
             file.flush()
             os.fsync(file.fileno())
-        os.replace(file.name, path)
+        os.replace(temporary, path)
     finally:
-        Path(file.name).unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
 
 
 def write_status(folder: Path, status: str, message: str = "") -> None:
