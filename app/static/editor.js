@@ -370,25 +370,32 @@ function readClipboard() {
   }
 }
 
-function copySelection() {
-  return enqueue(async () => {
-    const first = range?.first ?? actionTarget();
-    if (!first) return;
-    const data = await askServer("copy", { first, last: range?.last ?? first });
-    clipboard = data.events;
-    try {
-      sessionStorage.setItem("xrnsheet-clipboard", JSON.stringify(clipboard));
-    } catch {
-      // Without storage it can still be pasted until the page is reloaded.
-    }
-    hint = "Copied. Choose where it goes, then press Ctrl+V.";
-    updateTools();
-  });
+// Copy what's chosen, and say whether anything was. A copy that fails throws.
+async function copyChosen() {
+  const first = range?.first ?? actionTarget();
+  if (!first) return false;
+  const data = await askServer("copy", { first, last: range?.last ?? first });
+  clipboard = data.events;
+  try {
+    sessionStorage.setItem("xrnsheet-clipboard", JSON.stringify(clipboard));
+  } catch {
+    // Without storage it can still be pasted until the page is reloaded.
+  }
+  hint = "Copied. Choose where it goes, then press Ctrl+V.";
+  updateTools();
+  return true;
 }
 
+function copySelection() {
+  return enqueue(copyChosen);
+}
+
+// One task, so the notes are only deleted once they've been copied. The queue would carry on
+// past a copy that failed, and the notes would be lost.
 function cutSelection() {
-  copySelection();
-  noteAction("delete");
+  return enqueue(async () => {
+    if (await copyChosen()) await applyToNote("delete");
+  });
 }
 
 function pasteHere() {
