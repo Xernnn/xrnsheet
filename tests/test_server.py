@@ -637,3 +637,19 @@ def test_one_unreadable_score_does_not_hide_the_others(client):
     no_versions.mkdir()
     server.write_status(no_versions, "ready")
     assert [sheet["id"] for sheet in client.get("/api/scores").json()] == [good]
+
+
+def test_versions_past_9999_keep_every_edit_and_undo_in_order(client, ready_score):
+    """Sorted by name, version_10000 came before version_9999, so every edit from there on was lost."""
+    folder = server.JOB_DIR / ready_score
+    (folder / "version_0000.musicxml").rename(folder / "version_9998.musicxml")
+    url = f"/api/scores/{ready_score}"
+    for _ in range(3):
+        assert client.post(f"{url}/notes/note0", json={"action": "up"}).status_code == 200
+    assert [path.name for path in server.versions(folder)][-2:] == ["version_10000.musicxml", "version_10001.musicxml"]
+    assert pitches(client, ready_score)[0] == "F"
+    client.post(f"{url}/undo")
+    client.post(f"{url}/undo")
+    assert pitches(client, ready_score)[0] == "D"
+    client.post(f"{url}/redo")
+    assert pitches(client, ready_score)[0] == "E"

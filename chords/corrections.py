@@ -43,7 +43,8 @@ def checked_sheets(job_dir: Path) -> list[Path]:
 
 def versions_of(folder: Path) -> tuple[Path, Path]:
     """Return the file as recognized, and the file as you left it."""
-    saved = sorted(folder.glob("version_*.musicxml"))
+    # In number order, because by name version_10000 would come before version_9999.
+    saved = sorted(folder.glob("version_*.musicxml"), key=lambda path: int(path.stem.split("_")[1]))
     return saved[0], saved[-1]
 
 

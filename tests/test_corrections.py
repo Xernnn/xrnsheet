@@ -255,3 +255,13 @@ def test_a_chord_in_a_new_bar_may_be_the_one_that_moved():
 def test_chords_in_new_bars_count_as_missed():
     new_bar = {"measure": 3, "origin": None, "onset": 0.0, "text": "G7", "index": 0}
     assert corrections.count_added([recognized(2, 0, "G7")], [new_bar]) == 1
+
+
+def test_the_final_version_is_found_past_version_9999(tmp_path):
+    from pipeline.musicxml import to_text
+    from helpers import harmony, note, parsed
+
+    folder = write_sheet(tmp_path / "jobs", "a" * 32, [recognized(0, 0.0, "C")], ["D"])
+    for number, root in ((9999, "D"), (10000, "E")):
+        (folder / f"version_{number:04d}.musicxml").write_text(to_text(parsed(harmony(root, "", "major") + note())))
+    assert [path.name for path in corrections.versions_of(folder)] == ["version_0000.musicxml", "version_10000.musicxml"]

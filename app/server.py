@@ -205,8 +205,13 @@ def read_status(folder: Path) -> dict:
     return json.loads((folder / "status.json").read_text(encoding="utf-8"))
 
 
+def version_number(path: Path) -> int:
+    return int(path.stem.split("_")[1])
+
+
 def versions(folder: Path) -> list[Path]:
-    return sorted(folder.glob("version_*.musicxml"))
+    # In number order, because by name version_10000 would come before version_9999.
+    return sorted(folder.glob("version_*.musicxml"), key=version_number)
 
 
 def current_root(folder: Path) -> ET.Element:
@@ -214,12 +219,12 @@ def current_root(folder: Path) -> ET.Element:
 
 
 def undone(folder: Path) -> list[Path]:
-    return sorted((folder / "undone").glob("version_*.musicxml"))
+    return sorted((folder / "undone").glob("version_*.musicxml"), key=version_number)
 
 
 def save_version(folder: Path, root: ET.Element) -> None:
     """Save the next version. A new edit starts a new future, so anything undone is dropped."""
-    number = int(versions(folder)[-1].stem.split("_")[1]) + 1 if versions(folder) else 0
+    number = version_number(versions(folder)[-1]) + 1 if versions(folder) else 0
     write_whole(folder / f"version_{number:04d}.musicxml", to_text(root))
     shutil.rmtree(folder / "undone", ignore_errors=True)
 
