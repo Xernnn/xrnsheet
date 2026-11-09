@@ -596,3 +596,44 @@ def test_clickable_marks_are_listed_with_the_score(client, ready_score):
     assert done["marks"][0]["text"] == "ff"
     gone = client.post(f"{url}/marks", json={"action": "remove", "id": listed[0]["id"]}).json()
     assert gone["marks"] == []
+
+
+def test_text_xml_cannot_hold_is_cleaned_before_saving(client):
+    """A control character pasted from a word processor, or half of a broken one, used to save a version that wouldn't open."""
+    score_id = blank(client)
+    url = f"/api/scores/{score_id}"
+    # A browser can send half a character as a JSON escape, which Python's own encoder won't write.
+    body = b'{"title": "Song\\u000bTitle\\u0001", "composer": "A\\ud800B"}'
+    data = client.post(f"{url}/title", content=body, headers={"Content-Type": "application/json"}).json()
+    assert (data["title"], data["composer"]) == ("Song Title", "AB")
+    written = write(client, score_id, first_id(client, score_id), "C")["written"]
+    assert client.post(f"{url}/lyrics/{written}", json={"text": "la\x01"}).status_code == 200
+    assert client.post(f"{url}/marks", json={"action": "text", "text": "so\x08lo", "notes": [written]}).status_code == 200
+    assert client.get(url).json()["marks"][0]["text"] == "solo"
+    assert client.get("/api/scores").json()[0]["title"] == "Song Title"
+    for path in (server.JOB_DIR / score_id).glob("version_*.musicxml"):
+        ET.parse(path)
+
+
+def test_a_save_that_fails_part_way_leaves_the_last_version_in_place(client, monkeypatch):
+    score_id = blank(client)
+    folder = server.JOB_DIR / score_id
+    before = sorted(path.name for path in folder.iterdir())
+    with monkeypatch.context() as patch:
+        patch.setattr(server, "to_text", lambda root: "<score-partwise>\ud800")  # This can't be written as UTF-8.
+        with pytest.raises(UnicodeEncodeError):
+            server.save_version(folder, server.current_root(folder))
+    assert sorted(path.name for path in folder.iterdir()) == before
+    assert client.get(f"/api/scores/{score_id}").status_code == 200
+
+
+def test_one_unreadable_score_does_not_hide_the_others(client):
+    good, cut_short = blank(client), blank(client)
+    (server.JOB_DIR / cut_short / "version_0001.musicxml").write_text("<score-partwise", encoding="utf-8")
+    broken_status = server.JOB_DIR / ("f" * 32)
+    broken_status.mkdir()
+    (broken_status / "status.json").write_text("{", encoding="utf-8")
+    no_versions = server.JOB_DIR / ("e" * 32)
+    no_versions.mkdir()
+    server.write_status(no_versions, "ready")
+    assert [sheet["id"] for sheet in client.get("/api/scores").json()] == [good]

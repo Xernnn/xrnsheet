@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -180,8 +181,24 @@ def job_folder(score_id: str) -> Path:
     return JOB_DIR / score_id
 
 
+def write_whole(path: Path, text: str) -> None:
+    """Write a file whole or not at all, so a save that fails can't leave a broken file in its place.
+
+    It's written beside its place first, then renamed there, which can't happen halfway.
+    """
+    file = tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False)
+    try:
+        with file:
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(file.name, path)
+    finally:
+        Path(file.name).unlink(missing_ok=True)
+
+
 def write_status(folder: Path, status: str, message: str = "") -> None:
-    (folder / "status.json").write_text(json.dumps({"status": status, "message": message}), encoding="utf-8")
+    write_whole(folder / "status.json", json.dumps({"status": status, "message": message}))
 
 
 def read_status(folder: Path) -> dict:
@@ -203,7 +220,7 @@ def undone(folder: Path) -> list[Path]:
 def save_version(folder: Path, root: ET.Element) -> None:
     """Save the next version. A new edit starts a new future, so anything undone is dropped."""
     number = int(versions(folder)[-1].stem.split("_")[1]) + 1 if versions(folder) else 0
-    (folder / f"version_{number:04d}.musicxml").write_text(to_text(root), encoding="utf-8")
+    write_whole(folder / f"version_{number:04d}.musicxml", to_text(root))
     shutil.rmtree(folder / "undone", ignore_errors=True)
 
 
@@ -388,20 +405,26 @@ def create_blank_score(body: BlankScore) -> dict:
 
 @app.get("/api/scores")
 def list_scores() -> list[dict]:
-    """List finished sheets, newest first, so one can be reopened after closing the page."""
+    """List finished sheets, newest first, so one can be reopened after closing the page.
+
+    A sheet whose files can't be read is left out, rather than taking every other sheet with it.
+    """
     found = []
     for folder in JOB_DIR.glob("*") if JOB_DIR.exists() else []:
-        if not (folder / "status.json").exists() or read_status(folder)["status"] != "ready":
-            continue
-        found.append({
-            "id": folder.name,
-            "saved": versions(folder)[-1].stat().st_mtime,
-            "pages": len(source_pages(folder)),
-            "chords": len(read_chord_file(folder)),
-            "checked": (folder / "checked.json").exists(),
-            "blank": not (folder / "recognized").exists(),
-            "title": structure.title_of(current_root(folder))["title"],
-        })
+        try:
+            if not (folder / "status.json").exists() or read_status(folder)["status"] != "ready":
+                continue
+            found.append({
+                "id": folder.name,
+                "saved": versions(folder)[-1].stat().st_mtime,
+                "pages": len(source_pages(folder)),
+                "chords": len(read_chord_file(folder)),
+                "checked": (folder / "checked.json").exists(),
+                "blank": not (folder / "recognized").exists(),
+                "title": structure.title_of(current_root(folder))["title"],
+            })
+        except (OSError, ValueError, TypeError, KeyError, IndexError, ET.ParseError) as error:
+            print(f"left an unreadable sheet out of the list, {folder.name}: {error!r}", file=sys.stderr)
     return sorted(found, key=lambda item: item["saved"], reverse=True)
 
 
