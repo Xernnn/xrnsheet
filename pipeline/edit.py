@@ -63,6 +63,9 @@ MOST_LYRIC_LETTERS = 60
 MOST_VERSES = 6
 TUPLET_SIZES = {3, 5, 6, 7}
 SYLLABLES = {(False, False): "single", (False, True): "begin", (True, True): "middle", (True, False): "end"}
+# Most of a chord's markings are kept on its first note, but these belong to one pitch of it.
+OWN_PITCH = {"tied", "glissando", "slide"}
+MARK_GROUPS = {"articulations", "ornaments", "technical"}  # These hold several marks each.
 Pitch = tuple[str, int, int]
 
 
@@ -805,6 +808,36 @@ def set_accidental(root: ET.Element, note_id: str, alter: int) -> None:
     repair_ties(part, context.index)
 
 
+def hand_on_marks(note: ET.Element, heir: ET.Element) -> None:
+    """Move what a chord keeps on its first note to the note that's first now.
+
+    That's its lyrics, beams, slurs and marks such as a fermata. A tie belongs to one pitch, so it
+    goes with that pitch, and anything the new first note already has stays as it is.
+    """
+    notations = note.find("notations")
+    if notations is not None:
+        kept = heir.find("notations")
+        if kept is None:
+            kept = ET.Element("notations")
+            place(heir, kept)
+        for child in list(notations):
+            existing = kept.find(child.tag)
+            if child.tag in OWN_PITCH:
+                continue
+            notations.remove(child)
+            if child.tag in MARK_GROUPS and existing is not None:
+                existing.extend(mark for mark in list(child) if existing.find(mark.tag) is None)
+            elif existing is None or child.tag == "slur":
+                kept.append(child)
+        if len(kept) == 0:
+            heir.remove(kept)
+    for tag in ("lyric", "beam"):
+        if heir.find(tag) is None:
+            for found in note.findall(tag):
+                note.remove(found)
+                place(heir, found)
+
+
 def delete_note(root: ET.Element, note_id: str) -> None:
     """Remove a note. Its time has to stay filled, so a lone note becomes a rest.
 
@@ -825,6 +858,7 @@ def delete_note(root: ET.Element, note_id: str) -> None:
         if spot.event.notes[0] is note:
             second = spot.event.notes[1]
             second.remove(second.find("chord"))
+            hand_on_marks(note, second)
         context.measure.remove(note)
     else:
         for grace in spot.event.grace:
