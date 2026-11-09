@@ -960,16 +960,24 @@ def lyric_of(note: ET.Element, verse: int = 1) -> ET.Element | None:
 
 
 def link_syllables(part: ET.Element, key: tuple[str, str], verse: int = 1) -> None:
-    """Work out each syllable's place in its word, which depends on the syllables around it."""
+    """Work out each syllable's place in its word, which depends on the syllables around it.
+
+    A lyric with no text, such as the end of a line holding a syllable over several notes, isn't a
+    syllable. One that leaves out its syllabic is a word of its own, as MusicXML allows.
+    """
     joined = False
     for context in contexts(part):
         line = read_measure(context.measure, context.divisions).lines.get(key, [])
         for event in sorted(line, key=lambda item: item.onset):
             lyric = lyric_of(event.notes[0], verse)
-            if lyric is None:
+            if lyric is None or lyric.find("text") is None:
                 continue
             carries_on = lyric.findtext("syllabic") in ("begin", "middle")
-            lyric.find("syllabic").text = SYLLABLES[(joined, carries_on)]
+            syllabic = lyric.find("syllabic")
+            if syllabic is None:
+                syllabic = ET.Element("syllabic")
+                lyric.insert(list(lyric).index(lyric.find("text")), syllabic)
+            syllabic.text = SYLLABLES[(joined, carries_on)]
             joined = carries_on
 
 

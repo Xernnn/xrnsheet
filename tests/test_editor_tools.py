@@ -226,6 +226,23 @@ def test_neighbouring_words_are_kept_apart(monkeypatch):
     assert spaced[1] - spaced[0] > tight[1] - tight[0]
 
 
+def sung(step, lyric=""):
+    return f"<note><pitch><step>{step}</step><octave>4</octave></pitch><duration>2</duration><voice>1</voice><type>quarter</type>{lyric}</note>"
+
+
+@pytest.mark.parametrize(("second", "tags", "read_as", "typed"), [
+    ('<lyric number="1"><extend type="stop"/></lyric>', ["extend"], (None, None), "end"),
+    ('<lyric number="1"><text>ri</text></lyric>', ["syllabic", "text"], ("end", "ri"), "single"),
+], ids=["held-syllable", "no-syllabic"])
+def test_a_lyric_can_be_typed_beside_one_written_without_a_syllabic(second, tags, read_as, typed):
+    """MusicXML leaves syllabic out where a held syllable ends, and may leave it out of any syllable."""
+    root = parsed(sung("C", '<lyric number="1"><syllabic>begin</syllabic><text>Glo</text><extend type="start"/></lyric>') + sung("D", second) + sung("E") + sung("F"))
+    edit.ensure_note_ids(root)
+    edit.set_lyric(root, "note3", "a")
+    assert [child.tag for child in edit.find_note(root, "note1").find("lyric")] == tags
+    assert lyric_text(root, "note1") == read_as and lyric_text(root, "note3") == (typed, "a")
+
+
 def test_a_lyric_follows_the_schema_order():
     root = blank()
     written, _ = write(root, "C")
