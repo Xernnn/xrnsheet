@@ -667,3 +667,19 @@ def test_a_selection_holding_both_ends_of_a_tie_is_respelled_once(client):
     notes = notes_of(client, score_id)
     assert [(item.findtext("pitch/step"), item.findtext("pitch/alter")) for item in notes] == [("D", "-1")] * 2
     assert [tie.get("type") for item in notes for tie in item.findall("tie")] == ["start", "stop"]
+
+
+def test_sheets_still_being_read_when_the_app_stopped_are_marked_failed(client):
+    """Nothing reads them after a restart, so the page would wait for them forever."""
+    stopped = server.JOB_DIR / ("d" * 32)
+    stopped.mkdir()
+    server.write_status(stopped, "processing", "Reading page 2 of 3.")
+    unreadable = server.JOB_DIR / ("e" * 32)
+    unreadable.mkdir()
+    (unreadable / "status.json").write_text("{", encoding="utf-8")
+    ready = blank(client)
+    with TestClient(server.app):  # Starting the app is what notices them.
+        pass
+    data = client.get(f"/api/scores/{stopped.name}").json()
+    assert data["status"] == "failed" and "again" in data["message"]
+    assert client.get(f"/api/scores/{ready}").json()["status"] == "ready"

@@ -20,7 +20,8 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from fractions import Fraction
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -50,8 +51,16 @@ MAX_PDF_PAGES = 40
 PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
+INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
 
-app = FastAPI(title="xrnsheet")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    fail_interrupted_jobs()
+    yield
+
+
+app = FastAPI(title="xrnsheet", lifespan=lifespan)
 one_at_a_time = threading.Semaphore(1)  # Recognition is memory hungry.
 # Edits read the latest version and write the next one, so two at once would lose one of them.
 edit_lock = threading.RLock()
@@ -203,6 +212,19 @@ def write_status(folder: Path, status: str, message: str = "") -> None:
 
 def read_status(folder: Path) -> dict:
     return json.loads((folder / "status.json").read_text(encoding="utf-8"))
+
+
+def fail_interrupted_jobs() -> None:
+    """Mark sheets that were still being read when the app last stopped, as nothing reads them now.
+
+    Otherwise a page waiting for one would wait forever.
+    """
+    for folder in JOB_DIR.glob("*") if JOB_DIR.exists() else []:
+        try:
+            if read_status(folder)["status"] == "processing":
+                write_status(folder, "failed", INTERRUPTED)
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
 
 
 def version_number(path: Path) -> int:
