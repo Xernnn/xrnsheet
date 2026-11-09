@@ -463,13 +463,16 @@ def previous_height(spot: Spot) -> int:
 
 
 def alter_in_force(spot: Spot, step: str, octave: int) -> int:
-    """Return what a plain note here means: an earlier sharp holds until the barline."""
+    """Return what a plain note here means: an earlier sharp holds until the barline.
+
+    A tied note only carries on the one before it, so a sharp tied over the barline doesn't count.
+    """
     alter = alteration_in_key(step, spot.context.fifths)
     for event in spot.timeline.events():
         if event.onset >= spot.event.onset:
             break
         for note in event.notes:
-            if note.findtext("pitch/step") == step and note.findtext("pitch/octave") == str(octave) and (note.findtext("staff") or "1") == spot.key[0]:
+            if note.findtext("pitch/step") == step and note.findtext("pitch/octave") == str(octave) and (note.findtext("staff") or "1") == spot.key[0] and not is_tied(note, "stop"):
                 alter = int(float(note.findtext("pitch/alter") or 0))
     return alter
 

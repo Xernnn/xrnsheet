@@ -637,3 +637,42 @@ def test_a_tie_carries_the_sharp_over_the_barline_without_printing_it_again():
     notes = [item for item in root.iter("note") if item.find("pitch") is not None]
     assert len(notes) == 2 and notes[1].findtext("pitch/alter") == "1"
     assert notes[0].findtext("accidental") == "sharp" and notes[1].find("accidental") is None
+
+
+def f_note(alter, duration, type_name, ties=(), accidental=""):
+    """An F at the top of the treble staff, tied either way or not at all."""
+    written = f"<alter>{alter}</alter>" if alter else ""
+    tie = "".join(f'<tie type="{kind}"/>' for kind in ties)
+    printed = f"<accidental>{accidental}</accidental>" if accidental else ""
+    notations = f"<notations>{''.join(f'<tied type="{kind}"/>' for kind in ties)}</notations>" if ties else ""
+    return f"<note><pitch><step>F</step>{written}<octave>4</octave></pitch><duration>{duration}</duration>{tie}<type>{type_name}</type>{printed}{notations}</note>"
+
+
+@pytest.mark.parametrize(("alter", "second_bar", "printed"), [
+    (1, f_note(1, 4, "half", ["stop"]) + f_note(1, 4, "half"), [None, "sharp"]),
+    (1, f_note(1, 4, "half", ["stop"]) + f_note(0, 4, "half"), [None, "natural"]),
+    (1, f_note(1, 2, "quarter", ["stop", "start"]) + f_note(1, 2, "quarter", ["stop"]) + f_note(1, 2, "quarter") * 2, [None, None, "sharp", None]),
+    (0, f_note(0, 4, "half", ["stop"]) + f_note(0, 4, "half"), [None, None]),
+], ids=["sharp-again", "natural", "tie-runs-on", "plain-f"])
+def test_a_sharp_tied_over_the_barline_holds_for_the_tied_note_alone(alter, second_bar, printed):
+    """The next F in the bar shows its accidental, or a player reads the key's F there."""
+    root = parsed(f_note(alter, 8, "whole", ["start"]), second_bar)
+    for context in contexts(root.find("part")):
+        rhythm.respell(context)
+    bar = root.find("part").findall("measure")[1]
+    assert [item.findtext("accidental") for item in bar.findall("note")] == printed
+
+
+def test_a_plain_f_typed_after_a_sharp_tied_over_the_barline_is_f_natural():
+    root = parsed(f_note(1, 8, "whole", ["start"]), f_note(1, 4, "half", ["stop"]) + rest(4))
+    edit.ensure_note_ids(root)
+    gap = root.find("part").findall("measure")[1].findall("note")[1].get("id")
+    written = edit.find_note(root, edit.write_note(root, gap, "half", 0, "F")["written"])
+    assert written.find("pitch/alter") is None and written.findtext("accidental") == "natural"
+
+
+def test_a_new_key_reads_a_plain_f_after_a_sharp_tied_over_the_barline_as_f_natural():
+    root = parsed(f_note(1, 8, "whole", ["start"], "sharp"), f_note(1, 4, "half", ["stop"]) + f_note(0, 4, "half"))
+    structure.set_key(root, 0, 0)
+    tied, plain = root.find("part").findall("measure")[1].findall("note")
+    assert tied.findtext("pitch/alter") == "1" and plain.find("pitch/alter") is None

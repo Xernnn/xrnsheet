@@ -570,9 +570,10 @@ def respell(context: Context) -> None:
 
     A note only needs one if it differs from what's in force at that point. An earlier F sharp
     stays in force until the barline, so a later plain F needs a natural, which the key alone
-    wouldn't show.
+    wouldn't show. A sharp tied over the barline holds for the tied note alone, so the next F in
+    that bar shows its accidental, whatever it is.
     """
-    in_force: dict[tuple[str, str, str], int] = {}
+    in_force: dict[tuple[str, str, str], int | None] = {}
     timeline = read_measure(context.measure, context.divisions)
     for event in timeline.events():
         for note in [*event.grace, *event.notes]:
@@ -585,7 +586,11 @@ def respell(context: Context) -> None:
             expected = in_force.get(where, alteration_in_key(step, context.fifths))
             for accidental in note.findall("accidental"):
                 note.remove(accidental)
-            if alter != expected and alter in ACCIDENTAL_NAMES and not is_tied(note, "stop"):
+            if is_tied(note, "stop"):
+                if where not in in_force and alter != expected:
+                    in_force[where] = None  # Nothing a later note could match, so it shows its own.
+                continue
+            if alter != expected and alter in ACCIDENTAL_NAMES:
                 accidental = ET.Element("accidental")
                 accidental.text = ACCIDENTAL_NAMES[alter]
                 place(note, accidental)

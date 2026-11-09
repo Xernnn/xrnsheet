@@ -317,7 +317,8 @@ def reread_notes(context: Context, tied: dict[tuple[str, str, str], str | None])
                 element = ET.Element("alter")
                 element.text = str(alter)
                 pitch.insert(1, element)
-            in_force[where] = alter
+            if not is_tied(note, "stop"):  # A sharp tied over the barline holds for the tied note alone.
+                in_force[where] = alter
             tied[where] = str(alter) if is_tied(note, "start") else None
 
 
