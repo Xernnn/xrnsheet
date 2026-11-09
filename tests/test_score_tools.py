@@ -359,6 +359,13 @@ def test_each_part_has_its_own_channel_and_sound():
     assert programs[0].data == 56 or programs[0].patch == 56
 
 
+def test_notes_a_midi_file_cannot_hold_are_left_out_of_it():
+    """A note number has to fit in seven bits. One past that would corrupt the file, and one below 0 can't be written."""
+    notes = [{"start": start, "length": 1, "midi": number, "part": 0} for start, number in enumerate((60, 131, -9))]
+    found = midi_notes(midi_bytes({"tempos": [], "programs": [1], "chords": [], "notes": notes}))
+    assert [event.pitch for event in found.tracks[1].events if event.isNoteOn()] == [60]
+
+
 def test_drums_channel_is_skipped():
     assert 9 not in [channel_of(part) for part in range(30)]
     assert all(0 <= channel_of(part) <= 15 for part in range(30))

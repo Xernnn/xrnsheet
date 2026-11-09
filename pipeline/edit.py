@@ -769,7 +769,8 @@ def insert_rest(root: ET.Element, note_id: str, type_name: str, dots: int) -> st
 def move_note(root: ET.Element, note_id: str, steps: int) -> None:
     """Move a note up or down the staff, taking the key signature's sharps and flats.
 
-    An octave keeps its accidental, because it's the same note name.
+    An octave keeps its accidental, because it's the same note name. MusicXML numbers octaves
+    from 0 to 9, so a note can't go past them.
     """
     note = find_note(root, note_id)
     pitch = note.find("pitch")
@@ -777,6 +778,8 @@ def move_note(root: ET.Element, note_id: str, steps: int) -> None:
         raise EditError("Rests have no pitch to move")
     part, context = context_of(root, note)
     absolute = STEPS.index(pitch.findtext("step")) + 7 * int(pitch.findtext("octave")) + steps
+    if not 0 <= absolute // 7 <= 9:
+        raise EditError("That's too far from the staff.")
     step = STEPS[absolute % 7]
     pitch.find("step").text = step
     pitch.find("octave").text = str(absolute // 7)

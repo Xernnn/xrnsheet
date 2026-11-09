@@ -8,6 +8,7 @@ TICKS_PER_QUARTER = 480
 CHORD_VELOCITY = 50
 MOST_CHANNELS = 16
 DRUM_CHANNEL = 9  # General MIDI keeps this channel for drums, so it's skipped.
+HIGHEST_NOTE = 127  # A note number has seven bits, because a set top bit starts the next event.
 
 
 def variable_length(value: int) -> bytes:
@@ -38,6 +39,8 @@ def track(events: list[tuple[int, int, bytes]]) -> bytes:
 def note_events(notes: list[dict], channel: int) -> list[tuple[int, int, bytes]]:
     events = []
     for note in notes:
+        if not 0 <= note["midi"] <= HIGHEST_NOTE:
+            continue  # A MIDI file can't hold it, and written anyway it would spoil the file.
         velocity = max(min(round(note.get("volume", CHORD_VELOCITY / 127) * 127), 127), 1)
         start = ticks(note["start"])
         end = max(ticks(note["start"] + note["length"]), start + 1)

@@ -150,3 +150,12 @@ def test_deleting_the_first_note_of_a_chord_hands_its_marks_to_the_next():
     assert heir.find("notations/fermata") is not None and heir.find("notations/slur").get("type") == "start"
     assert edit.find_note(root, "note2").find("notations/slur") is not None
     assert not any(rhythm.is_tied(item, kind) for item in root.iter("note") for kind in ("start", "stop"))
+
+
+@pytest.mark.parametrize(("step", "octave", "steps"), [("B", 9, 1), ("B", 9, 7), ("C", 0, -1), ("C", 0, -7)])
+def test_a_note_cannot_move_past_the_octaves_musicxml_has(step, octave, steps):
+    """MusicXML numbers octaves 0 to 9, and a MIDI file can't hold a note much above that."""
+    root = with_ids(parsed(note(step, octave)))
+    with pytest.raises(edit.EditError, match="too far"):
+        edit.move_note(root, "note0", steps)
+    assert pitch(root)[0::2] == (step, str(octave))
