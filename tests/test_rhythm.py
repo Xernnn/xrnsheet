@@ -5,7 +5,7 @@ from fractions import Fraction
 from pathlib import Path
 
 import pytest
-from helpers import harmony, note, parsed, rest
+from helpers import harmony, note, parsed, rest, tied_note
 
 from pipeline import edit, playback, rhythm, structure
 from pipeline.rhythm import EditError, contexts, fit_divisions, read_measure, write_measure
@@ -640,12 +640,7 @@ def test_a_tie_carries_the_sharp_over_the_barline_without_printing_it_again():
 
 
 def f_note(alter, duration, type_name, ties=(), accidental=""):
-    """An F at the top of the treble staff, tied either way or not at all."""
-    written = f"<alter>{alter}</alter>" if alter else ""
-    tie = "".join(f'<tie type="{kind}"/>' for kind in ties)
-    printed = f"<accidental>{accidental}</accidental>" if accidental else ""
-    notations = f"<notations>{''.join(f'<tied type="{kind}"/>' for kind in ties)}</notations>" if ties else ""
-    return f"<note><pitch><step>F</step>{written}<octave>4</octave></pitch><duration>{duration}</duration>{tie}<type>{type_name}</type>{printed}{notations}</note>"
+    return tied_note("F", alter, duration, type_name, ties, accidental)
 
 
 @pytest.mark.parametrize(("alter", "second_bar", "printed"), [

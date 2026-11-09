@@ -1,7 +1,7 @@
 import pytest
-from helpers import harmony, note, parsed, rest
+from helpers import harmony, note, parsed, rest, tied_note
 
-from pipeline import edit
+from pipeline import edit, playback, rhythm
 
 
 def with_ids(root):
@@ -123,3 +123,12 @@ def test_adding_to_a_stack_goes_in_front_of_the_whole_stack():
     root = with_ids(parsed(note("C") + note("E", extra="<chord/>")))
     edit.add_chord(root, "note1", "Am7")
     assert [child.tag for child in root.find(".//measure") if child.tag != "attributes"][0] == "harmony"
+
+
+def test_respelling_a_tied_note_respells_every_note_tied_to_it():
+    """They sound as one note. Splitting the tie would play it again at each barline."""
+    root = with_ids(parsed(*(tied_note("C", 1, 8, "whole", ties) for ties in (["start"], ["stop", "start"], ["stop"]))))
+    edit.respell_note(root, "note1")
+    assert [pitch(root, f"note{number}")[:2] for number in range(3)] == [("D", "-1")] * 3
+    assert [rhythm.is_tied(edit.find_note(root, "note1"), kind) for kind in ("start", "stop")] == [True, True]
+    assert [(item["midi"], item["length"]) for item in playback.playback(root)["notes"]] == [(61, 12.0)]

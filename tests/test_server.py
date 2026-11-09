@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
-from helpers import harmony, note, parsed
+from helpers import harmony, note, parsed, tied_note
 from PIL import Image
 
 from app import server
@@ -653,3 +653,17 @@ def test_versions_past_9999_keep_every_edit_and_undo_in_order(client, ready_scor
     assert pitches(client, ready_score)[0] == "D"
     client.post(f"{url}/redo")
     assert pitches(client, ready_score)[0] == "E"
+
+
+def test_a_selection_holding_both_ends_of_a_tie_is_respelled_once(client):
+    score_id = "c" * 32
+    folder = server.JOB_DIR / score_id
+    folder.mkdir()
+    server.write_status(folder, "ready")
+    root = parsed(tied_note("C", 1, 8, "whole", ["start"]), tied_note("C", 1, 8, "whole", ["stop"]))
+    server.edit.ensure_note_ids(root)
+    server.save_version(folder, root)
+    assert client.post(f"/api/scores/{score_id}/group", json={"action": "respell", "notes": ["note0", "note1"]}).status_code == 200
+    notes = notes_of(client, score_id)
+    assert [(item.findtext("pitch/step"), item.findtext("pitch/alter")) for item in notes] == [("D", "-1")] * 2
+    assert [tie.get("type") for item in notes for tie in item.findall("tie")] == ["start", "stop"]

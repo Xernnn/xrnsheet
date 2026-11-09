@@ -46,6 +46,7 @@ from pipeline.rhythm import (
     same_pitch,
     set_length,
     set_tie,
+    tie_ends,
     tuplet_bounds,
     type_of,
     write_measure,
@@ -528,8 +529,47 @@ def write_note(root: ET.Element, at_id: str, type_name: str, dots: int, step: st
     return {"written": written.head[0].get("id"), "cursor": written.cursor}
 
 
+def tied_notes(root: ET.Element, note: ET.Element) -> list[ET.Element]:
+    """Return a note with every note tied to it, either way, however many bars they cross."""
+    found = [note]
+    for member in found:
+        if member.find("grace") is not None or not (is_tied(member, "start") or is_tied(member, "stop")):
+            continue
+        part, context = context_of(root, member)
+        known = list(contexts(part))
+        timelines = {number: read_measure(known[number].measure, known[number].divisions) for number in range(max(context.index - 1, 0), min(context.index + 2, len(known)))}
+        for line in timelines[context.index].lines.values():
+            ordered = sorted(line, key=lambda event: event.onset)
+            for position, event in enumerate(ordered):
+                if not any(item is member for item in event.notes):
+                    continue
+                after, before = tie_ends(timelines, context.index, ordered, position)
+                ends = [other for other in after if is_tied(member, "start") and is_tied(other, "stop")]
+                ends += [other for other in before if is_tied(member, "stop") and is_tied(other, "start")]
+                found.extend(other for other in ends if same_pitch(member, other) and not any(other is seen for seen in found))
+    return found
+
+
+def one_note_per_tie(root: ET.Element, note_ids: list[str]) -> list[str]:
+    """Leave out notes tied to one listed before them, because respelling a note respells those too."""
+    kept: list[str] = []
+    covered: set[str | None] = set()
+    for note_id in note_ids:
+        if note_id in covered:
+            continue
+        kept.append(note_id)
+        try:
+            covered.update(member.get("id") for member in tied_notes(root, find_note(root, note_id)))
+        except EditError:
+            pass  # The edit itself will say what's wrong with this one.
+    return kept
+
+
 def respell_note(root: ET.Element, note_id: str) -> None:
-    """Swap a note for the same sound under another name, as C sharp for D flat."""
+    """Swap a note for the same sound under another name, as C sharp for D flat.
+
+    Notes tied to it change with it. They're one sound, and a tie only joins notes spelled alike.
+    """
     note = find_note(root, note_id)
     pitch = note.find("pitch")
     if pitch is None:
@@ -548,12 +588,16 @@ def respell_note(root: ET.Element, note_id: str) -> None:
     if not choices:
         raise EditError("This note has no other spelling.")
     _, _, other, other_alter, other_octave = min(choices)
-    pitch.find("step").text = other
-    pitch.find("octave").text = str(other_octave)
-    write_alter(pitch, other_alter)
-    part, context = context_of(root, note)
-    respell(context)
-    repair_ties(part, context.index)
+    chain = tied_notes(root, note)
+    for member in chain:
+        written = member.find("pitch")
+        written.find("step").text = other
+        written.find("octave").text = str(other_octave)
+        write_alter(written, other_alter)
+    for member in chain:
+        part, context = context_of(root, member)
+        respell(context)
+        repair_ties(part, context.index)
 
 
 def flip_stem(root: ET.Element, note_id: str) -> None:

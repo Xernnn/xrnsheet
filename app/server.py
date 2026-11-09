@@ -538,7 +538,9 @@ def change_group(score_id: str, body: GroupEdit) -> dict:
 
     def change(root: ET.Element) -> None:
         done = 0
-        for note_id in body.notes:
+        # Respelling a note respells the notes tied to it, so a second one of those would undo it.
+        chosen = edit.one_note_per_tie(root, body.notes) if body.action == "respell" else body.notes
+        for note_id in chosen:
             try:
                 GROUP_ACTIONS[body.action](root, note_id)
                 done += 1

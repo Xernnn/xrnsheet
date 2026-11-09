@@ -634,27 +634,33 @@ def bar_ending_notes(timeline: Timeline) -> list[ET.Element]:
     return [note for line in timeline.lines.values() if line for note in max(line, key=lambda event: event.end).notes]
 
 
-def repair_ties(part: ET.Element, index: int) -> None:
-    """Remove half-ties around an edited measure, left when the note at one end has gone.
+def tie_ends(timelines: dict[int, Timeline], number: int, ordered: list[Event], position: int) -> tuple[list[ET.Element], list[ET.Element]]:
+    """Return the notes a tie from this event could end on, and those a tie into it could start from.
 
     A tie joins two sounds, so its other end is whatever sounds at that moment, in any voice. The
     next note in the same voice won't do: that voice may not play again for bars.
     """
+    timeline, event = timelines[number], ordered[position]
+    if position + 1 < len(ordered):
+        after = [*ordered[position + 1].notes, *notes_starting(timeline, event.end)]
+    else:
+        after = notes_starting(timelines[number + 1], Fraction(0)) if number + 1 in timelines else []
+    if position:
+        before = [*ordered[position - 1].notes, *notes_ending(timeline, event.onset)]
+    else:
+        before = bar_ending_notes(timelines[number - 1]) if number - 1 in timelines else []
+    return after, before
+
+
+def repair_ties(part: ET.Element, index: int) -> None:
+    """Remove half-ties around an edited measure, left when the note at one end has gone."""
     known = list(contexts(part))
     timelines = {number: read_measure(known[number].measure, known[number].divisions) for number in range(max(index - 2, 0), min(index + 3, len(known)))}
     for number in range(max(index - 1, 0), min(index + 2, len(known))):
-        timeline = timelines[number]
-        for line in timeline.lines.values():
+        for line in timelines[number].lines.values():
             ordered = sorted(line, key=lambda event: event.onset)
             for position, event in enumerate(ordered):
-                if position + 1 < len(ordered):
-                    after = [*ordered[position + 1].notes, *notes_starting(timeline, event.end)]
-                else:
-                    after = notes_starting(timelines[number + 1], Fraction(0)) if number + 1 in timelines else []
-                if position:
-                    before = [*ordered[position - 1].notes, *notes_ending(timeline, event.onset)]
-                else:
-                    before = bar_ending_notes(timelines[number - 1]) if number - 1 in timelines else []
+                after, before = tie_ends(timelines, number, ordered, position)
                 for note in event.notes:
                     if is_tied(note, "start") and not any(same_pitch(note, other) and is_tied(other, "stop") for other in after):
                         set_tie(note, "start", False)
