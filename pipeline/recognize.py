@@ -28,6 +28,7 @@ from chords.vocab import parse_chord
 from pipeline import align
 from pipeline.chord_boxes import find_chords
 from pipeline.musicxml import insert_harmony, load_root, read_measures, to_text
+from pipeline.repair import repair
 
 MODEL_PATH = ROOT / "models" / "chord_reader.pt"
 
@@ -184,6 +185,7 @@ def recognize(image_path: Path, out_dir: Path, reader: str = "model", device: st
     for name in root.iter("part-name"):
         name.text = ""  # homr always guesses "Voice" or "Piano", which shouldn't be printed.
 
+    repair(root)
     out_path = out_dir / f"{image_path.stem}.musicxml"
     out_path.write_text(to_text(root), encoding="utf-8")
     (out_dir / "homr.musicxml").unlink(missing_ok=True)

@@ -25,7 +25,7 @@ PADDING = 3
 SMALLEST_BOX = 6
 # Gaps inside one printed chord are narrower than this share of its height.
 SPLIT_GAP = 0.22
-MOST_PIECES = 6
+MOST_PIECES = 10  # Every way of grouping them is read, and a box of 7 can hold 5 chords.
 # A fragment joins the chord on its left if it's this close, as a share of that chord's height.
 JOIN_DISTANCE = 0.9
 SMALLEST_FRAGMENT = 0.3

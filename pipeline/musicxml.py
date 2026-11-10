@@ -5,6 +5,7 @@ from the start of a measure.
 """
 
 import io
+import re
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
@@ -49,6 +50,11 @@ QUALITY_TO_KIND: dict[str, tuple[str, list[tuple[int, int]]]] = {
 }
 KIND_TO_QUALITY = {kind: quality for quality, (kind, degrees) in QUALITY_TO_KIND.items() if not degrees}
 ALTER_TEXT = {-1: "b", 0: "", 1: "#"}
+MOST_UNPACKED_BYTES = 64 * 1024 * 1024  # A small compressed file can unpack to something huge.
+# XML can't hold these at all, so one pasted into a title would save a file that won't open. A word
+# processor's line and page breaks become spaces, and the rest go, with any half of a broken character.
+PAGE_BREAKS = re.compile("[\x0b\x0c]")
+NOT_XML = re.compile("[\x00-\x08\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 
 
 @dataclass
@@ -75,10 +81,28 @@ def load_root(path: Path) -> ET.Element:
     return ET.parse(path).getroot()
 
 
+def read_score_file(data: bytes, suffix: str) -> ET.Element:
+    """Read a MusicXML file someone opened, raising ValueError if it isn't one this app can edit."""
+    try:
+        if suffix == ".mxl":
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                container = ET.fromstring(archive.read("META-INF/container.xml"))
+                name = next(item.get("full-path") for item in container.iter("rootfile"))
+                if archive.getinfo(name).file_size > MOST_UNPACKED_BYTES:
+                    raise ValueError("That file is too large.")
+                data = archive.read(name)
+        root = ET.fromstring(data)
+    except (ET.ParseError, zipfile.BadZipFile, KeyError, StopIteration) as error:
+        raise ValueError("That file couldn't be read as MusicXML.") from error
+    if root.tag != "score-partwise" or root.find("part") is None:
+        raise ValueError("Only MusicXML scores written part by part can be opened.")
+    return root
+
+
 def to_text(root: ET.Element) -> str:
     buffer = io.StringIO()
     ET.ElementTree(root).write(buffer, encoding="unicode", xml_declaration=False)
-    return '<?xml version="1.0" encoding="UTF-8"?>\n' + buffer.getvalue()
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + NOT_XML.sub("", PAGE_BREAKS.sub(" ", buffer.getvalue()))
 
 
 def split_pitch(name: str) -> tuple[str, int]:

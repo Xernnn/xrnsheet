@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>xrnsheet</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <style>
 :root {
   --paper: #fbfaf7; --panel: #ffffff; --ink: #1f2328; --muted: #646b73;
@@ -32,9 +33,10 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .spinner { width: 28px; height: 28px; margin: 0 auto 14px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
-#message { padding: 9px 14px; background: var(--warn-soft); color: #7a3606; border-radius: 8px; margin-bottom: 12px; }
+#message { position: sticky; top: 62px; z-index: 4; padding: 9px 14px; background: var(--warn-soft); color: #7a3606; border-radius: 8px; margin-bottom: 12px; }
 #workspace { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 16px; align-items: start; }
 @media (max-width: 860px) { #workspace { grid-template-columns: minmax(0, 1fr); } }
+#workspace.solo { grid-template-columns: minmax(0, 1fr); }
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
 section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
 #original { position: sticky; top: 68px; }
@@ -52,15 +54,47 @@ section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0
 .box { position: absolute; border: 1.5px solid #2e9e6b; border-radius: 2px; pointer-events: none; }
 .box.unsure { border-color: var(--warn); background: rgba(194, 87, 12, .13); }
 .box.active { border-color: var(--accent); background: rgba(31, 111, 235, .16); }
-#tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
-#tools button { min-width: 38px; }
-#tools .label { color: var(--muted); font-size: 13px; margin-right: 4px; }
+#tools { display: grid; gap: 6px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); position: sticky; top: 56px; z-index: 3; background: var(--panel); }
+#tools .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#tools button, #tools select { font: inherit; min-width: 34px; min-height: 34px; padding: 4px 9px; }
+#tools select { max-width: 138px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); }
+#tools .group { display: inline-flex; flex-wrap: wrap; gap: 2px; }
+#tools .gap { width: 6px; }
+#tools .label { color: var(--muted); font-size: 13px; }
+#tools button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+#lengths button { padding: 4px 7px; line-height: 0; }
+#pagesFrame { position: relative; }
+@media (max-width: 860px) {
+  /* A page is drawn to fit a desktop, so on a phone it scrolls sideways instead of shrinking. */
+  #tools { position: static; }
+  #pagesFrame { overflow-x: auto; }
+  #pages { min-width: 820px; }
+}
+#caret { position: absolute; background: rgba(31, 111, 235, .17); border-left: 2px solid var(--accent); border-radius: 2px; pointer-events: none; }
+#keysHelp { margin-bottom: 8px; font-size: 13px; color: var(--muted); }
+#keysHelp table { border-collapse: collapse; margin-top: 6px; }
+#keysHelp td { padding: 2px 14px 2px 0; }
+#keysHelp kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; background: var(--paper); color: var(--ink); }
+#barChecks { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+#blankStart { margin-top: 14px; }
+#blankForm { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); text-align: left; }
+#blankForm label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); min-width: 0; }
+#blankForm select, #blankForm input { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+#blankForm button { grid-column: 1 / -1; }
 #pages svg { display: block; width: 100%; height: auto; }
 #pages { scroll-margin-top: 68px; }
-#pages g.note, #pages g.harm { cursor: pointer; }
-#pages g.note:hover { fill: var(--accent); stroke: var(--accent); }
-#pages g.note.selected, #pages g.note.selected * { fill: var(--accent); stroke: var(--accent); }
+#pages g.note, #pages g.rest, #pages g.mRest, #pages g.harm { cursor: pointer; }
+body.inputting #pages { cursor: crosshair; }
+#ghost { position: absolute; border-radius: 50%; background: var(--accent); opacity: .45; pointer-events: none; transform: rotate(-20deg); }
+#lyricInput { position: absolute; z-index: 2; width: 110px; padding: 2px 6px; font: inherit; border: 1px solid var(--accent); border-radius: 5px; background: var(--panel); color: var(--ink); }
+#titleFields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 8px; margin-bottom: 8px; }
+#titleFields input { font: inherit; width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); box-sizing: border-box; }
+#pages g.note:hover, #pages g.rest:hover, #pages g.mRest:hover { fill: var(--accent); stroke: var(--accent); }
+#pages g.selected, #pages g.selected * { fill: var(--accent); stroke: var(--accent); }
+#pages g.playing, #pages g.playing * { fill: #2e9e6b; stroke: #2e9e6b; }
 #pages g.harm:hover text, #pages g.harm.active text { fill: var(--accent); }
+#pages g[data-mark], #pages g.slur, #pages g.hairpin { cursor: pointer; }
+#pages g[data-mark]:hover text, #pages g[data-mark]:hover tspan { fill: var(--accent); }
 #pages g.harm.unsure text { fill: var(--warn); }
 #checks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
 #checks .label { color: var(--muted); font-size: 13px; }
@@ -74,9 +108,15 @@ section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0
 <body>
 <header>
   <h1>xrnsheet</h1>
+  <button id="play" hidden title="Play from the selected note (Space)">Play</button>
   <button id="undo" hidden disabled>Undo</button>
+  <button id="redo" hidden disabled>Redo</button>
   <button id="checked" hidden title="Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.">Mark as checked</button>
+  <select id="speed" hidden aria-label="Playback speed"><option value="0.5">50%</option><option value="0.75">75%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select>
   <a id="xml" class="button" hidden>MusicXML</a>
+  <a id="midi" class="button" hidden>MIDI</a>
+  <button id="audio" hidden>Audio</button>
+  <select id="partPdf" hidden aria-label="Print one instrument's part"></select>
   <a id="pdf" class="button primary" hidden>Download PDF</a>
   <button id="again" hidden>New sheet</button>
 </header>
@@ -86,10 +126,20 @@ section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0
     <p>Notes and chord symbols are read for you. Fix what's wrong, then print a clean PDF.</p>
     <div id="drop">
       <div class="actions">
-        <label class="button primary" tabindex="0">Choose a file<input id="file" type="file" accept="image/*,.pdf" hidden></label>
+        <label class="button primary" tabindex="0">Choose a file<input id="file" type="file" accept="image/*,.pdf,.musicxml,.xml,.mxl" hidden></label>
         <label class="button" tabindex="0">Take a photo<input id="camera" type="file" accept="image/*" capture="environment" hidden></label>
       </div>
-      <div class="hint">Or drop a photo or PDF here. Flat, well-lit pages read best.</div>
+      <div class="hint">Or drop a photo, PDF or MusicXML file here. Flat, well-lit pages read best.</div>
+    </div>
+    <div id="blankStart">
+      <button id="blankOpen">Or start a blank score</button>
+      <form id="blankForm" hidden>
+        <label>Key<select id="blankKey"></select></label>
+        <label>Time<select id="blankTime"><option>4/4</option><option>3/4</option><option>2/4</option><option>2/2</option><option>6/8</option><option>9/8</option><option>12/8</option><option>5/4</option></select></label>
+        <label>Staff<select id="blankClef"><option value="treble">Treble</option><option value="bass">Bass</option><option value="piano">Piano</option></select></label>
+        <label>Bars<input id="blankBars" type="number" min="1" max="1000" value="32"></label>
+        <button class="primary" type="submit">Create score</button>
+      </form>
     </div>
     <div id="history" hidden><h3>Your sheets</h3><div id="historyList"></div></div>
   </div>
@@ -102,18 +152,111 @@ section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0
       <div id="checks" hidden><span class="label">Please check:</span></div>
     </section>
     <section aria-label="Recognized score">
-      <div id="tools">
-        <span class="label" id="toolLabel">Click a note or chord to edit it</span>
-        <button data-action="up" disabled title="Move up (↑)" aria-label="Move note up">↑</button>
-        <button data-action="down" disabled title="Move down (↓)" aria-label="Move note down">↓</button>
-        <button data-action="sharp" disabled title="Sharp (#)" aria-label="Make sharp">♯</button>
-        <button data-action="flat" disabled title="Flat (b)" aria-label="Make flat">♭</button>
-        <button data-action="natural" disabled title="Natural (n)" aria-label="Make natural">♮</button>
-        <button data-action="clear" disabled title="Remove a fermata, ornament or accent from this note">Clear marks</button>
-        <button data-action="delete" disabled title="Delete (Del)">Delete</button>
-        <button id="addChord" disabled>Add chord</button>
+      <div id="titleFields">
+        <input id="titleInput" aria-label="Title" placeholder="Title" maxlength="200">
+        <input id="composerInput" aria-label="Composer" placeholder="Composer" maxlength="200">
       </div>
-      <div id="pages"></div>
+      <div id="tools">
+        <div class="row">
+          <button id="inputToggle" title="Enter notes with the keyboard (N)" aria-pressed="false">Enter notes</button>
+          <span class="group" id="lengths" role="group" aria-label="Note length"></span>
+          <button id="dotButton" title="Dotted (.)" aria-label="Dotted note" aria-pressed="false">•</button>
+          <button data-action="tie" data-needs="note" title="Tie to the next note (T)">Tie</button>
+          <button id="tripletButton" data-needs="note" title="Make a triplet here, or take it away (Ctrl+3)">Triplet</button>
+          <span class="gap"></span>
+          <button data-action="up" data-needs="note" title="Move up (↑), or an octave with Ctrl" aria-label="Move note up">↑</button>
+          <button data-action="down" data-needs="note" title="Move down (↓), or an octave with Ctrl" aria-label="Move note down">↓</button>
+          <button data-action="sharp" data-needs="note" title="Sharp (#)" aria-label="Make sharp">♯</button>
+          <button data-action="flat" data-needs="note" title="Flat (-)" aria-label="Make flat">♭</button>
+          <button data-action="natural" data-needs="note" title="Natural (=)" aria-label="Make natural">♮</button>
+        </div>
+        <div class="row" id="pitches" hidden></div>
+        <div class="row">
+          <button data-action="delete" data-needs="note" title="Turn this note into a rest (Del)">Delete</button>
+          <button data-action="close" data-needs="note" title="Remove this and pull later notes in. Fixes a bar with too many beats (Ctrl+Del)">Remove beat</button>
+          <button data-action="insert" data-needs="note" title="Open a gap here. Fixes a bar with too few beats">Insert beat</button>
+          <button data-action="clear" data-needs="note" title="Remove a fermata, ornament or accent from this note">Clear marks</button>
+          <button id="addChord" data-needs="note">Add chord</button>
+          <button id="lyricButton" data-needs="note" title="Type words under the notes (Ctrl+L)">Lyrics</button>
+          <button id="copy" data-needs="note" title="Copy the selection (Ctrl+C)">Copy</button>
+          <button id="paste" disabled title="Paste here (Ctrl+V)">Paste</button>
+          <span class="gap"></span>
+          <button id="addBar" title="Add a bar before the selected one, or at the end">Add bar</button>
+          <button id="deleteBar" data-needs="note" title="Delete the selected bar">Delete bar</button>
+          <select id="keyChoice" aria-label="Change the key from this bar. Notes stay on their lines."><option value="">Key…</option></select>
+          <select id="timeChoice" aria-label="Change the time from this bar. Notes stay in their bars."><option value="">Time…</option><option>2/2</option><option>2/4</option><option>3/4</option><option>4/4</option><option>5/4</option><option>6/4</option><option>3/8</option><option>6/8</option><option>9/8</option><option>12/8</option><optgroup label="Start with a pickup"><option value="pickup:2">Pickup of an eighth</option><option value="pickup:4">Pickup of a quarter</option><option value="pickup:8">Pickup of a half</option><option value="pickup:12">Pickup of three quarters</option><option value="pickup:0">No pickup</option></optgroup></select>
+          <select id="repeatChoice" aria-label="Add a repeat or ending at this bar"><option value="">Repeat…</option><option value="forward">Start repeat</option><option value="backward">End repeat</option><option value="1">First ending</option><option value="2">Second ending</option><option value="0">No ending</option></select>
+        </div>
+        <div class="row" id="markRow">
+          <span class="group" id="voices" role="group" aria-label="Voice"></span>
+          <button id="slurButton" data-needs="note" title="Slur a stretch, or this note to the next (S)">Slur</button>
+          <button id="crescButton" data-needs="note" title="Crescendo over this stretch (&lt;)">Cresc.</button>
+          <button id="dimButton" data-needs="note" title="Diminuendo over this stretch (&gt;)">Dim.</button>
+          <button id="graceButton" data-needs="note" title="Grace note before this note (/)">Grace</button>
+          <select id="markChoice" aria-label="Add a mark to this note"><option value="">Mark…</option>
+            <optgroup label="Articulation"><option value="staccato">Staccato</option><option value="tenuto">Tenuto</option><option value="accent">Accent</option><option value="marcato">Marcato</option><option value="staccatissimo">Staccatissimo</option><option value="fermata">Fermata</option><option value="breath">Breath mark</option></optgroup>
+            <optgroup label="Ornament"><option value="trill">Trill</option><option value="mordent">Mordent</option><option value="prall">Upper mordent</option><option value="turn">Turn</option><option value="arpeggio">Arpeggio</option></optgroup>
+            <optgroup label="Strings"><option value="downbow">Down bow</option><option value="upbow">Up bow</option></optgroup>
+          </select>
+          <select id="dynamicChoice" aria-label="Add a dynamic at this note"><option value="">Dynamic…</option><option>ppp</option><option>pp</option><option>p</option><option>mp</option><option>mf</option><option>f</option><option>ff</option><option>fff</option><option>sf</option><option>sfz</option><option>fp</option><option>rfz</option></select>
+          <select id="tempoChoice" aria-label="Set the tempo from this note"><option value="">Tempo…</option><option>Largo 50</option><option>Adagio 70</option><option>Andante 92</option><option>Moderato 112</option><option>Allegro 132</option><option>Presto 172</option><option value="type">Type a tempo…</option><option value="swing">Swing</option><option value="straight">Straight</option></select>
+          <select id="textChoice" aria-label="Add text at this note"><option value="">Text…</option><option value="staff">Staff text…</option><option value="expression">Expression…</option><option value="rehearsal">Rehearsal letter</option></select>
+          <select id="jumpChoice" aria-label="Add a jump at this bar"><option value="">Jump…</option><option value="segno">Segno</option><option value="coda">Coda</option><option value="tocoda">To Coda</option><option value="fine">Fine</option><option value="dc">D.C.</option><option value="dcfine">D.C. al Fine</option><option value="dccoda">D.C. al Coda</option><option value="ds">D.S.</option><option value="dsfine">D.S. al Fine</option><option value="dscoda">D.S. al Coda</option></select>
+          <select id="clefChoice" aria-label="Change the clef from this bar"><option value="">Clef…</option><option value="treble">Treble</option><option value="treble8">Treble, octave down</option><option value="bass">Bass</option><option value="alto">Alto</option><option value="tenor">Tenor</option></select>
+          <select id="transposeChoice" aria-label="Transpose the selection, or the whole score if nothing is selected"><option value="">Transpose…</option>
+            <optgroup label="By interval"><option value="m2:up">Up a semitone</option><option value="m2:down">Down a semitone</option><option value="M2:up">Up a tone</option><option value="M2:down">Down a tone</option><option value="P4:up">Up a fourth</option><option value="P5:up">Up a fifth</option><option value="P8:up">Up an octave</option><option value="P8:down">Down an octave</option></optgroup>
+            <optgroup label="For an instrument"><option value="M2:up">For B♭ instruments</option><option value="M6:up">For E♭ instruments</option><option value="P5:up">For F instruments</option></optgroup>
+            <optgroup label="To a key" id="transposeKeys"></optgroup>
+          </select>
+          <select id="partChoice" aria-label="Add or remove an instrument"><option value="">Instruments…</option>
+            <optgroup label="Add"><option value="voice">Voice</option><option value="piano">Piano</option><option value="guitar">Guitar</option><option value="bass-guitar">Bass guitar</option><option value="violin">Violin</option><option value="viola">Viola</option><option value="cello">Cello</option><option value="double-bass">Double bass</option><option value="flute">Flute</option><option value="oboe">Oboe</option><option value="clarinet">Clarinet in B♭</option><option value="alto-sax">Alto saxophone</option><option value="tenor-sax">Tenor saxophone</option><option value="baritone-sax">Baritone saxophone</option><option value="trumpet">Trumpet in B♭</option><option value="horn">Horn in F</option><option value="trombone">Trombone</option></optgroup>
+            <option value="remove">Remove this instrument</option>
+          </select>
+          <select id="layoutChoice" aria-label="Change how bars are laid out"><option value="">Layout…</option><option value="break">Line break here</option><option value="0">Fit bars to the page</option><option value="2">2 bars a line</option><option value="3">3 bars a line</option><option value="4">4 bars a line</option><option value="5">5 bars a line</option><option value="6">6 bars a line</option><option value="8">8 bars a line</option></select>
+        </div>
+        <span class="label" id="toolLabel"></span>
+      </div>
+      <div id="barChecks" hidden></div>
+      <details id="keysHelp">
+        <summary>Keyboard shortcuts</summary>
+        <table>
+          <tr><td><kbd>N</kbd></td><td>Start or stop entering notes</td></tr>
+          <tr><td><kbd>A</kbd> to <kbd>G</kbd></td><td>Write that note, then move on</td></tr>
+          <tr><td><kbd>Shift</kbd>+<kbd>A</kbd> to <kbd>G</kbd></td><td>Add that note to the chord just written</td></tr>
+          <tr><td><kbd>1</kbd> to <kbd>7</kbd></td><td>Length, from a 64th to a whole note. <kbd>5</kbd> is a quarter note</td></tr>
+          <tr><td><kbd>.</kbd></td><td>Dotted</td></tr>
+          <tr><td><kbd>0</kbd></td><td>Rest</td></tr>
+          <tr><td><kbd>T</kbd></td><td>Tie to the next note</td></tr>
+          <tr><td><kbd>#</kbd> <kbd>-</kbd> <kbd>=</kbd></td><td>Sharp, flat, natural</td></tr>
+          <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Move a note. With <kbd>Ctrl</kbd>, move an octave</td></tr>
+          <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous or next note</td></tr>
+          <tr><td><kbd>Space</kbd></td><td>Play or stop</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd>, <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Undo, redo</td></tr>
+          <tr><td><kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>Del</kbd></td><td>Make a rest, or remove the beat</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>3</kbd></td><td>Make a triplet from the chosen length, then type its notes. <kbd>5</kbd> <kbd>6</kbd> <kbd>7</kbd> make other tuplets</td></tr>
+          <tr><td><kbd>Shift</kbd>+click, <kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>Select a stretch of notes</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd> <kbd>A</kbd></td><td>Copy, cut, paste, select everything on the staff</td></tr>
+          <tr><td><kbd>S</kbd></td><td>Slur a stretch, or this note to the next</td></tr>
+          <tr><td><kbd>&lt;</kbd> <kbd>&gt;</kbd></td><td>Crescendo, diminuendo</td></tr>
+          <tr><td><kbd>Shift</kbd>+<kbd>S</kbd> <kbd>V</kbd> <kbd>N</kbd> <kbd>O</kbd></td><td>Staccato, accent, tenuto, marcato</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Grace note before this note</td></tr>
+          <tr><td><kbd>R</kbd></td><td>Repeat this note or stretch</td></tr>
+          <tr><td><kbd>J</kbd></td><td>Swap for the same note under another name</td></tr>
+          <tr><td><kbd>X</kbd></td><td>Flip the stem</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>1</kbd> to <kbd>4</kbd></td><td>Write in that voice, or move the selection to it</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Start a new line at this bar</td></tr>
+          <tr><td>Drag a selected note</td><td>Move it up or down</td></tr>
+          <tr><td>Click a dynamic, slur or text</td><td>Change or remove it</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>L</kbd></td><td>Type lyrics. <kbd>Space</kbd> moves on, <kbd>-</kbd> joins syllables, <kbd>↓</kbd> <kbd>↑</kbd> change verse, <kbd>Enter</kbd> finishes</td></tr>
+          <tr><td>Click the staff</td><td>While entering notes, place a note there. <kbd>Shift</kbd>+click adds it to a chord</td></tr>
+        </table>
+      </details>
+      <div id="pagesFrame">
+        <div id="pages"></div>
+        <div id="caret" hidden></div>
+        <div id="ghost" hidden></div>
+        <input id="lyricInput" aria-label="Lyric" hidden autocomplete="off" spellcheck="false">
+      </div>
     </section>
   </div>
 </main>
@@ -127,13 +270,28 @@ section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0
 const $ = id => document.getElementById(id);
 const UNSURE_BELOW = 0.8;
 let scoreId = null, score = null, selected = null, editing = null;
+let queue = Promise.resolve();
+
+// Edits run one at a time, in order. Fast typing would otherwise race its own responses.
+// Edits run one at a time, in the order they were asked for. Anything that changes where the
+// next edit lands, such as a note length or a cursor move, has to wait its turn here too, or a
+// quick typist's choice reaches notes that are still waiting to be sent.
+function enqueue(task) {
+  queue = queue.then(task).catch(error => message(error.message));
+  return queue;
+}
 
 function show(view) {
   $("start").hidden = view !== "start";
   $("busy").hidden = view !== "busy";
   $("workspace").hidden = view !== "workspace";
-  for (const id of ["undo", "checked", "xml", "pdf", "again"]) $(id).hidden = view !== "workspace";
-  if (view === "start") drawHistory();
+  for (const id of ["play", "speed", "undo", "redo", "checked", "xml", "midi", "audio", "pdf", "again"]) $(id).hidden = view !== "workspace";
+  if (view === "workspace") {
+    $("checked").hidden = score.blank;
+    $("original").hidden = score.blank;
+    $("workspace").classList.toggle("solo", score.blank);
+  }
+  if (view === "start") { stopPlaying(); setInput(false); drawHistory(); }
 }
 
 async function drawHistory() {
@@ -147,10 +305,10 @@ async function drawHistory() {
     link.addEventListener("click", event => { event.preventDefault(); location.hash = sheet.id; scoreId = sheet.id; poll(); });
     const title = document.createElement("span");
     const when = new Date(sheet.saved * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
-    title.textContent = `${when}, ${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.chords} ${sheet.chords === 1 ? "chord" : "chords"}`;
+    title.textContent = sheet.title ? `${sheet.title}, ${when}` : sheet.blank ? `${when}, written from scratch` : `${when}, ${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.chords} ${sheet.chords === 1 ? "chord" : "chords"}`;
     const state = document.createElement("span");
     state.className = "state";
-    state.textContent = sheet.checked ? "Checked" : "Not checked";
+    state.textContent = sheet.blank ? "" : sheet.checked ? "Checked" : "Not checked";
     link.append(title, state);
     return link;
   }));
@@ -190,6 +348,7 @@ async function poll() {
   score = data;
   drawOriginals();
   $("xml").href = `/api/scores/${scoreId}/score.musicxml`;
+  $("midi").href = `/api/scores/${scoreId}/score.mid`;
   $("pdf").href = `/api/scores/${scoreId}/score.pdf`;
   show("workspace");
   draw();
@@ -198,6 +357,7 @@ async function poll() {
 function draw() {
   $("pages").innerHTML = score.pages.join("");
   $("undo").disabled = !score.canUndo;
+  $("redo").disabled = !score.canRedo;
   $("checked").textContent = score.checked ? "Checked ✓" : "Mark as checked";
   $("checked").classList.toggle("done", score.checked);
   const shown = [...document.querySelectorAll("#pages g.harm")];
@@ -207,12 +367,18 @@ function draw() {
     element.dataset.index = index;
     if (chord.confidence !== null && chord.confidence < UNSURE_BELOW) element.classList.add("unsure");
   });
+  tagMarks();
+  drawParts();
   drawBoxes();
   drawChecks();
+  drawBarChecks();
+  drawTitle();
   if (selected) {
     const element = document.getElementById(selected);
     if (element) element.classList.add("selected"); else selected = null;
   }
+  drawRange();
+  drawCursor();
   updateTools();
 }
 
@@ -265,14 +431,9 @@ function drawChecks() {
   }
 }
 
-function updateTools() {
-  const on = Boolean(selected);
-  document.querySelectorAll("#tools button").forEach(button => { button.disabled = !on; });
-  $("toolLabel").textContent = on ? "Note:" : "Click a note or chord to edit it";
-}
-
 function select(id) {
-  document.querySelectorAll("#pages g.note.selected").forEach(element => element.classList.remove("selected"));
+  document.querySelectorAll("#pages g.selected").forEach(element => element.classList.remove("selected"));
+  range = null;
   selected = id;
   if (id) document.getElementById(id)?.classList.add("selected");
   updateTools();
@@ -285,18 +446,27 @@ async function send(path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || "That edit didn't work.");
-  score = data;
-  draw();
+  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "That edit didn't work.");
+  const before = editor.cursor;
+  receive(data);
+  if (editor.on && path !== "undo" && path !== "redo") {
+    editor.trail.push({ before, after: editor.cursor });
+    editor.future = [];
+  }
+  return data;
 }
 
-async function noteAction(action) {
-  if (!selected) return;
-  try {
-    const id = selected;
-    await send(`notes/${id}`, { action });
-    if (action !== "delete") select(id); else select(null);
-  } catch (error) { message(error.message); }
+async function applyToNote(action, extra = {}) {
+  if (range && GROUP_ACTIONS.has(action)) {
+    await send("group", { action, notes: range.ids });
+    return;
+  }
+  const id = actionTarget();
+  if (id) await send(`notes/${id}`, { action, type: editor.type, dots: editor.dots, ...extra });
+}
+
+function noteAction(action, extra = {}) {
+  return enqueue(() => applyToNote(action, extra));
 }
 
 function openEditor(rect, index, text, noteId = null) {
@@ -308,6 +478,8 @@ function openEditor(rect, index, text, noteId = null) {
   $("editor").hidden = false;
   $("editorError").hidden = true;
   $("chordDelete").hidden = index === null;
+  $("chordInput").hidden = $("chordSave").hidden = false;
+  $("chordInput").placeholder = "e.g. Bbmaj7";
   const width = $("editor").offsetWidth;
   $("editor").style.left = `${Math.max(8, Math.min(rect.left + scrollX, innerWidth - width - 8))}px`;
   $("editor").style.top = `${rect.bottom + scrollY + 6}px`;
@@ -325,7 +497,9 @@ function closeEditor() {
 async function saveChord(text) {
   if (!editing) return;
   try {
-    if (editing.index === null) await send("chords", { note: editing.noteId, text });
+    if (editing.mark) await send("marks", { action: "label", id: editing.mark, text });
+    else if (editing.newMark) await send("marks", { ...editing.newMark, text });
+    else if (editing.index === null) await send("chords", { note: editing.noteId, text });
     else await send(`chords/${editing.index}`, { text });
     closeEditor();
   } catch (error) {
@@ -338,7 +512,7 @@ async function saveChord(text) {
 function nearest(selector, x, y, reach) {
   let best = null, bestDistance = reach;
   for (const element of document.querySelectorAll(selector)) {
-    const box = (element.querySelector(".notehead") || element).getBoundingClientRect();
+    const box = headBox(element);
     const dx = Math.max(box.left - x, 0, x - box.right);
     const dy = Math.max(box.top - y, 0, y - box.bottom);
     const distance = Math.hypot(dx, dy);
@@ -348,45 +522,51 @@ function nearest(selector, x, y, reach) {
 }
 
 $("pages").addEventListener("click", event => {
+  if (dragged) { dragged = false; return; }
+  if (editor.on) {
+    const spot = placeUnder(event.clientX, event.clientY);
+    closeEditor();
+    if (spot) placeNote(spot, event.shiftKey);
+    return;
+  }
+  const mark = markAt(event);
+  if (mark) { openMark(mark); return; }
   const chord = event.target.closest("g.harm") || nearest("#pages g.harm", event.clientX, event.clientY, 6);
   if (chord && chord.dataset.index !== undefined) {
     const index = Number(chord.dataset.index);
     openEditor(chord.getBoundingClientRect(), index, score.chords[index].text);
     return;
   }
-  const note = event.target.closest("g.note") || nearest("#pages g.note", event.clientX, event.clientY, 14);
+  const note = event.target.closest("g.note, g.rest, g.mRest") || nearest("#pages g.note, #pages g.rest, #pages g.mRest", event.clientX, event.clientY, 14);
   closeEditor();
-  select(note ? note.id : null);
+  enqueue(async () => {
+    if (event.shiftKey && note && selected) await growRange(note.id); else select(note ? note.id : null);
+  });
 });
 
 document.querySelectorAll("#tools button[data-action]").forEach(button => {
   button.addEventListener("click", () => noteAction(button.dataset.action));
 });
 
-$("addChord").addEventListener("click", () => {
-  const note = document.getElementById(selected);
-  if (note) openEditor(note.getBoundingClientRect(), null, "", selected);
-});
-$("chordSave").addEventListener("click", () => saveChord($("chordInput").value));
-$("chordDelete").addEventListener("click", () => saveChord(""));
+$("addChord").addEventListener("click", () => enqueue(async () => {
+  const id = actionTarget();
+  const note = id && document.getElementById(id);
+  if (note) openEditor(headBox(note), null, "", id);
+}));
+// The text is read now and saved in turn, as a reply that's on its way can redraw the box.
+const saveInTurn = text => enqueue(() => saveChord(text));
+$("chordSave").addEventListener("click", () => saveInTurn($("chordInput").value));
+$("chordDelete").addEventListener("click", () => saveInTurn(""));
 $("chordInput").addEventListener("keydown", event => {
-  if (event.key === "Enter") saveChord(event.target.value);
+  if (event.key === "Enter") saveInTurn(event.target.value);
   if (event.key === "Escape") closeEditor();
 });
 
-$("undo").addEventListener("click", () => send("undo").catch(error => message(error.message)));
-$("checked").addEventListener("click", () => send("checked", { checked: !score.checked }).catch(error => message(error.message)));
+$("undo").addEventListener("click", () => undoEdit());
+$("checked").addEventListener("click", () => enqueue(() => send("checked", { checked: !score.checked })));
 $("again").addEventListener("click", () => { history.replaceState(null, "", " "); scoreId = null; selected = null; message(""); show("start"); });
 $("file").addEventListener("change", event => upload(event.target.files[0]));
 $("camera").addEventListener("change", event => upload(event.target.files[0]));
-
-const keys = { ArrowUp: "up", ArrowDown: "down", "#": "sharp", b: "flat", n: "natural", Delete: "delete", Backspace: "delete" };
-document.addEventListener("keydown", event => {
-  if (event.target.tagName === "INPUT") return;
-  if ((event.ctrlKey || event.metaKey) && event.key === "z") { event.preventDefault(); if (score?.canUndo) $("undo").click(); return; }
-  if (event.key === "Escape") { closeEditor(); select(null); return; }
-  if (selected && keys[event.key]) { event.preventDefault(); noteAction(keys[event.key]); }
-});
 
 const drop = $("drop");
 for (const name of ["dragenter", "dragover"]) drop.addEventListener(name, event => { event.preventDefault(); drop.classList.add("over"); });
@@ -395,8 +575,7 @@ drop.addEventListener("drop", event => upload(event.dataTransfer.files[0]));
 document.querySelectorAll("label.button").forEach(label => {
   label.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); } });
 });
-
-if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); } else drawHistory();
 </script>
+<script src="editor.js"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 import pytest
-from helpers import harmony, note, parsed, rest
+from helpers import harmony, note, parsed, rest, tied_note
 
-from pipeline import edit
+from pipeline import edit, playback, rhythm
 
 
 def with_ids(root):
@@ -123,3 +123,39 @@ def test_adding_to_a_stack_goes_in_front_of_the_whole_stack():
     root = with_ids(parsed(note("C") + note("E", extra="<chord/>")))
     edit.add_chord(root, "note1", "Am7")
     assert [child.tag for child in root.find(".//measure") if child.tag != "attributes"][0] == "harmony"
+
+
+def test_respelling_a_tied_note_respells_every_note_tied_to_it():
+    """They sound as one note. Splitting the tie would play it again at each barline."""
+    root = with_ids(parsed(*(tied_note("C", 1, 8, "whole", ties) for ties in (["start"], ["stop", "start"], ["stop"]))))
+    edit.respell_note(root, "note1")
+    assert [pitch(root, f"note{number}")[:2] for number in range(3)] == [("D", "-1")] * 3
+    assert [rhythm.is_tied(edit.find_note(root, "note1"), kind) for kind in ("start", "stop")] == [True, True]
+    assert [(item["midi"], item["length"]) for item in playback.playback(root)["notes"]] == [(61, 12.0)]
+
+
+def test_deleting_the_first_note_of_a_chord_hands_its_marks_to_the_next():
+    """A chord keeps its lyric, marks and slurs on its first note. Only the deleted pitch's tie goes with it."""
+    first = ('<note><pitch><step>E</step><octave>4</octave></pitch><duration>2</duration><tie type="start"/><type>quarter</type><beam number="1">begin</beam>'
+             '<notations><tied type="start"/><slur type="start" number="1"/><articulations><staccato/></articulations><fermata/></notations>'
+             '<lyric number="1"><syllabic>single</syllabic><text>Love</text></lyric></note>')
+    second = '<note><chord/><pitch><step>G</step><octave>4</octave></pitch><duration>2</duration><type>quarter</type><notations><articulations><accent/></articulations></notations></note>'
+    after = ('<note><pitch><step>E</step><octave>4</octave></pitch><duration>2</duration><tie type="stop"/><type>quarter</type>'
+             '<notations><tied type="stop"/><slur type="stop" number="1"/></notations></note>')
+    root = with_ids(parsed(first + second + after + note("D") + note("E")))
+    edit.delete_note(root, "note0")
+    heir = edit.find_note(root, "note1")
+    assert heir.find("chord") is None and heir.findtext("lyric/text") == "Love" and heir.findtext("beam") == "begin"
+    assert [mark.tag for mark in heir.find("notations/articulations")] == ["accent", "staccato"]
+    assert heir.find("notations/fermata") is not None and heir.find("notations/slur").get("type") == "start"
+    assert edit.find_note(root, "note2").find("notations/slur") is not None
+    assert not any(rhythm.is_tied(item, kind) for item in root.iter("note") for kind in ("start", "stop"))
+
+
+@pytest.mark.parametrize(("step", "octave", "steps"), [("B", 9, 1), ("B", 9, 7), ("C", 0, -1), ("C", 0, -7)])
+def test_a_note_cannot_move_past_the_octaves_musicxml_has(step, octave, steps):
+    """MusicXML numbers octaves 0 to 9, and a MIDI file can't hold a note much above that."""
+    root = with_ids(parsed(note(step, octave)))
+    with pytest.raises(edit.EditError, match="too far"):
+        edit.move_note(root, "note0", steps)
+    assert pitch(root)[0::2] == (step, str(octave))

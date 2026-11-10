@@ -24,6 +24,8 @@ from chords.fonts import ROOT
 from chords.model import CHARACTER_INDEX
 from pipeline import edit
 from pipeline.chord_boxes import crop
+from pipeline.structure import surviving_bars
+from pipeline.transpose import is_transposed
 
 JOB_DIR = ROOT / "data" / "jobs"
 OUT_DIR = ROOT / "data" / "corrections"
@@ -34,27 +36,41 @@ SHORTEST_COMPARED = 8
 
 
 def checked_sheets(job_dir: Path) -> list[Path]:
-    return sorted(path.parent for path in job_dir.glob("*/checked.json"))
+    """List sheets a person has fixed. A transposed sheet doesn't count, as its chords changed on purpose."""
+    found = sorted(path.parent for path in job_dir.glob("*/checked.json"))
+    return [folder for folder in found if not is_transposed(ET.parse(versions_of(folder)[1]).getroot())]
 
 
 def versions_of(folder: Path) -> tuple[Path, Path]:
     """Return the file as recognized, and the file as you left it."""
-    saved = sorted(folder.glob("version_*.musicxml"))
+    # In number order, because by name version_10000 would come before version_9999.
+    saved = sorted(folder.glob("version_*.musicxml"), key=lambda path: int(path.stem.split("_")[1]))
     return saved[0], saved[-1]
 
 
-def label_chords(recognized: list[dict], final: list[dict]) -> list[dict]:
+def bar_key(chord: dict) -> tuple[int | None, float]:
+    """Return a final chord's place, in the bar numbers of the sheet as it was recognized."""
+    return chord.get("origin", chord["measure"]), chord["onset"]
+
+
+def label_chords(recognized: list[dict], final: list[dict], deleted_bars: frozenset[int] | set[int] = frozenset()) -> list[dict]:
     """Label each chord the app placed, using what the person left in the score.
 
     A chord that was deleted is usually a false one, which makes a useful "not a chord"
     example. But if a new chord was added nearby, it may be a real chord that was only on the
     wrong beat, so it's skipped rather than risk teaching the model something false. Placement
     can miss by a whole measure, so "nearby" includes the measures on either side.
+
+    Bars can be added and deleted, so chords are matched by each bar's original number. A chord
+    in a deleted bar says nothing about whether it was read correctly, so it isn't labelled. A
+    chord in a new bar has no original number, so it counts as nearby everything.
     """
     placed: dict[tuple[int, float], dict] = {}
     for item in recognized:
-        placed.setdefault((item["measure"], float(item["onset"])), item)  # Only the first was placed.
-    kept = {(chord["measure"], chord["onset"]): chord["text"] for chord in final}
+        if item["measure"] not in deleted_bars:
+            placed.setdefault((item["measure"], round(float(item["onset"]), 3)), item)  # Only the first was placed.
+    kept = {bar_key(chord): chord["text"] for chord in final if bar_key(chord)[0] is not None}
+    in_new_bars = [chord["text"] for chord in final if bar_key(chord)[0] is None]
     rows = []
     for key, item in placed.items():
         text = kept.get(key)
@@ -63,7 +79,7 @@ def label_chords(recognized: list[dict], final: list[dict]) -> list[dict]:
             # The model's own text keeps the page's spelling, so C-7 isn't taught as Cm7.
             rows.append(item | {"label": item["text"] if confirmed else text, "outcome": "confirmed" if confirmed else "corrected"})
             continue
-        added = [value for other, value in kept.items() if other not in placed and abs(other[0] - key[0]) <= 1]
+        added = [value for other, value in kept.items() if other not in placed and abs(other[0] - key[0]) <= 1] + in_new_bars
         if item["chord"] in added:
             rows.append(item | {"label": item["text"], "outcome": "moved"})
         elif not added:
@@ -73,8 +89,8 @@ def label_chords(recognized: list[dict], final: list[dict]) -> list[dict]:
 
 def count_added(recognized: list[dict], final: list[dict]) -> int:
     """Count chords the app missed entirely, which have no image to learn from."""
-    placed = {(item["measure"], float(item["onset"])) for item in recognized}
-    return sum((chord["measure"], chord["onset"]) not in placed for chord in final)
+    placed = {(item["measure"], round(float(item["onset"]), 3)) for item in recognized}
+    return sum(bar_key(chord) not in placed for chord in final)
 
 
 def is_test_key(key: str) -> bool:
@@ -111,7 +127,8 @@ def export(job_dir: Path = JOB_DIR, out_dir: Path = OUT_DIR) -> Counter:
     out_dir.mkdir(parents=True)
 
     sheets = checked_sheets(job_dir)
-    finals = {folder.name: edit.list_chords(ET.parse(versions_of(folder)[1]).getroot()) for folder in sheets}
+    roots = {folder.name: ET.parse(versions_of(folder)[1]).getroot() for folder in sheets}
+    finals = {name: edit.list_chords(root) for name, root in roots.items()}
     digests = {folder.name: sheet_digest(folder) for folder in sheets}
     keys = group_key(digests, {name: [chord["text"] for chord in chords] for name, chords in finals.items()})
 
@@ -121,7 +138,8 @@ def export(job_dir: Path = JOB_DIR, out_dir: Path = OUT_DIR) -> Counter:
         recognized = json.loads((folder / "recognized" / "chords.json").read_text(encoding="utf-8"))
         split = "test" if is_test_key(keys[folder.name]) else "train"
         summary[f"{split}_sheets"] += 1
-        labelled = label_chords(recognized, finals[folder.name])
+        deleted_bars = {item["measure"] for item in recognized} - surviving_bars(roots[folder.name])
+        labelled = label_chords(recognized, finals[folder.name], deleted_bars)
         moved = sum(row["outcome"] == "moved" for row in labelled)
         summary["added"] += count_added(recognized, finals[folder.name]) - moved
         for number, row in enumerate(labelled):

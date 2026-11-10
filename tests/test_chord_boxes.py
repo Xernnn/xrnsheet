@@ -127,3 +127,10 @@ def test_a_box_out_of_line_with_its_row_is_dropped():
 
 def test_low_confidence_is_not_a_chord():
     assert not Candidate((0.0, 0.0, 9.0, 9.0), 0, False, "C7", 0.2).is_chord
+
+
+def test_a_box_of_many_pieces_can_still_be_split():
+    blocks = [(50 + number * 70, 70, 70 + number * 70, 90) for number in range(9)]
+    page = page_with(*blocks)
+    found = find_chords(page, [(45, 68, 640, 92)], layouts(), fake_reader({20: "C7", 180: ""}))
+    assert len(found) == 9

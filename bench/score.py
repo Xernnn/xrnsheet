@@ -9,6 +9,12 @@ match, which means one missed note costs one note and does not shift everything 
     note_f1         right pitch and right duration
     chord_recall    share of chord symbols read correctly, in order
     chord_placed    share read correctly and attached to the right measure and beat
+    time_right      share of bars with the right time signature
+    bars_full       share of bars whose notes add up to the signature they ended up with
+
+Most test pieces are in 4/4, so a reader that always answered 4/4 would do well on time_right.
+Read it per signature, which `run_engines.py` prints. bars_full needs no answer key, but a bar
+can add up with wrong notes, so it can only show that something is wrong.
 
 An engine can return one sheet as several files, so every reader takes a list of paths.
 """
@@ -26,6 +32,8 @@ sys.path.insert(0, str(ROOT))
 
 from chords.vocab import parse_chord  # noqa: E402
 from pipeline.musicxml import chord_from_harmony, load_root  # noqa: E402
+from pipeline.rhythm import contexts  # noqa: E402
+from pipeline.structure import check_measures  # noqa: E402
 
 warnings.filterwarnings("ignore", module="music21")
 
@@ -45,6 +53,9 @@ class Score:
     predicted_notes: int
     truth_chords: int
     predicted_chords: int
+    time_right: float = 0.0
+    bars_full: float = 0.0
+    truth_time: str = ""
 
 
 def read_notes(paths: list[Path]) -> list[tuple[float, int, float]]:
@@ -117,6 +128,27 @@ def read_chords(paths: list[Path], include_text: bool = True) -> list[str]:
     return [chord for chord, _, _ in read_placed_chords(paths, include_text)]
 
 
+def read_times(paths: list[Path]) -> list[str]:
+    """Return the time signature in force in each bar of the top part."""
+    found: list[str] = []
+    for path in paths:
+        parts = load_root(path).findall("part")
+        if parts:
+            found.extend(f"{context.beats}/{context.beat_type}" for context in contexts(parts[0]))
+    return found
+
+
+def share_of_bars_full(paths: list[Path]) -> float:
+    bars = problems = 0
+    for path in paths:
+        root = load_root(path)
+        parts = root.findall("part")
+        if parts:
+            bars += len(parts[0].findall("measure"))
+            problems += len(check_measures(root))
+    return 1 - problems / bars if bars else 0.0
+
+
 def matched(truth: list, predicted: list) -> int:
     matcher = SequenceMatcher(a=truth, b=predicted, autojunk=False)
     return sum(block.size for block in matcher.get_matching_blocks())
@@ -135,6 +167,8 @@ def compare(truth_path: Path, predicted_paths: list[Path]) -> Score:
     predicted_placed = read_placed_chords(predicted_paths)
     truth_chords = [chord for chord, _, _ in truth_placed]
     predicted_chords = [chord for chord, _, _ in predicted_placed]
+    truth_times = read_times([truth_path])
+    predicted_times = read_times(predicted_paths)
     chord_recall = chord_placed = None
     if truth_chords:
         chord_recall = matched(truth_chords, predicted_chords) / len(truth_chords)
@@ -153,4 +187,7 @@ def compare(truth_path: Path, predicted_paths: list[Path]) -> Score:
         predicted_notes=len(predicted),
         truth_chords=len(truth_chords),
         predicted_chords=len(predicted_chords),
+        time_right=sum(map(str.__eq__, truth_times, predicted_times)) / max(len(truth_times), len(predicted_times), 1),
+        bars_full=share_of_bars_full(predicted_paths),
+        truth_time=truth_times[0] if truth_times else "",
     )

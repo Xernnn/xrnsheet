@@ -112,6 +112,23 @@ def test_export_uses_only_checked_sheets(tmp_path):
     assert counts["corrected"] == 1 and cv2.imread(str(out / rows[0]["image"])) is not None
 
 
+def test_a_transposed_sheet_teaches_the_model_nothing(tmp_path):
+    """Its chords differ from the page on purpose, so they'd look like corrections of correct reads."""
+    from pipeline import transpose
+    from pipeline.musicxml import to_text
+
+    jobs = tmp_path / "jobs"
+    folder = write_sheet(jobs, "a" * 32, [recognized(0, 0.0, "C")], ["C"])
+    final = folder / "version_0001.musicxml"
+    root = ET.parse(final).getroot()
+    transpose.transpose_score(root, transpose.INTERVALS["M2"])
+    final.write_text(to_text(root))
+    assert corrections.checked_sheets(jobs) == []
+    transpose.transpose_score(root, -transpose.INTERVALS["M2"])
+    final.write_text(to_text(root))
+    assert corrections.checked_sheets(jobs) == [folder]
+
+
 def test_a_moved_chord_does_not_count_as_missed(tmp_path):
     jobs = tmp_path / "jobs"
     folder = write_sheet(jobs, "a" * 32, [recognized(0, 2.0, "C")], ["C"])
@@ -210,3 +227,41 @@ def test_a_not_a_chord_example_adds_an_empty_target():
     fake = (torch.ones(1, 1, HEIGHT, 100), torch.tensor([100]), torch.tensor([1]), torch.tensor([1]))
     _, _, targets, lengths = retrain.join_batches(fake, [np.full((HEIGHT, 90), 255, np.uint8)], [""])
     assert len(targets) == 1 and lengths.tolist() == [1, 0]
+
+
+def test_a_chord_keeps_its_original_bar_after_a_bar_is_added():
+    moved = {"measure": 3, "origin": 2, "onset": 0.0, "text": "G7", "index": 0}
+    assert corrections.bar_key(moved) == (2, 0.0)
+    assert corrections.bar_key(final(2, 0, "G7")) == (2, 0.0)
+
+
+def test_a_bar_added_before_a_chord_leaves_its_label_alone():
+    labels = corrections.label_chords([recognized(2, 0, "G7")], [{"measure": 3, "origin": 2, "onset": 0.0, "text": "G7", "index": 0}])
+    assert [item["label"] for item in labels] == ["G7"]
+
+
+def test_chords_in_a_deleted_bar_are_not_called_false():
+    # Deleting a whole bar says nothing about whether each chord in it was real.
+    assert corrections.label_chords([recognized(2, 0, "G7")], [], deleted_bars={2}) == []
+
+
+def test_a_chord_in_a_new_bar_may_be_the_one_that_moved():
+    # A new bar has no original number, so it could sit anywhere. Never call the old chord false.
+    same = {"measure": 3, "origin": None, "onset": 0.0, "text": "G7", "index": 0}
+    assert [item["outcome"] for item in corrections.label_chords([recognized(2, 0, "G7")], [same])] == ["moved"]
+    assert corrections.label_chords([recognized(2, 0, "G7")], [same | {"text": "Dm7"}]) == []
+
+
+def test_chords_in_new_bars_count_as_missed():
+    new_bar = {"measure": 3, "origin": None, "onset": 0.0, "text": "G7", "index": 0}
+    assert corrections.count_added([recognized(2, 0, "G7")], [new_bar]) == 1
+
+
+def test_the_final_version_is_found_past_version_9999(tmp_path):
+    from pipeline.musicxml import to_text
+    from helpers import harmony, note, parsed
+
+    folder = write_sheet(tmp_path / "jobs", "a" * 32, [recognized(0, 0.0, "C")], ["D"])
+    for number, root in ((9999, "D"), (10000, "E")):
+        (folder / f"version_{number:04d}.musicxml").write_text(to_text(parsed(harmony(root, "", "major") + note())))
+    assert [path.name for path in corrections.versions_of(folder)] == ["version_0000.musicxml", "version_10000.musicxml"]
