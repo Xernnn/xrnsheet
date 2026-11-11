@@ -81,16 +81,27 @@ def load_root(path: Path) -> ET.Element:
     return ET.parse(path).getroot()
 
 
+def unpacked(archive: zipfile.ZipFile, name: str) -> bytes:
+    """Read one file out of a compressed score, giving up if it unpacks to something huge.
+
+    The size an archive states for a file is only a claim, and unpacking stops at the size stated
+    only after everything is unpacked. So the limit is on how much is asked for.
+    """
+    with archive.open(name) as file:
+        data = file.read(MOST_UNPACKED_BYTES + 1)
+    if len(data) > MOST_UNPACKED_BYTES:
+        raise ValueError("That file is too large.")
+    return data
+
+
 def read_score_file(data: bytes, suffix: str) -> ET.Element:
     """Read a MusicXML file someone opened, raising ValueError if it isn't one this app can edit."""
     try:
         if suffix == ".mxl":
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                container = ET.fromstring(archive.read("META-INF/container.xml"))
+                container = ET.fromstring(unpacked(archive, "META-INF/container.xml"))
                 name = next(item.get("full-path") for item in container.iter("rootfile"))
-                if archive.getinfo(name).file_size > MOST_UNPACKED_BYTES:
-                    raise ValueError("That file is too large.")
-                data = archive.read(name)
+                data = unpacked(archive, name)
         root = ET.fromstring(data)
     except (ET.ParseError, zipfile.BadZipFile, KeyError, StopIteration) as error:
         raise ValueError("That file couldn't be read as MusicXML.") from error

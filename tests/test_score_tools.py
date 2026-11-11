@@ -414,6 +414,31 @@ def test_a_compressed_file_that_unpacks_too_large_is_refused(monkeypatch):
         read_score_file(packed(to_text(blank()).encode()), ".mxl")
 
 
+def test_a_compressed_file_whose_list_of_contents_unpacks_too_large_is_refused(monkeypatch):
+    """The list is read before the score it names, so it can be the huge file."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("META-INF/container.xml", f'<container><rootfiles><rootfile full-path="score.xml"/></rootfiles><!--{" " * 5000}--></container>')
+        archive.writestr("score.xml", "<score-partwise><part/></score-partwise>")
+    monkeypatch.setattr("pipeline.musicxml.MOST_UNPACKED_BYTES", 1000)
+    with pytest.raises(ValueError):
+        read_score_file(buffer.getvalue(), ".mxl")
+
+
+def test_a_compressed_file_is_measured_by_what_unpacks_not_by_what_it_claims(monkeypatch):
+    stated = len(b"<score-partwise><part/></score-partwise>")
+    honest = packed(b"<score-partwise><part/></score-partwise>" + b" " * 5000)
+    lying = honest.replace((stated + 5000).to_bytes(4, "little"), stated.to_bytes(4, "little"))
+    assert lying != honest
+    read = []
+    original = zipfile.ZipExtFile.read
+    monkeypatch.setattr(zipfile.ZipExtFile, "read", lambda self, n=-1: read.append(n) or original(self, n))
+    monkeypatch.setattr("pipeline.musicxml.MOST_UNPACKED_BYTES", 1000)
+    with pytest.raises(ValueError):
+        read_score_file(lying, ".mxl")
+    assert read and all(0 < n <= 1001 for n in read)  # Never asked to unpack more than the limit.
+
+
 def test_a_real_chorale_comes_through_note_for_note():
     """A score written by other software has to survive being opened and saved here."""
     music21 = pytest.importorskip("music21")
