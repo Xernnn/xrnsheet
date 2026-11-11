@@ -414,6 +414,16 @@ def test_a_tempo_of_nothing_is_left_out_of_a_midi_file():
     assert [int.from_bytes(event.data, "big") for event in events_named(found.tracks[0], "SET_TEMPO")] == [500000]
 
 
+@pytest.mark.parametrize("program", [0, 129, 300])
+def test_a_sound_a_midi_file_has_no_number_for_plays_as_the_usual_one(program):
+    """Sounds are numbered 1 to 128. Some programs write them from 0, and a wrong one mustn't spoil the file."""
+    root = parsed(note() + note("D"))
+    root.find("part-list/score-part").append(ET.fromstring(f"<midi-instrument id='i'><midi-program>{program}</midi-program></midi-instrument>"))
+    found = midi_notes(midi_bytes(playback(root)))
+    assert [event.data for event in events_named(found.tracks[1], "PROGRAM_CHANGE")] == [0]
+    assert [event.pitch for event in found.tracks[1].events if event.isNoteOn()] == [60, 62]
+
+
 def test_drums_channel_is_skipped():
     assert 9 not in [channel_of(part) for part in range(30)]
     assert all(0 <= channel_of(part) <= 15 for part in range(30))

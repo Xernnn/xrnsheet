@@ -9,6 +9,7 @@ CHORD_VELOCITY = 50
 MOST_CHANNELS = 16
 DRUM_CHANNEL = 9  # General MIDI keeps this channel for drums, so it's skipped.
 HIGHEST_NOTE = 127  # A note number has seven bits, because a set top bit starts the next event.
+MOST_SOUNDS = 128  # General MIDI's sounds, counted from 1 in a score and from 0 in the file.
 LONGEST_BEAT = 0xFFFFFF  # A tempo is the microseconds a quarter note lasts, in three bytes: 3.6 a minute at the slowest.
 
 
@@ -72,6 +73,8 @@ def midi_bytes(data: dict) -> bytes:
     programs = data.get("programs") or [1]
     for part, program in enumerate(programs):
         channel = channel_of(part)
+        if not 1 <= program <= MOST_SOUNDS:
+            program = 1  # The usual sound, as when a part doesn't say.
         events = [(0, -1, bytes([0xC0 | channel, program - 1]))]
         events += note_events([note for note in data["notes"] if note.get("part", 0) == part], channel)
         tracks.append(track(events))
