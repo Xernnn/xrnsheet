@@ -962,3 +962,11 @@ def test_a_score_read_as_an_edit_is_undone_reads_one_version_whole(client, ready
     read(ready_score)
     undoing[0].join()
     assert len(listed(folder)) == 1  # The undo still happened, once the read was done.
+
+
+def test_an_edit_sent_as_plain_text_is_not_read(client, ready_score):
+    """A page on another site can send plain text here without asking first, but not JSON."""
+    body = json.dumps({"text": "Bb7"})
+    response = client.post(f"/api/scores/{ready_score}/chords/0", content=body, headers={"Content-Type": "text/plain"})
+    assert response.status_code == 422
+    assert client.get(f"/api/scores/{ready_score}").json()["chords"][0]["text"] == "Dm7"
