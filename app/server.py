@@ -52,6 +52,9 @@ MAX_UPLOAD_BYTES = 40 * 1024 * 1024
 FORM_BYTES = 64 * 1024  # What an upload wraps its file in: the file's name and type, and the form's edges.
 TOO_LARGE = "That file is too large. The limit is 40 MB."
 MAX_PDF_PAGES = 40
+# A PDF page is drawn at 250 dots an inch, but no larger than this on its longest side: a page can
+# say it's 200 inches across, which would take gigabytes. At 250 dots an inch, A3 is about 4,100.
+LONGEST_PDF_PAGE = 5000
 PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
@@ -341,7 +344,9 @@ def pdf_to_images(path: Path) -> tuple[list[Path], str]:
     images = []
     for index in range(min(len(document), MAX_PDF_PAGES)):
         image_path = folder / f"page_{index + 1:03d}.png"
-        document[index].render(scale=250 / 72).to_pil().convert("RGB").save(image_path)
+        page = document[index]
+        scale = min(250 / 72, LONGEST_PDF_PAGE / max(*page.get_size(), 1))  # A PDF counts 72 points an inch.
+        page.render(scale=scale).to_pil().convert("RGB").save(image_path)
         images.append(image_path)
     note = f"Only the first {MAX_PDF_PAGES} of {len(document)} pages were read." if len(document) > MAX_PDF_PAGES else ""
     document.close()

@@ -899,3 +899,14 @@ def test_an_upload_within_the_limit_is_still_taken(client, monkeypatch):
     Image.new("RGB", (40, 40), "white").save(image, "PNG")
     padded = image.getvalue() + b"\0" * (1024 * 1024 - len(image.getvalue()))  # A PNG may carry data after its end.
     assert client.post("/api/scores", files={"file": ("page.png", padded)}).status_code == 200
+
+
+def test_a_pdf_page_too_large_to_read_in_full_detail_is_read_at_a_size_that_fits(tmp_path):
+    import pypdfium2
+
+    document = pypdfium2.PdfDocument.new()
+    document.new_page(2000, 1000)  # 28 inches across, which 250 dots an inch would make 7,000 pixels.
+    document.new_page(595, 842)  # A4, which is read in full detail.
+    document.save(tmp_path / "upload.pdf")
+    images, _ = server.pdf_to_images(tmp_path / "upload.pdf")
+    assert [Image.open(image).size for image in images] == [(5000, 2500), (2066, 2924)]
