@@ -1115,3 +1115,20 @@ def test_removing_a_selected_stretch_is_one_edit(client):
     assert steps() == list("CDEFGA")
     refused = client.post(f"/api/scores/{score_id}/group", json={"action": "remove", "notes": []})
     assert refused.status_code == 422 and "Select" in refused.json()["detail"]
+
+
+def test_double_sharps_and_flats_go_on_one_note_or_a_selection(client):
+    score_id = client.post("/api/scores/blank", json={"measures": 2}).json()["id"]
+    score = lambda: ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    cursor = score().find(".//note").get("id")
+    written = []
+    for step in "CD":
+        done = client.post(f"/api/scores/{score_id}/notes/{cursor}", json={"action": "write", "step": step}).json()
+        written.append(done["written"])
+        cursor = done["cursor"]
+    assert client.post(f"/api/scores/{score_id}/notes/{written[0]}", json={"action": "doubleSharp"}).status_code == 200
+    assert [note.findtext("accidental") for note in score().iter("note")][:2] == ["double-sharp", None]
+    assert client.post(f"/api/scores/{score_id}/group", json={"action": "doubleFlat", "notes": written}).status_code == 200
+    assert [(note.findtext("pitch/alter"), note.findtext("accidental")) for note in score().iter("note")][:2] == [("-2", "flat-flat"), ("-2", "flat-flat")]
+    client.post(f"/api/scores/{score_id}/undo")
+    assert [note.findtext("accidental") for note in score().iter("note")][:2] == ["double-sharp", None]

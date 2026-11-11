@@ -871,3 +871,37 @@ def test_a_triplet_cut_through_is_refused_and_one_inside_a_removed_measure_goes_
     assert to_text(root) == before
     edit.remove_range(root, ids)
     assert len(root.find("part").findall("measure")) == 2
+
+
+@pytest.mark.parametrize(("alter", "name", "glyph", "sounds"), [(2, "double-sharp", "E263", 74), (-2, "flat-flat", "E264", 70)], ids=["double-sharp", "double-flat"])
+def test_a_double_accidental_is_written_drawn_and_played(alter, name, glyph, sounds):
+    root = blank()
+    written, _ = write(root, "C")
+    edit.set_accidental(root, written[0], alter)
+    assert pitches(root) == [("C", alter, 5)]
+    assert root.find(".//note").findtext("accidental") == name
+    assert f"#{glyph}" in engrave.render_pages(to_text(root))[0]
+    assert playback.playback(root)["notes"][0]["midi"] == sounds
+
+
+def test_a_double_sharp_holds_to_the_barline_and_a_plain_note_after_it_shows_a_natural():
+    root = blank()
+    written, _ = write(root, "F", "F", "G", "F")
+    edit.set_accidental(root, written[0], 2)
+    edit.set_accidental(root, written[1], 2)
+    signs = [note.findtext("accidental") for note in bar(root, 0).findall("note")]
+    assert signs == ["double-sharp", None, None, "natural"]
+
+
+def test_a_double_sharp_moves_by_semitones_and_respells_like_any_note():
+    root = blank()
+    written, _ = write(root, "C")
+    edit.set_accidental(root, written[0], 2)
+    edit.respell_note(root, written[0])
+    assert pitches(root) == [("D", 0, 5)]
+    edit.set_accidental(root, written[0], -2)
+    edit.move_semitone(root, written[0], 1)
+    assert pitches(root) == [("C", 1, 5)]
+    edit.set_accidental(root, written[0], 2)
+    edit.set_accidental(root, written[0], 0)
+    assert pitches(root) == [("C", 0, 5)] and root.find(".//note/accidental") is None

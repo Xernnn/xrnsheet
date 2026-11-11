@@ -10,7 +10,7 @@ const LENGTHS = [
   { key: "7", type: "whole", label: "Whole note", glyph: "E1D2" },
 ];
 const AFTER = "after:"; // A cursor past the last note of the score.
-const GROUP_ACTIONS = new Set(["up", "down", "octaveUp", "octaveDown", "semitoneUp", "semitoneDown", "sharp", "flat", "natural", "delete", "clear", "respell", "flip"]);
+const GROUP_ACTIONS = new Set(["up", "down", "octaveUp", "octaveDown", "semitoneUp", "semitoneDown", "doubleSharp", "doubleFlat", "sharp", "flat", "natural", "delete", "clear", "respell", "flip"]);
 const REACH_IN_STEPS = 10; // How far off a staff a click still counts as on it.
 const EVENTS = "g.note, g.rest, g.mRest";
 const VOICES = 4;

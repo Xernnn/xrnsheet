@@ -141,6 +141,8 @@ function buildPalettes() {
       { key: "accidental:flat", label: "Flat", html: glyphCell("E260"), ...atNote(() => noteAction("flat")) },
       { key: "accidental:natural", label: "Natural", html: glyphCell("E261"), ...atNote(() => noteAction("natural")) },
       { key: "accidental:sharp", label: "Sharp", html: glyphCell("E262"), ...atNote(() => noteAction("sharp")) },
+      { key: "accidental:doubleSharp", label: "Double sharp", html: glyphCell("E263"), ...atNote(() => noteAction("doubleSharp")) },
+      { key: "accidental:doubleFlat", label: "Double flat", html: glyphCell("E264"), ...atNote(() => noteAction("doubleFlat")) },
     ] },
     { id: "dynamics", name: "Dynamics", usual: true, cells: [
       dynamic("ppp", "E52A"), dynamic("pp", "E52B"), dynamic("p", "E520"), dynamic("mp", "E52C"), dynamic("mf", "E52D"),
