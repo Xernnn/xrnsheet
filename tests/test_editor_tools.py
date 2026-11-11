@@ -590,7 +590,19 @@ def test_title_and_composer_are_printed_with_the_title_larger():
     svg = engrave.render_pages(to_text(root))[0]
     assert "Autumn Song" in svg and "A. Writer" in svg
     sizes = [int(size) for size in re.findall(r'font-size="(\d{3,})px"', svg[svg.index('class="pgHead"'):])]
-    assert sizes[0] == sizes[1] * engrave.TITLE_SCALE
+    assert sizes[:2] == [round(engrave.TITLE_POINTS * engrave.POINT), round(engrave.COMPOSER_POINTS * engrave.POINT)]
+
+
+def test_the_title_sits_at_the_top_of_its_frame_and_the_composer_at_the_bottom():
+    """As MuseScore lays them out. Verovio alone would print both on one line."""
+    root = blank()
+    structure.set_title(root, "Autumn Song", "A. Writer")
+    svg = engrave.render_pages(to_text(root))[0]
+    header = svg[svg.index('class="pgHead"'):]
+    baselines = [int(y) for y in re.findall(r' y="(\d+)"', header)][:2]
+    assert baselines == [engrave.TITLE_BASELINE, engrave.COMPOSER_BASELINE]
+    first_staff_line = int(re.search(r'class="staff">\s*<path d="M\d+ (\d+) ', svg).group(1))
+    assert first_staff_line > engrave.FRAME_HEIGHT
 
 
 def test_a_title_recognition_guessed_is_not_printed_until_saved():
