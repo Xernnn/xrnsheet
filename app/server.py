@@ -62,6 +62,7 @@ ONLY_READS = {"GET", "HEAD", "OPTIONS"}
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     fail_interrupted_jobs()
     yield
+    stop_reading()
 
 
 class OwnPagesOnly:
@@ -101,6 +102,10 @@ class OwnPagesOnly:
 app = FastAPI(title="xrnsheet", lifespan=lifespan)
 app.add_middleware(OwnPagesOnly)
 one_at_a_time = threading.Semaphore(1)  # Recognition is memory hungry.
+# The page being read now, and whether the app is stopping, so that the page can stop with it.
+reading: set[subprocess.Popen] = set()
+reading_lock = threading.Lock()
+stopping = threading.Event()
 # Edits read the latest version and write the next one, so two at once would lose one of them.
 edit_lock = threading.RLock()
 
@@ -314,14 +319,36 @@ def recognize_page(image: Path, out_dir: Path) -> str | None:
     command = [sys.executable, "-m", "pipeline.recognize", str(image), "--out", str(out_dir), "--notes", os.environ.get("XRNSHEET_NOTES", "homr")]
     if shutil.which("systemd-run"):
         command = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={MEMORY_LIMIT}", *command]
+    with reading_lock:  # So that a page can't start just as the app stops, and be missed.
+        if stopping.is_set():
+            return INTERRUPTED
+        process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        reading.add(process)
     try:
-        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=PAGE_TIMEOUT_SECONDS, check=False)
+        _, errors = process.communicate(timeout=PAGE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
         return "Recognition took too long."
-    if result.returncode == 0 and list(out_dir.glob("*.musicxml")):
+    finally:
+        with reading_lock:
+            reading.discard(process)
+    if process.returncode == 0 and list(out_dir.glob("*.musicxml")):
         return None
-    print(result.stderr[-2000:], file=sys.stderr)
-    return NO_STAVES if "No staffs found" in result.stderr or "No noteheads" in result.stderr else "Recognition failed."
+    print(errors[-2000:], file=sys.stderr)
+    return NO_STAVES if "No staffs found" in errors or "No noteheads" in errors else "Recognition failed."
+
+
+def stop_reading() -> None:
+    """Stop the page being read, because the app is stopping.
+
+    Its process would otherwise read on after the app had gone, holding its memory, with nothing
+    left to time it out or to take its answer.
+    """
+    with reading_lock:
+        stopping.set()
+        for process in reading:
+            process.kill()
 
 
 def combine_pages(folder: Path, numbers: list[int]) -> ET.Element:
@@ -349,6 +376,8 @@ def recognize_job(folder: Path, upload: Path) -> None:
                 if len(images) > 1:
                     write_status(folder, "processing", f"Reading page {number} of {len(images)}.")
                 reason = recognize_page(image, folder / "recognized" / f"page_{number:03d}")
+                if stopping.is_set():
+                    return  # It's left as still being read, which the next start reports as interrupted.
                 if reason is None:
                     read.append(number)
                 else:
