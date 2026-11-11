@@ -262,6 +262,11 @@ class BlankScore(BaseModel):
     beat_type: int = 4
     clef: str = "treble"
     measures: int = 16
+    more: list[str] = []  # Instruments below the first.
+    title: str = ""
+    composer: str = ""
+    tempo: str = ""
+    pickup: int = 0  # In sixteenth notes.
 
 
 class CheckedMark(BaseModel):
@@ -533,15 +538,31 @@ def create_blank_score(body: BlankScore) -> dict:
     """Start an empty score to write in, with no photo behind it."""
     try:
         root = structure.blank_score(body.fifths, body.beats, body.beat_type, body.clef, body.measures)
+        for name in body.more:
+            structure.add_part(root, name)
+        edit.ensure_note_ids(root)
+        if body.title.strip() or body.composer.strip():
+            structure.set_title(root, body.title, body.composer)
+        if body.pickup:
+            structure.set_pickup(root, Fraction(body.pickup, SIXTEENTHS_PER_QUARTER))
+            edit.ensure_note_ids(root)
+        if body.tempo.strip():
+            marks.set_tempo(root, root.find("part/measure/note").get("id"), body.tempo)
     except edit.EditError as error:
         raise HTTPException(422, str(error)) from error
     edit.ensure_note_ids(root)
+    marks.ensure_mark_ids(root)
     score_id = uuid.uuid4().hex
     folder = JOB_DIR / score_id
     folder.mkdir(parents=True)
     save_version(folder, root)
     write_status(folder, "ready")
     return {"id": score_id}
+
+
+@app.get("/api/instruments")
+def list_instruments() -> list[dict]:
+    return structure.instrument_list()
 
 
 @app.get("/api/scores")

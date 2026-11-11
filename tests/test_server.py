@@ -1016,3 +1016,30 @@ def test_the_pages_music_font_is_served_for_the_toolbar(client):
     response = client.get("/music-font.css")
     assert response.status_code == 200 and response.headers["content-type"].startswith("text/css")
     assert "font-family: 'Leland'" in response.text and "format('woff2')" in response.text
+
+
+def test_a_new_score_can_start_with_several_instruments_and_its_first_page_written(client):
+    """What MuseScore's New score dialog asks for, all in the first version, so Undo can't take half of it away."""
+    body = {"clef": "voice", "more": ["piano"], "measures": 4, "title": "Evening", "composer": "A. Writer", "tempo": "Andante 92", "pickup": 4}
+    score_id = client.post("/api/scores/blank", json=body).json()["id"]
+    data = client.get(f"/api/scores/{score_id}").json()
+    assert data["parts"] == ["Voice", "Piano"] and (data["title"], data["composer"]) == ("Evening", "A. Writer")
+    assert not data["canUndo"]
+    root = ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    assert [part.find("measure").get("implicit") for part in root.findall("part")] == ["yes", "yes"]
+    assert float(root.find(".//sound").get("tempo")) == 92
+    assert client.get(f"/api/scores/{score_id}/playback").json()["tempo"] == 92
+
+
+@pytest.mark.parametrize("body", [{"more": ["kazoo"]}, {"tempo": "Allegro 9000"}, {"pickup": 64}], ids=["instrument", "tempo", "pickup"])
+def test_a_new_score_that_cannot_be_made_is_refused_whole(client, body):
+    response = client.post("/api/scores/blank", json=body)
+    assert response.status_code == 422 and isinstance(response.json()["detail"], str)
+    assert client.get("/api/scores").json() == []
+
+
+def test_instruments_are_listed_by_family_for_the_chooser(client):
+    found = client.get("/api/instruments").json()
+    assert {"id": "violin", "label": "Violin", "family": "Strings - Bowed"} in found
+    assert {"id": "treble", "label": "Treble staff", "family": "Plain staves"} in found
+    assert len({item["id"] for item in found}) == len(found)

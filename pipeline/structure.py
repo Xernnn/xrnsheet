@@ -53,29 +53,32 @@ class Instrument:
     octaves: int = 0
     program: int = 1  # General MIDI, counted from 1.
     hidden_name: bool = False
+    family: str = "Plain staves"
 
 
 INSTRUMENTS = {
     "treble": Instrument("Music", hidden_name=True),
     "bass": Instrument("Music", ("bass",), hidden_name=True),
-    "piano": Instrument("Piano", ("treble", "bass"), hidden_name=True),
-    "voice": Instrument("Voice", program=53),
-    "guitar": Instrument("Guitar", ("treble8",), program=25),
-    "bass-guitar": Instrument("Bass Guitar", ("bass",), octaves=-1, program=34),
-    "violin": Instrument("Violin", program=41),
-    "viola": Instrument("Viola", ("alto",), program=42),
-    "cello": Instrument("Cello", ("bass",), program=43),
-    "double-bass": Instrument("Double Bass", ("bass",), octaves=-1, program=44),
-    "flute": Instrument("Flute", program=74),
-    "oboe": Instrument("Oboe", program=69),
-    "clarinet": Instrument("Clarinet in B♭", steps=-1, semitones=-2, program=72),
-    "alto-sax": Instrument("Alto Saxophone", steps=-5, semitones=-9, program=66),
-    "tenor-sax": Instrument("Tenor Saxophone", steps=-1, semitones=-2, octaves=-1, program=67),
-    "baritone-sax": Instrument("Baritone Saxophone", steps=-5, semitones=-9, octaves=-1, program=68),
-    "trumpet": Instrument("Trumpet in B♭", steps=-1, semitones=-2, program=57),
-    "horn": Instrument("Horn in F", steps=-4, semitones=-7, program=61),
-    "trombone": Instrument("Trombone", ("bass",), program=58),
+    "piano": Instrument("Piano", ("treble", "bass"), hidden_name=True, family="Keyboards"),
+    "voice": Instrument("Voice", program=53, family="Vocals"),
+    "guitar": Instrument("Guitar", ("treble8",), program=25, family="Strings - Plucked"),
+    "bass-guitar": Instrument("Bass Guitar", ("bass",), octaves=-1, program=34, family="Strings - Plucked"),
+    "violin": Instrument("Violin", program=41, family="Strings - Bowed"),
+    "viola": Instrument("Viola", ("alto",), program=42, family="Strings - Bowed"),
+    "cello": Instrument("Cello", ("bass",), program=43, family="Strings - Bowed"),
+    "double-bass": Instrument("Double Bass", ("bass",), octaves=-1, program=44, family="Strings - Bowed"),
+    "flute": Instrument("Flute", program=74, family="Woodwinds"),
+    "oboe": Instrument("Oboe", program=69, family="Woodwinds"),
+    "clarinet": Instrument("Clarinet in B♭", steps=-1, semitones=-2, program=72, family="Woodwinds"),
+    "alto-sax": Instrument("Alto Saxophone", steps=-5, semitones=-9, program=66, family="Woodwinds"),
+    "tenor-sax": Instrument("Tenor Saxophone", steps=-1, semitones=-2, octaves=-1, program=67, family="Woodwinds"),
+    "baritone-sax": Instrument("Baritone Saxophone", steps=-5, semitones=-9, octaves=-1, program=68, family="Woodwinds"),
+    "trumpet": Instrument("Trumpet in B♭", steps=-1, semitones=-2, program=57, family="Brass"),
+    "horn": Instrument("Horn in F", steps=-4, semitones=-7, program=61, family="Brass"),
+    "trombone": Instrument("Trombone", ("bass",), program=58, family="Brass"),
 }
+# The names a plain staff goes by where instruments are chosen, as "Music" says nothing there.
+STAFF_NAMES = {"treble": "Treble staff", "bass": "Bass staff"}
 BARLINE_ORDER = ["bar-style", "footnote", "level", "wavy-line", "segno", "coda", "fermata", "ending", "repeat"]
 REPEAT_SIDES = {"forward": ("left", "heavy-light"), "backward": ("right", "light-heavy")}
 MOST_TITLE_LETTERS = 200
@@ -647,6 +650,11 @@ def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str =
     renumber(part)
     ensure_measure_ids(root)
     return root
+
+
+def instrument_list() -> list[dict]:
+    """List what a part can be written for, grouped the way the chooser shows them."""
+    return [{"id": name, "label": STAFF_NAMES.get(name, instrument.label), "family": instrument.family} for name, instrument in INSTRUMENTS.items()]
 
 
 def new_part_id(root: ET.Element) -> str:
