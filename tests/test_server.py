@@ -1096,3 +1096,22 @@ def test_a_stretch_of_bars_is_deleted_together(client):
     assert [measure.findtext("note/pitch/step") for measure in left] == ["C", "G", None]
     client.post(f"/api/scores/{score_id}/undo")
     assert len(ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text).find("part").findall("measure")) == 6
+
+
+def test_removing_a_selected_stretch_is_one_edit(client):
+    score_id = client.post("/api/scores/blank", json={"measures": 3}).json()["id"]
+    score = lambda: ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    cursor = score().find(".//note").get("id")
+    written = []
+    for step in "CDEFGA":
+        done = client.post(f"/api/scores/{score_id}/notes/{cursor}", json={"action": "write", "step": step}).json()
+        written.append(done["written"])
+        cursor = done["cursor"]
+    ids = written[2:6]
+    assert client.post(f"/api/scores/{score_id}/group", json={"action": "remove", "notes": ids}).status_code == 200
+    steps = lambda: [note.findtext("pitch/step") for note in score().iter("note") if note.find("pitch") is not None]
+    assert steps() == ["C", "D"] and len(score().find("part").findall("measure")) == 3
+    client.post(f"/api/scores/{score_id}/undo")
+    assert steps() == list("CDEFGA")
+    refused = client.post(f"/api/scores/{score_id}/group", json={"action": "remove", "notes": []})
+    assert refused.status_code == 422 and "Select" in refused.json()["detail"]

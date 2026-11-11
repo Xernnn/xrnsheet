@@ -803,3 +803,71 @@ def test_an_interval_is_counted_from_the_top_of_a_chord_and_takes_the_keys_sharp
     assert pitches(root) == [("D", 0, 5), ("F", 1, 5), ("A", 0, 5)]
     with pytest.raises(EditError):
         edit.add_interval(root, written[0], 1)
+
+
+def stretch(root, first, last):
+    return edit.range_ids(root, first, last)["ids"]
+
+
+def test_removing_a_stretch_of_whole_measures_deletes_them():
+    root = blank(measures=4)
+    written, _ = write(root, *"CDEFGABC")
+    edit.remove_range(root, stretch(root, written[0], written[7]))
+    measures = root.find("part").findall("measure")
+    assert len(measures) == 2 and pitches(root) == []
+    assert [measure.get("number") for measure in measures] == ["1", "2"]
+    assert measures[0].find("attributes/clef") is not None
+
+
+def test_removing_part_of_a_measure_pulls_its_later_notes_in():
+    root = blank(measures=2)
+    written, _ = write(root, *"CDEF")
+    edit.remove_range(root, stretch(root, written[1], written[2]))
+    first = bar(root, 0)
+    assert [note.findtext("pitch/step") for note in first.findall("note")] == ["C", "F", None]
+    assert [note.findtext("type") for note in first.findall("note")] == ["quarter", "quarter", "half"]
+    assert len(root.find("part").findall("measure")) == 2
+
+
+def test_a_stretch_over_a_barline_removes_whole_measures_and_closes_up_the_ends():
+    root = blank(measures=4)
+    written, _ = write(root, *"CDEFGABCDEFG")
+    # From the third note of the first measure to the second of the third.
+    edit.remove_range(root, stretch(root, written[2], written[9]))
+    measures = root.find("part").findall("measure")
+    assert len(measures) == 3
+    assert [[note.findtext("pitch/step") for note in measure.findall("note") if note.find("pitch") is not None] for measure in measures] == [["C", "D"], ["F", "G"], []]
+    assert structure.check_measures(root) == []
+
+
+def test_a_measure_goes_from_every_instrument_when_one_staff_of_it_is_removed():
+    root = blank(measures=3, clef="piano")
+    structure.add_part(root, "violin")
+    edit.ensure_note_ids(root)
+    first = root.find("part").findall("measure")[1].find("note").get("id")
+    edit.remove_range(root, [first])
+    assert [len(part.findall("measure")) for part in root.findall("part")] == [2, 2]
+    assert structure.check_measures(root) == []
+
+
+def test_the_last_measure_left_cannot_be_removed_and_nothing_selected_says_so():
+    root = blank(measures=1)
+    with pytest.raises(EditError, match="at least one"):
+        edit.remove_range(root, [first_id(root)])
+    with pytest.raises(EditError):
+        edit.remove_range(root, [])
+    with pytest.raises(EditError):
+        edit.remove_range(root, ["no-such-note"])
+
+
+def test_a_triplet_cut_through_is_refused_and_one_inside_a_removed_measure_goes_with_it():
+    root = blank(measures=3)
+    written, _ = write(root, *"CDEF")
+    edit.toggle_tuplet(root, written[0])
+    ids = [note.get("id") for note in bar(root, 0).findall("note")]
+    before = to_text(root)
+    with pytest.raises(EditError, match="triplet"):
+        edit.remove_range(root, ids[:1])
+    assert to_text(root) == before
+    edit.remove_range(root, ids)
+    assert len(root.find("part").findall("measure")) == 2

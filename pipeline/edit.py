@@ -54,7 +54,7 @@ from pipeline.rhythm import (
     write_measure,
     write_offset,
 )
-from pipeline.structure import VOICES_PER_STAFF, insert_measure, origin_of
+from pipeline.structure import VOICES_PER_STAFF, delete_measure, insert_measure, origin_of
 
 # Where the first note on an empty staff lands: the middle of that clef's staff.
 CLEF_MIDDLE = {"G": ("B", 4), "F": ("D", 3), "C": ("C", 4)}
@@ -746,6 +746,46 @@ def close_gap(root: ET.Element, note_id: str) -> str:
             event.onset -= gone.length
     commit(root, spot)
     return next_id(spot.part, spot.context, spot.key, gone.onset) or spot.line[-1].notes[0].get("id")
+
+
+def remove_range(root: ET.Element, note_ids: list[str]) -> None:
+    """Take a selected stretch of time out of the score, which is MuseScore's Ctrl+Delete.
+
+    A measure the stretch covers from end to end goes, in every part. Where it covers part of a
+    measure those notes go and the later ones in the voice are pulled in, as closing a gap does.
+    """
+    fit_divisions(root)
+    chosen = set(note_ids)
+    whole: set[int] = set()
+    seen: set[tuple[int, tuple[str, str]]] = set()
+    handled: set[str | None] = set()
+    for note_id in note_ids:
+        if note_id in handled:
+            continue  # It went with its measure's others, and a rest written since may have taken its id.
+        spot = locate(root, note_id)
+        place = (spot.context.index, spot.key)
+        if place in seen:
+            continue
+        seen.add(place)
+        gone = [event for event in spot.line if any(note.get("id") in chosen for note in event.notes)]
+        handled.update(note.get("id") for event in gone for note in event.notes)
+        if len(gone) == len(spot.line):
+            whole.add(spot.context.index)
+            continue
+        if any(event.in_tuplet for event in gone):
+            raise EditError("Notes in a triplet can't be removed this way yet.")
+        for event in sorted(gone, key=lambda item: item.onset, reverse=True):
+            spot.line.remove(event)
+            for later in spot.line:
+                if later.onset > event.onset:
+                    later.onset -= event.length
+        commit(root, spot)
+    if not seen:
+        raise EditError("Select what to remove first.")
+    if len(whole) >= len(root.find("part").findall("measure")):
+        raise EditError("A score needs at least one bar.")
+    for index in sorted(whole, reverse=True):
+        delete_measure(root, index)
 
 
 def insert_rest(root: ET.Element, note_id: str, type_name: str, dots: int) -> str:

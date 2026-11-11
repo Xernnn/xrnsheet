@@ -704,6 +704,8 @@ GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {
 @app.post("/api/scores/{score_id}/group")
 def change_group(score_id: str, body: GroupEdit) -> dict:
     """Apply one action to several notes as one edit, so one undo takes it all back."""
+    if body.action == "remove":
+        return apply_edit(score_id, lambda root: edit.remove_range(root, body.notes))
     if body.action not in GROUP_ACTIONS:
         raise HTTPException(422, "That can't be done to a selection")
 
