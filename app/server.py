@@ -32,7 +32,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.datastructures import Headers
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
 from pipeline import edit, marks, structure, transpose
@@ -49,6 +49,8 @@ IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".pdf"
 SCORE_TYPES = {".musicxml", ".xml", ".mxl"}
 ALLOWED_TYPES = IMAGE_TYPES | SCORE_TYPES
 MAX_UPLOAD_BYTES = 40 * 1024 * 1024
+FORM_BYTES = 64 * 1024  # What an upload wraps its file in: the file's name and type, and the form's edges.
+TOO_LARGE = "That file is too large. The limit is 40 MB."
 MAX_PDF_PAGES = 40
 PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
@@ -99,7 +101,42 @@ class OwnPagesOnly:
         await self.inner(scope, receive, send)
 
 
+class SizeLimit:
+    """Refuse a request larger than an upload can be, without taking it in first.
+
+    An upload is saved to disk as it arrives and only then read and measured, so one far over the
+    limit would fill the disk and then the memory before being refused. A request that says it's
+    too large is refused before any of it is read, and one that doesn't say is stopped as soon as
+    it passes the limit.
+    """
+
+    def __init__(self, inner: ASGIApp) -> None:
+        self.inner = inner
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.inner(scope, receive, send)
+            return
+        limit = MAX_UPLOAD_BYTES + FORM_BYTES
+        stated = Headers(scope=scope).get("content-length", "")
+        if stated.isdigit() and int(stated) > limit:
+            await JSONResponse({"detail": TOO_LARGE}, status_code=413)(scope, receive, send)
+            return
+        taken = 0
+
+        async def receive_within_limit() -> Message:
+            nonlocal taken
+            message = await receive()
+            taken += len(message.get("body", b""))
+            if taken > limit:
+                raise HTTPException(413, TOO_LARGE)
+            return message
+
+        await self.inner(scope, receive_within_limit, send)
+
+
 app = FastAPI(title="xrnsheet", lifespan=lifespan)
+app.add_middleware(SizeLimit)
 app.add_middleware(OwnPagesOnly)
 one_at_a_time = threading.Semaphore(1)  # Recognition is memory hungry.
 # The page being read now, and whether the app is stopping, so that the page can stop with it.
@@ -405,7 +442,7 @@ async def create_score(file: UploadFile) -> dict:
         raise HTTPException(415, "Please upload a photo, a PDF or a MusicXML file.")
     data = await file.read()
     if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "That file is too large. The limit is 40 MB.")
+        raise HTTPException(413, TOO_LARGE)
     if suffix in SCORE_TYPES:
         return open_score_file(data, suffix)
     if suffix != ".pdf" and cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE) is None:

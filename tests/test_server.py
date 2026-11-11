@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import os
@@ -841,3 +842,60 @@ def test_a_group_delete_passes_over_a_grace_note_that_went_with_its_note(client)
     assert client.post(f"{url}/group", json={"action": "delete", "notes": [ids[1], grace, ids[2]]}).status_code == 200
     left = notes_of(client, score_id)
     assert grace not in [item.get("id") for item in left] and [item.find("rest") is not None for item in left[:4]] == [False, True, True, False]
+
+
+PIECE = 64 * 1024
+
+
+def upload_in_pieces(size, stated):
+    """Send a photo of this many bytes straight to the app, a piece at a time, as a browser would.
+
+    Returns the status and how many pieces the app took in. `stated` says whether the request
+    gives its size up front, as a browser's does, or only ends when it ends.
+    """
+    form = b'--edge\r\nContent-Disposition: form-data; name="file"; filename="page.png"\r\nContent-Type: image/png\r\n\r\n'
+    body = form + b"\0" * size + b"\r\n--edge--\r\n"
+    pieces = [body[start:start + PIECE] for start in range(0, len(body), PIECE)]
+    taken = 0
+    sent = []
+
+    async def receive():
+        nonlocal taken
+        if taken == len(pieces):
+            return {"type": "http.disconnect"}
+        taken += 1
+        return {"type": "http.request", "body": pieces[taken - 1], "more_body": taken < len(pieces)}
+
+    async def send(message):
+        sent.append(message)
+
+    headers = [(b"host", b"127.0.0.1:8000"), (b"content-type", b"multipart/form-data; boundary=edge")]
+    if stated:
+        headers.append((b"content-length", str(len(body)).encode()))
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http",
+        "path": "/api/scores", "raw_path": b"/api/scores", "root_path": "", "query_string": b"", "headers": headers,
+        "client": ("127.0.0.1", 50000), "server": ("127.0.0.1", 8000),
+    }
+    asyncio.run(server.app(scope, receive, send))
+    return next(message["status"] for message in sent if message["type"] == "http.response.start"), taken
+
+
+def test_an_upload_that_says_it_is_too_large_is_refused_before_it_is_taken_in(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    assert upload_in_pieces(2 * 1024 * 1024, stated=True) == (413, 0)
+
+
+def test_an_upload_that_does_not_say_its_size_stops_being_taken_in_at_the_limit(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    status, taken = upload_in_pieces(4 * 1024 * 1024, stated=False)
+    assert status == 413 and taken * PIECE <= 2 * 1024 * 1024
+
+
+def test_an_upload_within_the_limit_is_still_taken(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    monkeypatch.setattr(server, "recognize_job", lambda folder, upload: None)
+    image = io.BytesIO()
+    Image.new("RGB", (40, 40), "white").save(image, "PNG")
+    padded = image.getvalue() + b"\0" * (1024 * 1024 - len(image.getvalue()))  # A PNG may carry data after its end.
+    assert client.post("/api/scores", files={"file": ("page.png", padded)}).status_code == 200
