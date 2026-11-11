@@ -36,7 +36,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
 from pipeline import edit, marks, structure, transpose
-from pipeline.engrave import export_pdf, render_pages
+from pipeline.engrave import MUSIC_FONT, RESOURCE_PATH, export_pdf, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import UnreadableScore, read_score_file, to_text
@@ -891,6 +891,29 @@ def download_pdf(score_id: str, part: int | None = None) -> FileResponse:
     path = folder / name
     export_pdf(to_text(root), path)
     return FileResponse(path, media_type="application/pdf", filename=name)
+
+
+@app.get("/api/scores/{score_id}/thumbnail.svg")
+def get_thumbnail(score_id: str) -> FileResponse:
+    """Draw a score's first page, for the list of scores. It's kept until the score changes."""
+    folder = job_folder(score_id)
+    with edit_lock:
+        saved = versions(folder)
+        if not saved:
+            raise HTTPException(404, "This sheet isn't ready yet")
+        # An undo followed by a new edit gives a different version the same number, so the time counts too.
+        path = folder / f"thumbnail_{version_number(saved[-1])}_{saved[-1].stat().st_mtime_ns}.svg"
+        if not path.exists():
+            for old in folder.glob("thumbnail_*.svg"):
+                old.unlink(missing_ok=True)
+            write_whole(path, render_pages(to_text(ET.parse(saved[-1]).getroot()))[0])
+    return FileResponse(path, media_type="image/svg+xml")
+
+
+@app.get("/music-font.css")
+def music_font() -> FileResponse:
+    """Serve the music font the pages are drawn in, so the toolbar and palettes show the same symbols."""
+    return FileResponse(Path(RESOURCE_PATH) / f"{MUSIC_FONT}.css", media_type="text/css", headers={"Cache-Control": "max-age=86400"})
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

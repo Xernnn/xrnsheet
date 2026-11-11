@@ -991,3 +991,28 @@ def test_a_page_being_read_is_stopped_by_the_system_if_the_app_is_killed_outrigh
     limits = [started[0][index + 1] for index, part in enumerate(started[0]) if part == "-p"]
     longest = [int(limit.split("=")[1]) for limit in limits if limit.startswith("RuntimeMaxSec=")]
     assert len(longest) == 1 and server.PAGE_TIMEOUT_SECONDS < longest[0] <= 2 * server.PAGE_TIMEOUT_SECONDS
+
+
+def test_a_thumbnail_is_the_first_page_and_follows_the_score(client, ready_score):
+    first = client.get(f"/api/scores/{ready_score}/thumbnail.svg")
+    assert first.status_code == 200 and first.headers["content-type"].startswith("image/svg+xml")
+    assert first.text.lstrip().startswith("<svg") and "Dm7" in first.text
+    client.post(f"/api/scores/{ready_score}/chords/0", json={"text": "G7"})
+    assert "G7" in client.get(f"/api/scores/{ready_score}/thumbnail.svg").text
+    client.post(f"/api/scores/{ready_score}/undo")
+    client.post(f"/api/scores/{ready_score}/chords/0", json={"text": "A7"})
+    assert "A7" in client.get(f"/api/scores/{ready_score}/thumbnail.svg").text
+    assert len(list((server.JOB_DIR / ready_score).glob("thumbnail_*.svg"))) == 1
+
+
+def test_a_sheet_still_being_read_has_no_thumbnail(client):
+    folder = server.JOB_DIR / ("f" * 32)
+    folder.mkdir()
+    server.write_status(folder, "processing")
+    assert client.get(f"/api/scores/{'f' * 32}/thumbnail.svg").status_code == 404
+
+
+def test_the_pages_music_font_is_served_for_the_toolbar(client):
+    response = client.get("/music-font.css")
+    assert response.status_code == 200 and response.headers["content-type"].startswith("text/css")
+    assert "font-family: 'Leland'" in response.text and "format('woff2')" in response.text
