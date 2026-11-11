@@ -1068,3 +1068,31 @@ def test_instruments_are_added_together_and_removed_by_their_place(client):
     assert client.post(f"/api/scores/{score_id}/parts", json={"action": "remove", "index": 1}).json()["parts"] == ["Voice", "Cello"]
     assert client.post(f"/api/scores/{score_id}/parts", json={"action": "remove", "index": 7}).status_code == 422
     assert client.post(f"/api/scores/{score_id}/parts", json={"action": "add"}).status_code == 422
+
+
+def test_the_keys_musescore_users_reach_for_are_note_actions(client):
+    score_id = client.post("/api/scores/blank", json={"measures": 2}).json()["id"]
+    first = client.get(f"/api/scores/{score_id}/playback").json()
+    note_id = ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text).find(".//note").get("id")
+    written = client.post(f"/api/scores/{score_id}/notes/{note_id}", json={"action": "write", "step": "C"}).json()["written"]
+    for action, extra in [("semitoneUp", {}), ("double", {}), ("dotLonger", {}), ("interval", {"interval": 3}), ("repitch", {"step": "D"})]:
+        assert client.post(f"/api/scores/{score_id}/notes/{written}", json={"action": action} | extra).status_code == 200, action
+    root = ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    found = [(note.findtext("pitch/step"), note.findtext("pitch/alter"), note.findtext("type"), len(note.findall("dot"))) for note in root.iter("note") if note.find("pitch") is not None]
+    assert found == [("D", None, "half", 1), ("E", None, "half", 1)]
+    assert first["notes"] == []
+    assert client.post(f"/api/scores/{score_id}/group", json={"action": "semitoneDown", "notes": [written]}).status_code == 200
+
+
+def test_a_stretch_of_bars_is_deleted_together(client):
+    score_id = client.post("/api/scores/blank", json={"measures": 6}).json()["id"]
+    measures = ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text).find("part").findall("measure")
+    ids = [measure.find("note").get("id") for measure in measures]
+    client.post(f"/api/scores/{score_id}/notes/{ids[0]}", json={"action": "write", "step": "C", "type": "whole"})
+    client.post(f"/api/scores/{score_id}/notes/{ids[4]}", json={"action": "write", "step": "G", "type": "whole"})
+    data = client.post(f"/api/scores/{score_id}/bars", json={"action": "delete", "note": ids[1], "last": ids[3]}).json()
+    assert data["canUndo"]
+    left = ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text).find("part").findall("measure")
+    assert [measure.findtext("note/pitch/step") for measure in left] == ["C", "G", None]
+    client.post(f"/api/scores/{score_id}/undo")
+    assert len(ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text).find("part").findall("measure")) == 6

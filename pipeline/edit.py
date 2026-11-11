@@ -799,6 +799,114 @@ def move_note(root: ET.Element, note_id: str, steps: int) -> None:
     repair_ties(part, context.index)  # A tie can only join two notes of the same pitch.
 
 
+def spell_sound(sound: int, fifths: int, rising: bool) -> Pitch:
+    """Name a sound: as a note of the key if it is one, else a plain note, else a sharp on the way up or a flat on the way down.
+
+    The sound is counted in semitones, twelve to the octave, from the C of octave 0.
+    """
+    semitone = sound % 12
+    in_key = [(step, alteration_in_key(step, fifths)) for step in STEPS]
+    plain = [(step, 0) for step in STEPS]
+    for step, alter in [*in_key, *plain]:
+        if (NATURAL_SEMITONES[step] + alter) % 12 == semitone:
+            return step, alter, (sound - NATURAL_SEMITONES[step] - alter) // 12
+    alter = 1 if rising else -1
+    step = next(step for step in STEPS if NATURAL_SEMITONES[step] == (semitone - alter) % 12)
+    return step, alter, (sound - NATURAL_SEMITONES[step] - alter) // 12
+
+
+def move_semitone(root: ET.Element, note_id: str, change: int) -> None:
+    """Move a note up or down by semitones, which is what the arrow keys do in MuseScore.
+
+    Going up it's spelled with a sharp and going down with a flat, unless the key has a name for it.
+    """
+    note = find_note(root, note_id)
+    pitch = note.find("pitch")
+    if pitch is None:
+        raise EditError("Rests have no pitch to move")
+    part, context = context_of(root, note)
+    sound = 12 * int(pitch.findtext("octave")) + NATURAL_SEMITONES[pitch.findtext("step")] + int(float(pitch.findtext("alter") or 0)) + change
+    step, alter, octave = spell_sound(sound, context.fifths, change > 0)
+    if not 0 <= octave <= 9:
+        raise EditError("That's too far from the staff.")
+    pitch.find("step").text = step
+    pitch.find("octave").text = str(octave)
+    write_alter(pitch, alter)
+    respell(context)
+    repair_ties(part, context.index)
+
+
+def set_step(root: ET.Element, note_id: str, step: str) -> dict:
+    """Rename a selected note by its letter, as typing a letter does in MuseScore outside note input.
+
+    It takes the octave nearest where the note was, and the sharp or flat the key gives that letter.
+    A rest becomes a note of its own length.
+    """
+    if step not in STEPS:
+        raise EditError("A note is a letter from A to G.")
+    note = find_note(root, note_id)
+    pitch = note.find("pitch")
+    if pitch is None:
+        try:
+            name, dots = type_of(locate(root, note_id).event.nominal)
+        except EditError:
+            name = None
+        if name not in ENTERED_LENGTHS:
+            raise EditError("Choose a duration for this rest first, or press N to enter notes.")
+        return {"cursor": write_note(root, note_id, name, dots, step)["written"]}
+    part, context = context_of(root, note)
+    octave = round((height_of(note) - STEPS.index(step)) / 7)
+    if not 0 <= octave <= 9:
+        raise EditError("That's too far from the staff.")
+    pitch.find("step").text = step
+    pitch.find("octave").text = str(octave)
+    write_alter(pitch, alteration_in_key(step, context.fifths))
+    respell(context)
+    repair_ties(part, context.index)
+    return {}
+
+
+LENGTH_ORDER = ["64th", "32nd", "16th", "eighth", "quarter", "half", "whole"]
+
+
+def scale_length(root: ET.Element, note_id: str, longer: bool, by_dot: bool = False) -> None:
+    """Double or halve a note's length, which is MuseScore's W and Q.
+
+    With `by_dot` it goes one step along quarter, dotted quarter, half, as Shift does there.
+    """
+    try:
+        name, dots = type_of(locate(root, note_id).event.nominal)
+    except EditError:
+        name, dots = "", 0
+    if name not in LENGTH_ORDER:
+        raise EditError("Choose a duration for this one first.")
+    index = LENGTH_ORDER.index(name)
+    if not by_dot:
+        index += 1 if longer else -1
+    elif longer:
+        index, dots = (index, 1) if dots == 0 else (index + 1, 0)
+    else:
+        index, dots = (index - 1, 1) if dots == 0 else (index, 0)
+    if not 0 <= index < len(LENGTH_ORDER):
+        raise EditError("There's no longer note to use." if longer else "There's no shorter note to use.")
+    change_length(root, note_id, LENGTH_ORDER[index], dots)
+
+
+def add_interval(root: ET.Element, note_id: str, interval: int) -> str:
+    """Add a note this interval above a chord's top note, or below its bottom one if it's negative.
+
+    A third is 3, as in MuseScore, where Alt and a number adds that interval above.
+    """
+    if not 2 <= abs(interval) <= 9:
+        raise EditError("An interval is a second to a ninth.")
+    spot = locate(root, note_id)
+    if spot.event.is_rest:
+        raise EditError("Choose a note to add an interval to.")
+    heights = [height_of(note) for note in spot.event.notes]
+    height = max(heights) + interval - 1 if interval > 0 else min(heights) + interval + 1
+    return add_pitch(root, note_id, "", line=spot.context.tops.get(spot.key[0], diatonic("F", 5)) - height)
+
+
 def write_alter(pitch: ET.Element, alter: int) -> None:
     existing = pitch.find("alter")
     if alter:

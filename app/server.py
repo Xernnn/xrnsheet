@@ -169,6 +169,7 @@ class NoteEdit(BaseModel):
     midi: int | None = None  # A key pressed on a MIDI keyboard.
     steps: int = 0
     actual: int = 3  # How many notes a tuplet holds.
+    interval: int = 0  # A third is 3. Below the note if it's negative.
 
 
 class GroupEdit(BaseModel):
@@ -661,6 +662,14 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "dot": lambda root: edit.toggle_dot(root, note_id),
         "write": lambda root: edit.write_note(root, note_id, body.type, body.dots, body.step, body.line, body.voice, body.midi),
         "moveBy": lambda root: edit.move_note(root, note_id, body.steps),
+        "semitoneUp": lambda root: edit.move_semitone(root, note_id, 1),
+        "semitoneDown": lambda root: edit.move_semitone(root, note_id, -1),
+        "repitch": lambda root: edit.set_step(root, note_id, body.step or ""),
+        "double": lambda root: edit.scale_length(root, note_id, True),
+        "halve": lambda root: edit.scale_length(root, note_id, False),
+        "dotLonger": lambda root: edit.scale_length(root, note_id, True, by_dot=True),
+        "dotShorter": lambda root: edit.scale_length(root, note_id, False, by_dot=True),
+        "interval": lambda root: {"written": edit.add_interval(root, note_id, body.interval)},
         "respell": lambda root: edit.respell_note(root, note_id),
         "flip": lambda root: edit.flip_stem(root, note_id),
         "stack": lambda root: {"written": edit.add_pitch(root, note_id, body.step or "", body.line, body.midi)},
@@ -680,6 +689,8 @@ GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {
     "down": lambda root, note: edit.move_note(root, note, -1),
     "octaveUp": lambda root, note: edit.move_note(root, note, 7),
     "octaveDown": lambda root, note: edit.move_note(root, note, -7),
+    "semitoneUp": lambda root, note: edit.move_semitone(root, note, 1),
+    "semitoneDown": lambda root, note: edit.move_semitone(root, note, -1),
     "sharp": lambda root, note: edit.set_accidental(root, note, 1),
     "flat": lambda root, note: edit.set_accidental(root, note, -1),
     "natural": lambda root, note: edit.set_accidental(root, note, 0),
@@ -826,7 +837,9 @@ def change_bars(score_id: str, body: BarEdit) -> dict:
         elif body.action == "delete":
             if index is None:
                 raise edit.EditError("Click a note in the bar to delete first.")
-            structure.delete_measure(root, index)
+            # From the last one back, so the bars still to go keep their numbers.
+            for doomed in range(structure.bar_of(root, body.last) if body.last else index, index - 1, -1):
+                structure.delete_measure(root, doomed)
         elif body.action == "key":
             structure.set_key(root, index or 0, body.fifths)
         elif body.action == "time":

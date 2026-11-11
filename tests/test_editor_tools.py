@@ -700,3 +700,106 @@ def test_a_chord_partway_through_a_long_note_is_copied_with_it():
     context = next(contexts(root.find("part")))
     timeline = read_measure(context.measure, context.divisions)
     assert edit.chord_on(context, timeline.events()[0]) == "G7"
+
+
+def pitches(root):
+    return [(note.findtext("pitch/step"), int(float(note.findtext("pitch/alter") or 0)), int(note.findtext("pitch/octave"))) for note in root.iter("note") if note.find("pitch") is not None]
+
+
+@pytest.mark.parametrize(("fifths", "start", "change", "expected"), [
+    (0, "C", 1, ("C", 1, 5)),    # Up: a sharp.
+    (0, "D", -1, ("D", -1, 5)),  # Down: a flat.
+    (0, "E", 1, ("F", 0, 5)),    # A plain note where there is one.
+    (0, "C", -1, ("B", 0, 4)),   # Across the octave's edge.
+    (-1, "A", 1, ("B", -1, 4)),  # In F, the key's own B flat, not A sharp.
+    (2, "E", 1, ("F", 0, 5)),    # In D, F natural is plain F, not E sharp.
+    (2, "E", 2, ("F", 1, 5)),    # And the key's own F sharp a tone up.
+], ids=["sharp-up", "flat-down", "plain", "octave-edge", "key-flat", "plain-outside-key", "key-sharp"])
+def test_an_arrow_moves_a_note_a_semitone_and_spells_it_as_musescore_does(fifths, start, change, expected):
+    root = blank(fifths=fifths)
+    written, _ = write(root, start)
+    edit.move_semitone(root, written[0], change)
+    assert pitches(root) == [expected]
+
+
+def test_twelve_semitones_up_and_down_end_on_the_same_note():
+    root = blank()
+    written, _ = write(root, "G")
+    for change in [1] * 12 + [-1] * 12:
+        edit.move_semitone(root, written[0], change)
+    assert pitches(root) == [("G", 0, 4)]
+
+
+def test_a_semitone_shows_its_accidental_and_a_rest_cannot_move():
+    root = blank()
+    written, cursor = write(root, "C")
+    edit.move_semitone(root, written[0], 1)
+    assert root.find(".//note/accidental").text == "sharp"
+    with pytest.raises(EditError):
+        edit.move_semitone(root, cursor, 1)
+
+
+def test_a_letter_renames_a_selected_note_at_the_nearest_octave():
+    root = blank(fifths=2)
+    written, _ = write(root, "C", "B")
+    assert pitches(root) == [("C", 1, 5), ("B", 0, 4)]
+    edit.set_step(root, written[0], "B")
+    edit.set_step(root, written[1], "C")
+    assert pitches(root) == [("B", 0, 4), ("C", 1, 5)]
+
+
+def test_a_letter_on_a_selected_rest_writes_a_note_of_the_rests_length():
+    root = blank()
+    written, cursor = write(root, "C", length="half")
+    done = edit.set_step(root, cursor, "E")
+    assert pitches(root) == [("C", 0, 5), ("E", 0, 5)]
+    assert [note.findtext("type") for note in bar(root, 0).findall("note")] == ["half", "half"]
+    assert done["cursor"] == bar(root, 0).findall("note")[1].get("id")
+
+
+def test_w_and_q_double_and_halve_a_note_and_keep_its_bar_full():
+    root = blank()
+    written, _ = write(root, "C")
+    edit.scale_length(root, written[0], True)
+    assert bar(root, 0).find("note").findtext("type") == "half"
+    edit.scale_length(root, written[0], False)
+    edit.scale_length(root, bar(root, 0).find("note").get("id"), False)
+    assert bar(root, 0).find("note").findtext("type") == "eighth"
+    assert structure.check_measures(root) == []
+
+
+def test_shift_w_and_q_step_through_the_dotted_lengths():
+    root = blank()
+    written, _ = write(root, "C")
+    seen = []
+    for longer in [True, True, False, False, False]:
+        edit.scale_length(root, bar(root, 0).find("note").get("id"), longer, by_dot=True)
+        first = bar(root, 0).find("note")
+        seen.append((first.findtext("type"), len(first.findall("dot"))))
+    assert seen == [("quarter", 1), ("half", 0), ("quarter", 1), ("quarter", 0), ("eighth", 1)]
+
+
+def test_the_longest_and_shortest_notes_stop_there():
+    root = blank()
+    written, _ = write(root, "C", length="whole")
+    with pytest.raises(EditError, match="longer"):
+        edit.scale_length(root, written[0], True)
+
+
+@pytest.mark.parametrize(("interval", "expected"), [(3, ("E", 0, 5)), (5, ("G", 0, 5)), (8, ("C", 0, 6)), (-3, ("A", 0, 4))], ids=["third", "fifth", "octave", "third-below"])
+def test_alt_and_a_number_adds_that_interval_to_a_note(interval, expected):
+    root = blank()
+    written, _ = write(root, "C")
+    added = edit.add_interval(root, written[0], interval)
+    assert expected in pitches(root) and len(pitches(root)) == 2
+    assert edit.find_note(root, added).find("pitch") is not None
+
+
+def test_an_interval_is_counted_from_the_top_of_a_chord_and_takes_the_keys_sharps():
+    root = blank(fifths=2)
+    written, _ = write(root, "D")
+    edit.add_interval(root, written[0], 3)
+    edit.add_interval(root, written[0], 3)
+    assert pitches(root) == [("D", 0, 5), ("F", 1, 5), ("A", 0, 5)]
+    with pytest.raises(EditError):
+        edit.add_interval(root, written[0], 1)
