@@ -110,12 +110,21 @@
             <button id="breaksOpen">Add/remove system breaks…</button>
           </div>
         </section>
+        <section id="propMark" hidden>
+          <h3 id="propMarkKind">Mark</h3>
+          <div class="fields">
+            <div class="pair">
+              <button id="markEdit" title="Change what it says (F2, or double-click it)">Edit text</button>
+              <button id="markDelete" title="Remove it from the score (Del)">Delete</button>
+            </div>
+          </div>
+        </section>
         <section id="propNote">
           <h3 id="propKind">Note</h3>
           <div class="fields">
             <div class="pair">
-              <button data-action="up" data-needs="note" title="Move up (↑)">Pitch up</button>
-              <button data-action="down" data-needs="note" title="Move down (↓)">Pitch down</button>
+              <button data-action="semitoneUp" data-needs="note" title="Up a semitone (↑)">Pitch up</button>
+              <button data-action="semitoneDown" data-needs="note" title="Down a semitone (↓)">Pitch down</button>
             </div>
             <div class="pair">
               <button data-action="respell" data-needs="note" title="Write the same note under its other name (J)">Respell</button>
@@ -132,7 +141,7 @@
           <div class="fields">
             <div class="pair">
               <button id="addBar" title="Insert a measure before the selected one, or at the end (Ins)">Insert measure</button>
-              <button id="deleteBar" data-needs="note" title="Delete the selected measure">Delete measure</button>
+              <button id="deleteBar" data-needs="note" title="Delete the selected measures (Ctrl+Del with whole measures selected)">Delete measure</button>
             </div>
             <label class="field">Pickup at the start
               <select id="pickupChoice"><option value="">Choose…</option><option value="2">An eighth note</option><option value="4">A quarter note</option><option value="8">A half note</option><option value="12">Three quarter notes</option><option value="0">No pickup</option></select>

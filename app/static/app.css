@@ -192,12 +192,15 @@ body.publishing #noteBar, body.publishing #side, body.publishing #pitches, body:
 #pages g.playing, #pages g.playing * { fill: var(--good); stroke: var(--good); }
 #pages g.harm:hover text, #pages g.harm.active text { fill: var(--voice1); }
 #pages g[data-mark]:hover text, #pages g[data-mark]:hover tspan { fill: var(--voice1); }
+#pages g.selected text, #pages g.selected tspan { fill: var(--voice1); }
 #pages g.harm.unsure text { fill: var(--warn); }
 body.inputting #pages { cursor: crosshair; }
 #caret { position: absolute; background: color-mix(in srgb, var(--voice1) 22%, transparent); border-left: 2px solid var(--voice1); pointer-events: none; }
 #caret[data-voice="2"] { background: color-mix(in srgb, var(--voice2) 22%, transparent); border-left-color: var(--voice2); }
 #caret[data-voice="3"] { background: color-mix(in srgb, var(--voice3) 22%, transparent); border-left-color: var(--voice3); }
 #caret[data-voice="4"] { background: color-mix(in srgb, var(--voice4) 22%, transparent); border-left-color: var(--voice4); }
+#pages { user-select: none; }
+.rangeBox { position: absolute; border: 1.5px solid var(--voice1); background: color-mix(in srgb, var(--voice1) 7%, transparent); pointer-events: none; }
 #ghost { position: absolute; border-radius: 50%; background: var(--voice1); opacity: .45; pointer-events: none; transform: rotate(-20deg); }
 #lyricInput { position: absolute; z-index: 2; width: 110px; min-height: 0; padding: 2px 6px; border: 1px solid var(--voice1); background: #fff; color: #000; }
 

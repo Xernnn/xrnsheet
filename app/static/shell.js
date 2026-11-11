@@ -37,15 +37,22 @@ const SHORTCUTS = [
   ["0", "Rest"],
   ["T", "Tie to the next note"],
   ["+  -  =", "Sharp, flat, natural"],
-  ["↑  ↓", "Move a note. With Ctrl, move an octave"],
+  ["↑  ↓", "Move a note a semitone. With Ctrl, an octave"],
+  ["Alt+Shift+↑  ↓", "Move a note one step of the scale"],
+  ["A to G, on a selected note", "Rename it. With Shift, add that note to its chord"],
+  ["Alt+2 to 9", "Add a note that interval above"],
+  ["Q  W", "Half or twice as long. With Shift, through the dotted lengths"],
   ["←  →", "Previous or next note"],
-  ["Shift+←  →, Shift+click", "Select a stretch of notes"],
+  ["Ctrl+←  →", "Previous or next measure"],
+  ["Ctrl+Home, Ctrl+End", "First or last note of the staff"],
+  ["Shift+←  →, Shift+click", "Select a stretch of notes. Shift with the keys above stretches it further"],
+  ["Click an empty part of a measure", "Select the whole measure"],
   ["Ctrl+A", "Select everything on the staff"],
   ["Ctrl+C  X  V", "Copy, cut, paste"],
   ["R", "Repeat this note or stretch"],
   ["Ctrl+Z, Ctrl+Shift+Z", "Undo, redo"],
   ["Del", "Make a rest"],
-  ["Ctrl+Del", "Remove the selected range, and pull later notes in"],
+  ["Ctrl+Del", "Remove the selected range: whole measures go, anything less pulls later notes in"],
   ["Ins, Ctrl+B", "Insert a measure before the selection, or add one at the end"],
   ["Ctrl+3", "Triplet from the chosen duration. 5, 6 and 7 make other tuplets"],
   ["S", "Slur a stretch, or this note to the next"],
@@ -64,7 +71,9 @@ const SHORTCUTS = [
   ["F9, F7, F8", "Show or hide Palettes, Instruments, Properties"],
   ["Ctrl+=, Ctrl+-, Ctrl+0", "Zoom in, zoom out, 100%"],
   ["Drag a selected note", "Move it up or down"],
-  ["Click a dynamic, slur or text", "Change or remove it"],
+  ["Click a dynamic, slur or text", "Select it. Del removes it, and a double-click or F2 changes it"],
+  ["Double-click the title", "Change the title and composer"],
+  ["Ctrl+wheel, drag the desk", "Zoom, and move the pages about"],
   ["Click the staff", "In note input, place a note there. Shift+click adds it to a chord"],
 ];
 let openMenus = [];
@@ -221,7 +230,7 @@ function menuList() {
       null,
       { label: "Select all", keys: "Ctrl+A", enabled: open, run: selectEverything },
       { label: "Delete", keys: "Del", enabled: target, run: () => noteAction("delete") },
-      { label: "Delete selected measure", enabled: target, run: () => barAction("delete") },
+      { label: "Delete selected measures", enabled: target, run: deleteBars },
     ] },
     { label: "View", items: [
       { label: "Palettes", keys: "F9", checked: sideShown("palettes"), enabled: open, run: () => toggleSide("palettes") },
@@ -249,7 +258,7 @@ function menuList() {
       { label: "Respell pitches", keys: "J", enabled: target, run: () => noteAction("respell") },
       { label: "Repeat selection", keys: "R", enabled: target, run: repeatSelection },
       null,
-      { label: "Remove selected range", keys: "Ctrl+Del", enabled: target, run: () => noteAction("close") },
+      { label: "Remove selected range", keys: "Ctrl+Del", enabled: target, run: removeRange },
       { label: "Insert a beat here", enabled: target, run: () => noteAction("insert") },
       { label: "Remove articulations and ornaments", enabled: target, run: () => noteAction("clear") },
     ] },
@@ -540,7 +549,13 @@ function openBreaks() {
 function drawProperties() {
   const target = score ? actionTarget() : null;
   const element = target && document.getElementById(target);
-  $("propScore").hidden = Boolean(element);
+  const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
+  $("propMark").hidden = !mark;
+  if (mark) {
+    $("propMarkKind").textContent = MARK_NAMES[mark.kind] ?? "Mark";
+    $("markEdit").hidden = !mark.text || mark.kind === "jump" || mark.kind === "repeat-sign";
+  }
+  $("propScore").hidden = Boolean(element) || Boolean(mark);
   $("propNote").hidden = $("propBeats").hidden = !element;
   if (element) $("propKind").textContent = range ? "Range" : element.matches("g.note") ? "Note" : "Rest";
   if (!editor.on && element) {
@@ -584,6 +599,8 @@ function setUpShell() {
     enqueue(() => send("parts", { action: "add", names }));
   });
   $("projectOpen").addEventListener("click", openProject);
+  $("markEdit").addEventListener("click", openSelectedMark);
+  $("markDelete").addEventListener("click", removeMark);
   $("projectDialog").querySelector("form").addEventListener("submit", () => {
     // Read now, because a reply arriving first redraws these fields with what the server knew.
     const body = { title: $("titleInput").value, composer: $("composerInput").value };

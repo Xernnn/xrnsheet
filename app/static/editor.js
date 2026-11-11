@@ -10,7 +10,7 @@ const LENGTHS = [
   { key: "7", type: "whole", label: "Whole note", glyph: "E1D2" },
 ];
 const AFTER = "after:"; // A cursor past the last note of the score.
-const GROUP_ACTIONS = new Set(["up", "down", "octaveUp", "octaveDown", "sharp", "flat", "natural", "delete", "clear", "respell", "flip"]);
+const GROUP_ACTIONS = new Set(["up", "down", "octaveUp", "octaveDown", "semitoneUp", "semitoneDown", "sharp", "flat", "natural", "delete", "clear", "respell", "flip"]);
 const REACH_IN_STEPS = 10; // How far off a staff a click still counts as on it.
 const EVENTS = "g.note, g.rest, g.mRest";
 const VOICES = 4;
@@ -31,10 +31,13 @@ const FAMILY_SOUNDS = {
   9: { wave: "sine", level: 1.2 }, // Flutes.
 };
 const USUAL_SOUND = { wave: "triangle", level: 1 };
+const MARK_NAMES = { dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin" };
 const EXPRESSIONS = { staff: "Text, e.g. solo", expression: "Expression, e.g. dolce" };
 const editor = { on: false, type: "quarter", dots: 0, voice: 1, cursor: null, last: null, trail: [], future: [] };
 let player = null;
 let range = null; // A selected stretch: { first, last, ids }.
+let selectedMark = null; // The id of a selected dynamic, text, slur or other mark.
+let pan = null; // The pages being dragged about.
 let clipboard = readClipboard();
 let lyricNote = null;
 let lyricSoFar = "";
@@ -123,7 +126,10 @@ function updateTools() {
   $("inputToggle").setAttribute("aria-pressed", String(editor.on));
   $("caret").dataset.voice = editor.voice;
   const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
-  $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : selection);
+  const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
+  const editable = mark?.text && mark.kind !== "jump" && mark.kind !== "repeat-sign";
+  const chosen = mark ? `${MARK_NAMES[mark.kind] ?? "Mark"}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${editable ? ", or double-click to change it" : ""}.` : selection;
+  $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : chosen);
   hint = "";
   drawProperties();
 }
@@ -135,7 +141,44 @@ function staffLines(staff) {
   return { left: top.left, right: top.right, top: top.top, bottom: bottom.top, step: (bottom.top - top.top) / 8 };
 }
 
+// A box around a selected stretch on each staff it crosses, as MuseScore draws one. Where every
+// note of a measure is selected the box takes in the whole measure.
+function drawRangeBoxes() {
+  document.querySelectorAll(".rangeBox").forEach(box => box.remove());
+  if (!range || editor.on) return;
+  const frame = $("pagesFrame").getBoundingClientRect();
+  const chosen = new Set(range.ids);
+  const staves = new Map();
+  const boxes = new Map();
+  for (const id of range.ids) {
+    const element = document.getElementById(id);
+    const staff = element?.closest("g.staff");
+    if (!staff) continue;
+    if (!staves.has(staff)) {
+      const events = [...staff.querySelectorAll(EVENTS)];
+      staves.set(staff, { lines: staffLines(staff), whole: events.every(event => chosen.has(event.id)) });
+    }
+    const { lines, whole } = staves.get(staff);
+    const head = headBox(element);
+    const key = `${[...document.querySelectorAll("#pages g.system")].indexOf(staff.closest("g.system"))}/${staffNumber(element)}`;
+    const box = boxes.get(key) ?? { left: Infinity, right: -Infinity, top: lines.top - lines.step * 2, bottom: lines.bottom + lines.step * 2 };
+    box.left = Math.min(box.left, whole ? lines.left : head.left - 4);
+    box.right = Math.max(box.right, whole ? lines.right : head.right + 4);
+    boxes.set(key, box);
+  }
+  for (const box of boxes.values()) {
+    const shown = document.createElement("div");
+    shown.className = "rangeBox";
+    shown.style.left = `${box.left - frame.left}px`;
+    shown.style.top = `${box.top - frame.top}px`;
+    shown.style.width = `${box.right - box.left}px`;
+    shown.style.height = `${box.bottom - box.top}px`;
+    $("pagesFrame").append(shown);
+  }
+}
+
 function drawCursor() {
+  drawRangeBoxes();
   const caret = $("caret");
   if (!editor.on) { caret.hidden = true; return; }
   if (!document.getElementById(plainId(editor.cursor))) {
@@ -319,6 +362,150 @@ function moveAlong(delta, extend = false) {
   });
 }
 
+// The measure's staff a click landed on, if it wasn't on a note.
+function staffUnder(x, y) {
+  for (const staff of document.querySelectorAll("#pages g.staff")) {
+    const lines = staffLines(staff);
+    if (x >= lines.left && x <= lines.right && y >= lines.top - lines.step && y <= lines.bottom + lines.step) return staff;
+  }
+  return null;
+}
+
+// Clicking an empty part of a measure selects the whole measure, and with Shift everything up to it.
+async function selectMeasure(staff, extend) {
+  const events = [...(staff.querySelector("g.layer") ?? staff).querySelectorAll(EVENTS)].filter(element => stepOf(element) === element);
+  if (!events.length) { select(null); return; }
+  if (!extend || !selected) select(events[0].id);
+  await growRange(events.at(-1).id);
+}
+
+// Ctrl+Delete takes the selected time out of the score: measures selected from end to end go, and
+// anything less closes up. A whole-measure rest is all there is in its measure, so the measure goes.
+function removeRange() {
+  if (!range && !document.getElementById(actionTarget() ?? "")?.matches("g.mRest")) return noteAction("close");
+  return enqueue(async () => {
+    const notes = range ? range.ids : [actionTarget()];
+    range = null;
+    selected = null;
+    await send("group", { action: "remove", notes });
+  });
+}
+
+// Delete every measure the selection touches.
+function deleteBars() {
+  return enqueue(async () => {
+    const body = { action: "delete", note: range?.first ?? actionTarget(), last: range?.last ?? null };
+    range = null;
+    selected = null;
+    await send("bars", body);
+  });
+}
+
+function selectMark(element) {
+  const id = markIdOf(element);
+  if (!score.marks.some(item => item.id === id)) return;
+  select(null);
+  selectedMark = id;
+  markElements(id).forEach(piece => piece.classList.add("selected"));
+  updateTools();
+}
+
+// A slur or hairpin carried over a line break is drawn in pieces, and they're selected together.
+function markElements(id) {
+  return [...document.querySelectorAll("#pages g[data-mark], #pages g.slur, #pages g.hairpin")].filter(element => markIdOf(element) === id);
+}
+
+function removeMark() {
+  return enqueue(async () => {
+    if (!selectedMark) return;
+    const id = selectedMark;
+    selectedMark = null;
+    await send("marks", { action: "label", id, text: "" });
+  });
+}
+
+function openSelectedMark() {
+  const element = selectedMark && markElements(selectedMark)[0];
+  if (element) openMark(element);
+}
+
+// Go to a note or rest: move the cursor there, select it, or stretch the selection to it.
+async function goTo(element, extend) {
+  if (!element) return;
+  if (editor.on) moveCursor(element.id);
+  else if (extend) await growRange(element.id);
+  else select(element.id);
+  element.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function moveByMeasure(delta, extend = false) {
+  return enqueue(async () => {
+    const position = editor.on ? editor.cursor : range?.last ?? selected;
+    const current = stepOf(document.getElementById(plainId(position)));
+    if (!current) return;
+    const measures = [...document.querySelectorAll("#pages g.measure")];
+    const here = measures.indexOf(current.closest("g.measure"));
+    const staff = staffNumber(current);
+    const inMeasure = measure => allEvents().filter(element => element.closest("g.measure") === measure && staffNumber(element) === staff);
+    // Back goes to the start of this measure first, then to the one before.
+    const atStart = inMeasure(measures[here])[0] === current;
+    const target = measures[Math.min(Math.max(here + (delta < 0 && !atStart ? 0 : delta), 0), measures.length - 1)];
+    await goTo(inMeasure(target)[0], extend);
+  });
+}
+
+function moveToEnd(last, extend = false) {
+  return enqueue(async () => {
+    const position = editor.on ? editor.cursor : range?.last ?? selected;
+    const current = stepOf(document.getElementById(plainId(position))) ?? allEvents()[0];
+    if (!current) return;
+    const list = eventsInVoice(staffNumber(current), layerNumber(current));
+    await goTo(last ? list.at(-1) : list[0], extend);
+  });
+}
+
+// W and Q: twice or half as long. With Shift, one step along quarter, dotted quarter, half.
+function scaleLength(longer, byDot) {
+  return enqueue(async () => {
+    if (!editor.on) {
+      await applyToNote(byDot ? (longer ? "dotLonger" : "dotShorter") : (longer ? "double" : "halve"));
+      return;
+    }
+    let index = LENGTHS.findIndex(item => item.type === editor.type);
+    let dots = editor.dots;
+    if (!byDot) index += longer ? 1 : -1;
+    else if (longer) [index, dots] = dots ? [index + 1, 0] : [index, 1];
+    else [index, dots] = dots ? [index, 0] : [index - 1, 1];
+    if (index < 0 || index >= LENGTHS.length) return;
+    editor.type = LENGTHS[index].type;
+    editor.dots = dots;
+    updateTools();
+  });
+}
+
+function startPan(event) {
+  // A drag that ended off the pages got no click to swallow, and mustn't swallow the next one.
+  if (!drag) dragged = false;
+  if (event.button !== 0 || editor.on || event.target.closest("g.note, input, button")) return;
+  const desk = $("desk");
+  pan = { x: event.clientX, y: event.clientY, left: desk.scrollLeft, top: desk.scrollTop, inPages: Boolean(event.target.closest("#pages")), moved: false };
+}
+
+function movePan(event) {
+  if (!pan) return;
+  const dx = event.clientX - pan.x, dy = event.clientY - pan.y;
+  if (!pan.moved && Math.hypot(dx, dy) < DRAG_START_PX) return;
+  pan.moved = true;
+  $("desk").scrollLeft = pan.left - dx;
+  $("desk").scrollTop = pan.top - dy;
+}
+
+// A click follows a drag that ends on the pages, and mustn't select what the pointer happens to be over.
+function endPan() {
+  if (pan?.moved && pan.inPages) dragged = true;
+  pan = null;
+}
+
 async function growRange(id) {
   const first = range?.first ?? selected;
   if (!first) { select(id); return; }
@@ -326,7 +513,9 @@ async function growRange(id) {
   document.querySelectorAll("#pages g.selected").forEach(element => element.classList.remove("selected"));
   range = { first, last: id, ids: data.ids };
   selected = id;
+  selectedMark = null;
   drawRange();
+  drawRangeBoxes();
   updateTools();
 }
 
@@ -846,12 +1035,26 @@ function setUpToolbar() {
   $("pages").addEventListener("pointerdown", startDrag);
   window.addEventListener("pointermove", moveDrag);
   window.addEventListener("pointerup", endDrag);
+  $("desk").addEventListener("pointerdown", startPan);
+  window.addEventListener("pointermove", movePan);
+  window.addEventListener("pointerup", endPan);
+  $("desk").addEventListener("wheel", event => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    stepZoom(event.deltaY < 0 ? 1 : -1);
+  }, { passive: false });
+  $("pages").addEventListener("dblclick", event => {
+    if (editor.on || publishing) return;
+    const mark = markAt(event);
+    if (mark) openMark(mark);
+    else if (event.target.closest("g.pgHead")) openProject();
+  });
   $("audio").addEventListener("click", saveAudio);
   $("dotButton").addEventListener("click", chooseDot);
   $("tripletButton").addEventListener("click", () => toggleTuplet());
   $("inputToggle").addEventListener("click", toggleInput);
   $("addBar").addEventListener("click", () => barAction("insert"));
-  $("deleteBar").addEventListener("click", () => barAction("delete"));
+  $("deleteBar").addEventListener("click", deleteBars);
   $("lyricButton").addEventListener("click", startLyrics);
   // A clicked button keeps the focus, and Space would press it again instead of playing.
   for (const id of ["noteBar", "side", "mainBar", "statusBar", "pitches"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
@@ -900,8 +1103,12 @@ function handleControlKey(event) {
     7: () => toggleTuplet(7),
     arrowup: () => noteAction("octaveUp"),
     arrowdown: () => noteAction("octaveDown"),
-    delete: () => noteAction("close"),
-    backspace: () => noteAction("close"),
+    arrowleft: () => moveByMeasure(-1, event.shiftKey),
+    arrowright: () => moveByMeasure(1, event.shiftKey),
+    home: () => moveToEnd(false, event.shiftKey),
+    end: () => moveToEnd(true, event.shiftKey),
+    delete: removeRange,
+    backspace: removeRange,
   };
   if (actions[key]) { event.preventDefault(); actions[key](); }
 }
@@ -919,6 +1126,9 @@ document.addEventListener("keydown", event => {
   if (PANEL_KEYS[key]) { handled(); toggleSide(PANEL_KEYS[key]); return; }
   if (key === "Insert") { handled(); barAction("insert"); return; }
   if (event.altKey && event.shiftKey && key.toLowerCase() === "t") { handled(); askForTempo(); return; }
+  if (event.altKey && event.shiftKey && key === "ArrowUp") { handled(); noteAction("up"); return; }
+  if (event.altKey && event.shiftKey && key === "ArrowDown") { handled(); noteAction("down"); return; }
+  if (event.altKey && /^[2-9]$/.test(key)) { handled(); noteAction("interval", { interval: Number(key) }); return; }
   if (event.altKey) return;
   if (key === "i" || key === "I") { handled(); showSide("instruments"); openAddPart(); return; }
 
@@ -926,6 +1136,10 @@ document.addEventListener("keydown", event => {
     closeEditor();
     enqueue(async () => { if (editor.on) setInput(false); else select(null); });
     return;
+  }
+  if (selectedMark && !editor.on) {
+    if (key === "Delete" || key === "Backspace") { handled(); removeMark(); return; }
+    if (key === "F2" || key === "Enter") { handled(); openSelectedMark(); return; }
   }
   if (key === " ") { handled(); togglePlaying(); return; }
   if (MARK_KEYS[key]) { handled(); markAction("toggle", { name: MARK_KEYS[key] }); return; }
@@ -940,8 +1154,9 @@ document.addEventListener("keydown", event => {
   if (key === "n" || key === "N") { handled(); toggleInput(); return; }
   if (key === "ArrowLeft") { handled(); moveAlong(-1, event.shiftKey); return; }
   if (key === "ArrowRight") { handled(); moveAlong(1, event.shiftKey); return; }
-  if (key === "ArrowUp") { handled(); noteAction("up"); return; }
-  if (key === "ArrowDown") { handled(); noteAction("down"); return; }
+  if (key === "ArrowUp") { handled(); noteAction("semitoneUp"); return; }
+  if (key === "ArrowDown") { handled(); noteAction("semitoneDown"); return; }
+  if (key.toLowerCase() === "q" || key.toLowerCase() === "w") { handled(); scaleLength(key.toLowerCase() === "w", event.shiftKey); return; }
   if (key === ".") { handled(); chooseDot(); return; }
   if (key === "t" || key === "T") { handled(); noteAction("tie"); return; }
   if (PITCH_KEYS[key]) { handled(); noteAction(PITCH_KEYS[key]); return; }
@@ -957,7 +1172,8 @@ document.addEventListener("keydown", event => {
     return;
   }
   if (key === "0" || key === "Delete" || key === "Backspace") { handled(); noteAction("delete"); return; }
-  if (key === "b") { handled(); noteAction("flat"); }
+  // Outside note input a letter renames the selected note, and with Shift adds to its chord.
+  if (/^[a-gA-G]$/.test(key)) { handled(); noteAction(event.shiftKey ? "stack" : "repitch", { step: key.toUpperCase() }); }
 });
 
 setUpPage();

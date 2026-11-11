@@ -188,6 +188,11 @@ function draw() {
     const element = document.getElementById(selected);
     if (element) markSelected(element); else selected = null;
   }
+  if (selectedMark) {
+    const pieces = markElements(selectedMark);
+    pieces.forEach(piece => piece.classList.add("selected"));
+    if (!pieces.length) selectedMark = null;
+  }
   drawRange();
   drawCursor();
   updateTools();
@@ -254,9 +259,11 @@ function markSelected(element) {
 function select(id) {
   document.querySelectorAll("#pages g.selected").forEach(element => element.classList.remove("selected"));
   range = null;
+  selectedMark = null;
   selected = id;
   const element = id && document.getElementById(id);
   if (element) markSelected(element);
+  drawRangeBoxes();
   updateTools();
 }
 
@@ -357,7 +364,7 @@ function clickPages(event) {
     return;
   }
   const mark = markAt(event);
-  if (mark) { openMark(mark); return; }
+  if (mark) { closeEditor(); selectMark(mark); return; }
   const chord = event.target.closest("g.harm") || nearest("#pages g.harm", event.clientX, event.clientY, 6);
   if (chord && chord.dataset.index !== undefined) {
     const index = Number(chord.dataset.index);
@@ -365,9 +372,14 @@ function clickPages(event) {
     return;
   }
   const note = event.target.closest("g.note, g.rest, g.mRest") || nearest("#pages g.note, #pages g.rest, #pages g.mRest", event.clientX, event.clientY, 14);
+  const staff = note ? null : staffUnder(event.clientX, event.clientY);
+  const extend = event.shiftKey;
   closeEditor();
   enqueue(async () => {
-    if (event.shiftKey && note && selected) await growRange(note.id); else select(note ? note.id : null);
+    if (note && extend && selected) await growRange(note.id);
+    else if (note) select(note.id);
+    else if (staff) await selectMeasure(staff, extend);
+    else select(null);
   });
 }
 
