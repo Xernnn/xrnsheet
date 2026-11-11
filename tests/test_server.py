@@ -2,12 +2,14 @@ import asyncio
 import io
 import json
 import os
+import re
 import signal
 import threading
 import time
 import xml.etree.ElementTree as ET
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -991,3 +993,170 @@ def test_a_page_being_read_is_stopped_by_the_system_if_the_app_is_killed_outrigh
     limits = [started[0][index + 1] for index, part in enumerate(started[0]) if part == "-p"]
     longest = [int(limit.split("=")[1]) for limit in limits if limit.startswith("RuntimeMaxSec=")]
     assert len(longest) == 1 and server.PAGE_TIMEOUT_SECONDS < longest[0] <= 2 * server.PAGE_TIMEOUT_SECONDS
+
+
+def test_a_thumbnail_is_the_first_page_and_follows_the_score(client, ready_score):
+    first = client.get(f"/api/scores/{ready_score}/thumbnail.svg")
+    assert first.status_code == 200 and first.headers["content-type"].startswith("image/svg+xml")
+    assert first.text.lstrip().startswith("<svg") and "Dm7" in first.text
+    client.post(f"/api/scores/{ready_score}/chords/0", json={"text": "G7"})
+    assert "G7" in client.get(f"/api/scores/{ready_score}/thumbnail.svg").text
+    client.post(f"/api/scores/{ready_score}/undo")
+    client.post(f"/api/scores/{ready_score}/chords/0", json={"text": "A7"})
+    assert "A7" in client.get(f"/api/scores/{ready_score}/thumbnail.svg").text
+    assert len(list((server.JOB_DIR / ready_score).glob("thumbnail_*.svg"))) == 1
+
+
+def test_a_sheet_still_being_read_has_no_thumbnail(client):
+    folder = server.JOB_DIR / ("f" * 32)
+    folder.mkdir()
+    server.write_status(folder, "processing")
+    assert client.get(f"/api/scores/{'f' * 32}/thumbnail.svg").status_code == 404
+
+
+STATIC = Path(server.__file__).parent / "static"
+
+
+def test_every_symbol_the_window_draws_is_one_the_engraver_has(client):
+    """The toolbar and palettes ask for music symbols by their code. One that's missing would draw as nothing."""
+    response = client.get("/glyphs.js")
+    assert response.status_code == 200 and response.headers["content-type"].startswith("text/javascript")
+    assert response.text.startswith("const GLYPHS = {")
+    known = json.loads(response.text.removeprefix("const GLYPHS = ").rstrip().removesuffix(";"))
+    outline, left, bottom, width, height, advance = known["E050"]
+    assert outline.startswith("M") and width > 0 and height > 1000 and bottom < 0 and advance > 0
+    asked = set()
+    for path in [*STATIC.glob("*.js"), *STATIC.glob("*.html")]:
+        for found in re.findall(r"""["'`]((?:[EF][0-9A-F]{3})(?: [EF][0-9A-F]{3})*)["'`]""", path.read_text(encoding="utf-8")):
+            asked.update(found.split())
+    assert len(asked) > 40 and asked - set(known) == set()
+
+
+def test_a_new_score_can_start_with_several_instruments_and_its_first_page_written(client):
+    """What MuseScore's New score dialog asks for, all in the first version, so Undo can't take half of it away."""
+    body = {"clef": "voice", "more": ["piano"], "measures": 4, "title": "Evening", "composer": "A. Writer", "tempo": "Andante 92", "pickup": 4}
+    score_id = client.post("/api/scores/blank", json=body).json()["id"]
+    data = client.get(f"/api/scores/{score_id}").json()
+    assert data["parts"] == ["Voice", "Piano"] and (data["title"], data["composer"]) == ("Evening", "A. Writer")
+    assert not data["canUndo"]
+    root = ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    assert [part.find("measure").get("implicit") for part in root.findall("part")] == ["yes", "yes"]
+    assert float(root.find(".//sound").get("tempo")) == 92
+    assert client.get(f"/api/scores/{score_id}/playback").json()["tempo"] == 92
+
+
+@pytest.mark.parametrize("body", [{"more": ["kazoo"]}, {"tempo": "Allegro 9000"}, {"pickup": 64}], ids=["instrument", "tempo", "pickup"])
+def test_a_new_score_that_cannot_be_made_is_refused_whole(client, body):
+    response = client.post("/api/scores/blank", json=body)
+    assert response.status_code == 422 and isinstance(response.json()["detail"], str)
+    assert client.get("/api/scores").json() == []
+
+
+def test_instruments_are_listed_by_family_for_the_chooser(client):
+    found = client.get("/api/instruments").json()
+    assert {"id": "violin", "label": "Violin", "family": "Strings - Bowed"} in found
+    assert {"id": "treble", "label": "Treble staff", "family": "Plain staves"} in found
+    assert len({item["id"] for item in found}) == len(found)
+
+
+def test_instruments_are_added_together_and_removed_by_their_place(client):
+    score_id = client.post("/api/scores/blank", json={"clef": "voice", "measures": 2}).json()["id"]
+    data = client.post(f"/api/scores/{score_id}/parts", json={"action": "add", "names": ["piano", "cello"]}).json()
+    assert data["parts"] == ["Voice", "Piano", "Cello"] and data["partStaves"] == [1, 2, 1]
+    assert client.post(f"/api/scores/{score_id}/undo").json()["parts"] == ["Voice"]
+    client.post(f"/api/scores/{score_id}/redo")
+    assert client.post(f"/api/scores/{score_id}/parts", json={"action": "remove", "index": 1}).json()["parts"] == ["Voice", "Cello"]
+    assert client.post(f"/api/scores/{score_id}/parts", json={"action": "remove", "index": 7}).status_code == 422
+    assert client.post(f"/api/scores/{score_id}/parts", json={"action": "add"}).status_code == 422
+
+
+def test_the_keys_musescore_users_reach_for_are_note_actions(client):
+    score_id = client.post("/api/scores/blank", json={"measures": 2}).json()["id"]
+    first = client.get(f"/api/scores/{score_id}/playback").json()
+    note_id = ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text).find(".//note").get("id")
+    written = client.post(f"/api/scores/{score_id}/notes/{note_id}", json={"action": "write", "step": "C"}).json()["written"]
+    for action, extra in [("semitoneUp", {}), ("double", {}), ("dotLonger", {}), ("interval", {"interval": 3}), ("repitch", {"step": "D"})]:
+        assert client.post(f"/api/scores/{score_id}/notes/{written}", json={"action": action} | extra).status_code == 200, action
+    root = ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    found = [(note.findtext("pitch/step"), note.findtext("pitch/alter"), note.findtext("type"), len(note.findall("dot"))) for note in root.iter("note") if note.find("pitch") is not None]
+    assert found == [("D", None, "half", 1), ("E", None, "half", 1)]
+    assert first["notes"] == []
+    assert client.post(f"/api/scores/{score_id}/group", json={"action": "semitoneDown", "notes": [written]}).status_code == 200
+
+
+def test_a_stretch_of_bars_is_deleted_together(client):
+    score_id = client.post("/api/scores/blank", json={"measures": 6}).json()["id"]
+    measures = ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text).find("part").findall("measure")
+    ids = [measure.find("note").get("id") for measure in measures]
+    client.post(f"/api/scores/{score_id}/notes/{ids[0]}", json={"action": "write", "step": "C", "type": "whole"})
+    client.post(f"/api/scores/{score_id}/notes/{ids[4]}", json={"action": "write", "step": "G", "type": "whole"})
+    data = client.post(f"/api/scores/{score_id}/bars", json={"action": "delete", "note": ids[1], "last": ids[3]}).json()
+    assert data["canUndo"]
+    left = ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text).find("part").findall("measure")
+    assert [measure.findtext("note/pitch/step") for measure in left] == ["C", "G", None]
+    client.post(f"/api/scores/{score_id}/undo")
+    assert len(ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text).find("part").findall("measure")) == 6
+
+
+def test_removing_a_selected_stretch_is_one_edit(client):
+    score_id = client.post("/api/scores/blank", json={"measures": 3}).json()["id"]
+    score = lambda: ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    cursor = score().find(".//note").get("id")
+    written = []
+    for step in "CDEFGA":
+        done = client.post(f"/api/scores/{score_id}/notes/{cursor}", json={"action": "write", "step": step}).json()
+        written.append(done["written"])
+        cursor = done["cursor"]
+    ids = written[2:6]
+    assert client.post(f"/api/scores/{score_id}/group", json={"action": "remove", "notes": ids}).status_code == 200
+    steps = lambda: [note.findtext("pitch/step") for note in score().iter("note") if note.find("pitch") is not None]
+    assert steps() == ["C", "D"] and len(score().find("part").findall("measure")) == 3
+    client.post(f"/api/scores/{score_id}/undo")
+    assert steps() == list("CDEFGA")
+    refused = client.post(f"/api/scores/{score_id}/group", json={"action": "remove", "notes": []})
+    assert refused.status_code == 422 and "Select" in refused.json()["detail"]
+
+
+def test_double_sharps_and_flats_go_on_one_note_or_a_selection(client):
+    score_id = client.post("/api/scores/blank", json={"measures": 2}).json()["id"]
+    score = lambda: ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    cursor = score().find(".//note").get("id")
+    written = []
+    for step in "CD":
+        done = client.post(f"/api/scores/{score_id}/notes/{cursor}", json={"action": "write", "step": step}).json()
+        written.append(done["written"])
+        cursor = done["cursor"]
+    assert client.post(f"/api/scores/{score_id}/notes/{written[0]}", json={"action": "doubleSharp"}).status_code == 200
+    assert [note.findtext("accidental") for note in score().iter("note")][:2] == ["double-sharp", None]
+    assert client.post(f"/api/scores/{score_id}/group", json={"action": "doubleFlat", "notes": written}).status_code == 200
+    assert [(note.findtext("pitch/alter"), note.findtext("accidental")) for note in score().iter("note")][:2] == [("-2", "flat-flat"), ("-2", "flat-flat")]
+    client.post(f"/api/scores/{score_id}/undo")
+    assert [note.findtext("accidental") for note in score().iter("note")][:2] == ["double-sharp", None]
+
+
+def test_a_score_starts_in_or_changes_to_common_and_cut_time(client):
+    made = client.post("/api/scores/blank", json={"measures": 4, "beats": 2, "beat_type": 2, "symbol": "cut"})
+    score_id = made.json()["id"]
+    score = lambda: ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    assert [found.get("symbol") for found in score().iter("time")] == ["cut"]
+    third = score().find("part").findall("measure")[2].find("note").get("id")
+    changed = client.post(f"/api/scores/{score_id}/bars", json={"action": "time", "note": third, "beats": 4, "beat_type": 4, "symbol": "common"})
+    assert changed.status_code == 200
+    assert [(found.findtext("beats"), found.get("symbol")) for found in score().iter("time")] == [("2", "cut"), ("4", "common")]
+    refused = client.post(f"/api/scores/{score_id}/bars", json={"action": "time", "note": third, "beats": 3, "beat_type": 4, "symbol": "common"})
+    assert refused.status_code == 422
+    assert client.post("/api/scores/blank", json={"beats": 6, "beat_type": 8, "symbol": "cut"}).status_code == 422
+
+
+def test_a_barline_is_chosen_for_the_measure_a_note_is_in(client):
+    score_id = client.post("/api/scores/blank", json={"measures": 3}).json()["id"]
+    score = lambda: ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    styles = lambda: [measure.findtext("barline/bar-style") for measure in score().find("part").findall("measure")]
+    assert styles() == [None, None, "light-heavy"]
+    second = score().find("part").findall("measure")[1].find("note").get("id")
+    assert client.post(f"/api/scores/{score_id}/bars", json={"action": "barline", "note": second, "style": "double"}).status_code == 200
+    assert styles() == [None, "light-light", "light-heavy"]
+    client.post(f"/api/scores/{score_id}/undo")
+    assert styles() == [None, None, "light-heavy"]
+    assert client.post(f"/api/scores/{score_id}/bars", json={"action": "barline", "note": second, "style": "wavy"}).status_code == 422
+    assert client.post(f"/api/scores/{score_id}/bars", json={"action": "barline", "style": "double"}).status_code == 422

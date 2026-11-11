@@ -484,7 +484,8 @@ def test_a_huge_repeat_count_still_ends():
 def test_a_repeat_can_be_taken_away():
     root = repeat_bars("", ":|", "")
     structure.toggle_repeat(root, 1, "backward")
-    assert order(root) == [0, 1, 2] and not list(root.iter("barline"))
+    # Only the barline that ends the piece is left.
+    assert order(root) == [0, 1, 2] and [(index, found.findtext("bar-style")) for index in range(3) for found in bar(root, index).findall("barline")] == [(2, "light-heavy")]
 
 
 def test_a_first_ending_is_closed_and_a_second_is_left_open():
@@ -590,7 +591,19 @@ def test_title_and_composer_are_printed_with_the_title_larger():
     svg = engrave.render_pages(to_text(root))[0]
     assert "Autumn Song" in svg and "A. Writer" in svg
     sizes = [int(size) for size in re.findall(r'font-size="(\d{3,})px"', svg[svg.index('class="pgHead"'):])]
-    assert sizes[0] == sizes[1] * engrave.TITLE_SCALE
+    assert sizes[:2] == [round(engrave.TITLE_POINTS * engrave.POINT), round(engrave.COMPOSER_POINTS * engrave.POINT)]
+
+
+def test_the_title_sits_at_the_top_of_its_frame_and_the_composer_at_the_bottom():
+    """As MuseScore lays them out. Verovio alone would print both on one line."""
+    root = blank()
+    structure.set_title(root, "Autumn Song", "A. Writer")
+    svg = engrave.render_pages(to_text(root))[0]
+    header = svg[svg.index('class="pgHead"'):]
+    baselines = [int(y) for y in re.findall(r' y="(\d+)"', header)][:2]
+    assert baselines == [engrave.TITLE_BASELINE, engrave.COMPOSER_BASELINE]
+    first_staff_line = int(re.search(r'class="staff">\s*<path d="M\d+ (\d+) ', svg).group(1))
+    assert first_staff_line > engrave.FRAME_HEIGHT
 
 
 def test_a_title_recognition_guessed_is_not_printed_until_saved():
@@ -688,3 +701,208 @@ def test_a_chord_partway_through_a_long_note_is_copied_with_it():
     context = next(contexts(root.find("part")))
     timeline = read_measure(context.measure, context.divisions)
     assert edit.chord_on(context, timeline.events()[0]) == "G7"
+
+
+def pitches(root):
+    return [(note.findtext("pitch/step"), int(float(note.findtext("pitch/alter") or 0)), int(note.findtext("pitch/octave"))) for note in root.iter("note") if note.find("pitch") is not None]
+
+
+@pytest.mark.parametrize(("fifths", "start", "change", "expected"), [
+    (0, "C", 1, ("C", 1, 5)),    # Up: a sharp.
+    (0, "D", -1, ("D", -1, 5)),  # Down: a flat.
+    (0, "E", 1, ("F", 0, 5)),    # A plain note where there is one.
+    (0, "C", -1, ("B", 0, 4)),   # Across the octave's edge.
+    (-1, "A", 1, ("B", -1, 4)),  # In F, the key's own B flat, not A sharp.
+    (2, "E", 1, ("F", 0, 5)),    # In D, F natural is plain F, not E sharp.
+    (2, "E", 2, ("F", 1, 5)),    # And the key's own F sharp a tone up.
+], ids=["sharp-up", "flat-down", "plain", "octave-edge", "key-flat", "plain-outside-key", "key-sharp"])
+def test_an_arrow_moves_a_note_a_semitone_and_spells_it_as_musescore_does(fifths, start, change, expected):
+    root = blank(fifths=fifths)
+    written, _ = write(root, start)
+    edit.move_semitone(root, written[0], change)
+    assert pitches(root) == [expected]
+
+
+def test_twelve_semitones_up_and_down_end_on_the_same_note():
+    root = blank()
+    written, _ = write(root, "G")
+    for change in [1] * 12 + [-1] * 12:
+        edit.move_semitone(root, written[0], change)
+    assert pitches(root) == [("G", 0, 4)]
+
+
+def test_a_semitone_shows_its_accidental_and_a_rest_cannot_move():
+    root = blank()
+    written, cursor = write(root, "C")
+    edit.move_semitone(root, written[0], 1)
+    assert root.find(".//note/accidental").text == "sharp"
+    with pytest.raises(EditError):
+        edit.move_semitone(root, cursor, 1)
+
+
+def test_a_letter_renames_a_selected_note_at_the_nearest_octave():
+    root = blank(fifths=2)
+    written, _ = write(root, "C", "B")
+    assert pitches(root) == [("C", 1, 5), ("B", 0, 4)]
+    edit.set_step(root, written[0], "B")
+    edit.set_step(root, written[1], "C")
+    assert pitches(root) == [("B", 0, 4), ("C", 1, 5)]
+
+
+def test_a_letter_on_a_selected_rest_writes_a_note_of_the_rests_length():
+    root = blank()
+    written, cursor = write(root, "C", length="half")
+    done = edit.set_step(root, cursor, "E")
+    assert pitches(root) == [("C", 0, 5), ("E", 0, 5)]
+    assert [note.findtext("type") for note in bar(root, 0).findall("note")] == ["half", "half"]
+    assert done["cursor"] == bar(root, 0).findall("note")[1].get("id")
+
+
+def test_w_and_q_double_and_halve_a_note_and_keep_its_bar_full():
+    root = blank()
+    written, _ = write(root, "C")
+    edit.scale_length(root, written[0], True)
+    assert bar(root, 0).find("note").findtext("type") == "half"
+    edit.scale_length(root, written[0], False)
+    edit.scale_length(root, bar(root, 0).find("note").get("id"), False)
+    assert bar(root, 0).find("note").findtext("type") == "eighth"
+    assert structure.check_measures(root) == []
+
+
+def test_shift_w_and_q_step_through_the_dotted_lengths():
+    root = blank()
+    written, _ = write(root, "C")
+    seen = []
+    for longer in [True, True, False, False, False]:
+        edit.scale_length(root, bar(root, 0).find("note").get("id"), longer, by_dot=True)
+        first = bar(root, 0).find("note")
+        seen.append((first.findtext("type"), len(first.findall("dot"))))
+    assert seen == [("quarter", 1), ("half", 0), ("quarter", 1), ("quarter", 0), ("eighth", 1)]
+
+
+def test_the_longest_and_shortest_notes_stop_there():
+    root = blank()
+    written, _ = write(root, "C", length="whole")
+    with pytest.raises(EditError, match="longer"):
+        edit.scale_length(root, written[0], True)
+
+
+@pytest.mark.parametrize(("interval", "expected"), [(3, ("E", 0, 5)), (5, ("G", 0, 5)), (8, ("C", 0, 6)), (-3, ("A", 0, 4))], ids=["third", "fifth", "octave", "third-below"])
+def test_alt_and_a_number_adds_that_interval_to_a_note(interval, expected):
+    root = blank()
+    written, _ = write(root, "C")
+    added = edit.add_interval(root, written[0], interval)
+    assert expected in pitches(root) and len(pitches(root)) == 2
+    assert edit.find_note(root, added).find("pitch") is not None
+
+
+def test_an_interval_is_counted_from_the_top_of_a_chord_and_takes_the_keys_sharps():
+    root = blank(fifths=2)
+    written, _ = write(root, "D")
+    edit.add_interval(root, written[0], 3)
+    edit.add_interval(root, written[0], 3)
+    assert pitches(root) == [("D", 0, 5), ("F", 1, 5), ("A", 0, 5)]
+    with pytest.raises(EditError):
+        edit.add_interval(root, written[0], 1)
+
+
+def stretch(root, first, last):
+    return edit.range_ids(root, first, last)["ids"]
+
+
+def test_removing_a_stretch_of_whole_measures_deletes_them():
+    root = blank(measures=4)
+    written, _ = write(root, *"CDEFGABC")
+    edit.remove_range(root, stretch(root, written[0], written[7]))
+    measures = root.find("part").findall("measure")
+    assert len(measures) == 2 and pitches(root) == []
+    assert [measure.get("number") for measure in measures] == ["1", "2"]
+    assert measures[0].find("attributes/clef") is not None
+
+
+def test_removing_part_of_a_measure_pulls_its_later_notes_in():
+    root = blank(measures=2)
+    written, _ = write(root, *"CDEF")
+    edit.remove_range(root, stretch(root, written[1], written[2]))
+    first = bar(root, 0)
+    assert [note.findtext("pitch/step") for note in first.findall("note")] == ["C", "F", None]
+    assert [note.findtext("type") for note in first.findall("note")] == ["quarter", "quarter", "half"]
+    assert len(root.find("part").findall("measure")) == 2
+
+
+def test_a_stretch_over_a_barline_removes_whole_measures_and_closes_up_the_ends():
+    root = blank(measures=4)
+    written, _ = write(root, *"CDEFGABCDEFG")
+    # From the third note of the first measure to the second of the third.
+    edit.remove_range(root, stretch(root, written[2], written[9]))
+    measures = root.find("part").findall("measure")
+    assert len(measures) == 3
+    assert [[note.findtext("pitch/step") for note in measure.findall("note") if note.find("pitch") is not None] for measure in measures] == [["C", "D"], ["F", "G"], []]
+    assert structure.check_measures(root) == []
+
+
+def test_a_measure_goes_from_every_instrument_when_one_staff_of_it_is_removed():
+    root = blank(measures=3, clef="piano")
+    structure.add_part(root, "violin")
+    edit.ensure_note_ids(root)
+    first = root.find("part").findall("measure")[1].find("note").get("id")
+    edit.remove_range(root, [first])
+    assert [len(part.findall("measure")) for part in root.findall("part")] == [2, 2]
+    assert structure.check_measures(root) == []
+
+
+def test_the_last_measure_left_cannot_be_removed_and_nothing_selected_says_so():
+    root = blank(measures=1)
+    with pytest.raises(EditError, match="at least one"):
+        edit.remove_range(root, [first_id(root)])
+    with pytest.raises(EditError):
+        edit.remove_range(root, [])
+    with pytest.raises(EditError):
+        edit.remove_range(root, ["no-such-note"])
+
+
+def test_a_triplet_cut_through_is_refused_and_one_inside_a_removed_measure_goes_with_it():
+    root = blank(measures=3)
+    written, _ = write(root, *"CDEF")
+    edit.toggle_tuplet(root, written[0])
+    ids = [note.get("id") for note in bar(root, 0).findall("note")]
+    before = to_text(root)
+    with pytest.raises(EditError, match="triplet"):
+        edit.remove_range(root, ids[:1])
+    assert to_text(root) == before
+    edit.remove_range(root, ids)
+    assert len(root.find("part").findall("measure")) == 2
+
+
+@pytest.mark.parametrize(("alter", "name", "glyph", "sounds"), [(2, "double-sharp", "E263", 74), (-2, "flat-flat", "E264", 70)], ids=["double-sharp", "double-flat"])
+def test_a_double_accidental_is_written_drawn_and_played(alter, name, glyph, sounds):
+    root = blank()
+    written, _ = write(root, "C")
+    edit.set_accidental(root, written[0], alter)
+    assert pitches(root) == [("C", alter, 5)]
+    assert root.find(".//note").findtext("accidental") == name
+    assert f"#{glyph}" in engrave.render_pages(to_text(root))[0]
+    assert playback.playback(root)["notes"][0]["midi"] == sounds
+
+
+def test_a_double_sharp_holds_to_the_barline_and_a_plain_note_after_it_shows_a_natural():
+    root = blank()
+    written, _ = write(root, "F", "F", "G", "F")
+    edit.set_accidental(root, written[0], 2)
+    edit.set_accidental(root, written[1], 2)
+    signs = [note.findtext("accidental") for note in bar(root, 0).findall("note")]
+    assert signs == ["double-sharp", None, None, "natural"]
+
+
+def test_a_double_sharp_moves_by_semitones_and_respells_like_any_note():
+    root = blank()
+    written, _ = write(root, "C")
+    edit.set_accidental(root, written[0], 2)
+    edit.respell_note(root, written[0])
+    assert pitches(root) == [("D", 0, 5)]
+    edit.set_accidental(root, written[0], -2)
+    edit.move_semitone(root, written[0], 1)
+    assert pitches(root) == [("C", 1, 5)]
+    edit.set_accidental(root, written[0], 2)
+    edit.set_accidental(root, written[0], 0)
+    assert pitches(root) == [("C", 0, 5)] and root.find(".//note/accidental") is None

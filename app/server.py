@@ -36,7 +36,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
 from pipeline import edit, marks, structure, transpose
-from pipeline.engrave import export_pdf, render_pages
+from pipeline.engrave import export_pdf, glyph_script, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import UnreadableScore, read_score_file, to_text
@@ -169,6 +169,7 @@ class NoteEdit(BaseModel):
     midi: int | None = None  # A key pressed on a MIDI keyboard.
     steps: int = 0
     actual: int = 3  # How many notes a tuplet holds.
+    interval: int = 0  # A third is 3. Below the note if it's negative.
 
 
 class GroupEdit(BaseModel):
@@ -203,7 +204,9 @@ class VoiceEdit(BaseModel):
 class PartEdit(BaseModel):
     action: str
     name: str = ""
+    names: list[str] = []  # Several to add at once, as one edit.
     note: str | None = None
+    index: int | None = None  # Which instrument to remove, counted from the top.
 
 
 class Stretch(BaseModel):
@@ -251,6 +254,8 @@ class BarEdit(BaseModel):
     fifths: int = 0
     beats: int = 4
     beat_type: int = 4
+    symbol: str = ""  # "common" or "cut", for a time signature drawn as a sign.
+    style: str = ""  # How a barline is drawn: single, double, dashed, final, heavy, heavyDouble or dotted.
     number: int = 0
     clef: str = ""
     count: int = 0
@@ -260,8 +265,14 @@ class BlankScore(BaseModel):
     fifths: int = 0
     beats: int = 4
     beat_type: int = 4
+    symbol: str = ""  # "common" or "cut".
     clef: str = "treble"
     measures: int = 16
+    more: list[str] = []  # Instruments below the first.
+    title: str = ""
+    composer: str = ""
+    tempo: str = ""
+    pickup: int = 0  # In sixteenth notes.
 
 
 class CheckedMark(BaseModel):
@@ -524,6 +535,7 @@ def describe(folder: Path, status: dict) -> dict:
         "barChecks": structure.check_measures(root),
         "marks": marks.list_marks(root),
         "parts": structure.part_names(root),
+        "partStaves": structure.part_staves(root),
         "barsPerLine": structure.bars_per_line(root),
     } | structure.title_of(root)
 
@@ -532,16 +544,32 @@ def describe(folder: Path, status: dict) -> dict:
 def create_blank_score(body: BlankScore) -> dict:
     """Start an empty score to write in, with no photo behind it."""
     try:
-        root = structure.blank_score(body.fifths, body.beats, body.beat_type, body.clef, body.measures)
+        root = structure.blank_score(body.fifths, body.beats, body.beat_type, body.clef, body.measures, body.symbol)
+        for name in body.more:
+            structure.add_part(root, name)
+        edit.ensure_note_ids(root)
+        if body.title.strip() or body.composer.strip():
+            structure.set_title(root, body.title, body.composer)
+        if body.pickup:
+            structure.set_pickup(root, Fraction(body.pickup, SIXTEENTHS_PER_QUARTER))
+            edit.ensure_note_ids(root)
+        if body.tempo.strip():
+            marks.set_tempo(root, root.find("part/measure/note").get("id"), body.tempo)
     except edit.EditError as error:
         raise HTTPException(422, str(error)) from error
     edit.ensure_note_ids(root)
+    marks.ensure_mark_ids(root)
     score_id = uuid.uuid4().hex
     folder = JOB_DIR / score_id
     folder.mkdir(parents=True)
     save_version(folder, root)
     write_status(folder, "ready")
     return {"id": score_id}
+
+
+@app.get("/api/instruments")
+def list_instruments() -> list[dict]:
+    return structure.instrument_list()
 
 
 @app.get("/api/scores")
@@ -631,12 +659,22 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "sharp": lambda root: edit.set_accidental(root, note_id, 1),
         "flat": lambda root: edit.set_accidental(root, note_id, -1),
         "natural": lambda root: edit.set_accidental(root, note_id, 0),
+        "doubleSharp": lambda root: edit.set_accidental(root, note_id, 2),
+        "doubleFlat": lambda root: edit.set_accidental(root, note_id, -2),
         "delete": lambda root: edit.delete_note(root, note_id),
         "clear": lambda root: edit.clear_marks(root, note_id),
         "length": lambda root: edit.change_length(root, note_id, body.type, body.dots),
         "dot": lambda root: edit.toggle_dot(root, note_id),
         "write": lambda root: edit.write_note(root, note_id, body.type, body.dots, body.step, body.line, body.voice, body.midi),
         "moveBy": lambda root: edit.move_note(root, note_id, body.steps),
+        "semitoneUp": lambda root: edit.move_semitone(root, note_id, 1),
+        "semitoneDown": lambda root: edit.move_semitone(root, note_id, -1),
+        "repitch": lambda root: edit.set_step(root, note_id, body.step or ""),
+        "double": lambda root: edit.scale_length(root, note_id, True),
+        "halve": lambda root: edit.scale_length(root, note_id, False),
+        "dotLonger": lambda root: edit.scale_length(root, note_id, True, by_dot=True),
+        "dotShorter": lambda root: edit.scale_length(root, note_id, False, by_dot=True),
+        "interval": lambda root: {"written": edit.add_interval(root, note_id, body.interval)},
         "respell": lambda root: edit.respell_note(root, note_id),
         "flip": lambda root: edit.flip_stem(root, note_id),
         "stack": lambda root: {"written": edit.add_pitch(root, note_id, body.step or "", body.line, body.midi)},
@@ -656,9 +694,13 @@ GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {
     "down": lambda root, note: edit.move_note(root, note, -1),
     "octaveUp": lambda root, note: edit.move_note(root, note, 7),
     "octaveDown": lambda root, note: edit.move_note(root, note, -7),
+    "semitoneUp": lambda root, note: edit.move_semitone(root, note, 1),
+    "semitoneDown": lambda root, note: edit.move_semitone(root, note, -1),
     "sharp": lambda root, note: edit.set_accidental(root, note, 1),
     "flat": lambda root, note: edit.set_accidental(root, note, -1),
     "natural": lambda root, note: edit.set_accidental(root, note, 0),
+    "doubleSharp": lambda root, note: edit.set_accidental(root, note, 2),
+    "doubleFlat": lambda root, note: edit.set_accidental(root, note, -2),
     "delete": edit.delete_note,
     "clear": edit.clear_marks,
     "respell": edit.respell_note,
@@ -669,6 +711,8 @@ GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {
 @app.post("/api/scores/{score_id}/group")
 def change_group(score_id: str, body: GroupEdit) -> dict:
     """Apply one action to several notes as one edit, so one undo takes it all back."""
+    if body.action == "remove":
+        return apply_edit(score_id, lambda root: edit.remove_range(root, body.notes))
     if body.action not in GROUP_ACTIONS:
         raise HTTPException(422, "That can't be done to a selection")
 
@@ -744,11 +788,15 @@ def change_voice(score_id: str, body: VoiceEdit) -> dict:
 def change_parts(score_id: str, body: PartEdit) -> dict:
     def change(root: ET.Element) -> None:
         if body.action == "add":
-            structure.add_part(root, body.name)
+            names = ([body.name] if body.name else []) + body.names
+            if not names:
+                raise edit.EditError("Choose an instrument to add.")
+            for name in names:
+                structure.add_part(root, name)
         elif body.action == "remove":
-            if not body.note:
-                raise edit.EditError("Click a note in the instrument to remove first.")
-            structure.remove_part(root, structure.part_of(root, body.note))
+            if body.index is None and not body.note:
+                raise edit.EditError("Choose the instrument to remove first.")
+            structure.remove_part(root, body.index if body.index is not None else structure.part_of(root, body.note))
         else:
             raise HTTPException(422, "Unknown instrument action")
 
@@ -798,15 +846,21 @@ def change_bars(score_id: str, body: BarEdit) -> dict:
         elif body.action == "delete":
             if index is None:
                 raise edit.EditError("Click a note in the bar to delete first.")
-            structure.delete_measure(root, index)
+            # From the last one back, so the bars still to go keep their numbers.
+            for doomed in range(structure.bar_of(root, body.last) if body.last else index, index - 1, -1):
+                structure.delete_measure(root, doomed)
         elif body.action == "key":
             structure.set_key(root, index or 0, body.fifths)
         elif body.action == "time":
-            structure.set_time(root, index or 0, body.beats, body.beat_type)
+            structure.set_time(root, index or 0, body.beats, body.beat_type, body.symbol)
         elif body.action == "pickup":
             structure.set_pickup(root, Fraction(body.count, SIXTEENTHS_PER_QUARTER))
         elif body.action in ("forward", "backward"):
             structure.toggle_repeat(root, index or 0, body.action)
+        elif body.action == "barline":
+            if index is None:
+                raise edit.EditError("Click a note in the measure the barline ends first.")
+            structure.set_barline(root, index, body.style)
         elif body.action == "ending":
             first = index or 0
             structure.set_ending(root, first, structure.bar_of(root, body.last) if body.last else first, body.number)
@@ -891,6 +945,29 @@ def download_pdf(score_id: str, part: int | None = None) -> FileResponse:
     path = folder / name
     export_pdf(to_text(root), path)
     return FileResponse(path, media_type="application/pdf", filename=name)
+
+
+@app.get("/api/scores/{score_id}/thumbnail.svg")
+def get_thumbnail(score_id: str) -> FileResponse:
+    """Draw a score's first page, for the list of scores. It's kept until the score changes."""
+    folder = job_folder(score_id)
+    with edit_lock:
+        saved = versions(folder)
+        if not saved:
+            raise HTTPException(404, "This sheet isn't ready yet")
+        # An undo followed by a new edit gives a different version the same number, so the time counts too.
+        path = folder / f"thumbnail_{version_number(saved[-1])}_{saved[-1].stat().st_mtime_ns}.svg"
+        if not path.exists():
+            for old in folder.glob("thumbnail_*.svg"):
+                old.unlink(missing_ok=True)
+            write_whole(path, render_pages(to_text(ET.parse(saved[-1]).getroot()))[0])
+    return FileResponse(path, media_type="image/svg+xml")
+
+
+@app.get("/glyphs.js")
+def music_glyphs() -> Response:
+    """Serve the shapes the pages are engraved with, so the toolbar and palettes show the same symbols."""
+    return Response(glyph_script(), media_type="text/javascript", headers={"Cache-Control": "max-age=86400"})
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

@@ -1,13 +1,14 @@
 import re
 import threading
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import pytest
 
 from helpers import note, score
 
 from chords.vocab import Chord
-from pipeline import edit, marks, structure
+from pipeline import edit, engrave, marks, structure
 from pipeline.engrave import add_beams, drop_spelled_degrees, render_pages, replace_private_glyphs
 from pipeline.musicxml import harmony_element, to_text
 
@@ -89,3 +90,40 @@ def test_a_dotted_tempo_prints_its_dot():
     plain, dotted = tempo_page("quarter", 0), tempo_page("quarter", 1)
     assert "♩." in re.sub(r"<[^>]+>", "", dotted).replace(" ", "").replace("\n", "")
     assert "♩." not in re.sub(r"<[^>]+>", "", plain).replace(" ", "").replace("\n", "")
+
+
+def test_a_page_is_drawn_with_musescores_defaults():
+    """Its music font, and a 1.75 mm staff space inside 15 mm margins on A4."""
+    svg = render_pages(score(note(duration=8)))[0]
+    four = (Path(engrave.RESOURCE_PATH) / "Leland" / "E084.xml").read_text(encoding="utf-8")
+    assert re.search(r' d="([^"]+)"', four).group(1) in svg
+    assert 'viewBox="0 0 21000 29700"' in svg
+    assert 'class="page-margin" transform="translate(1500, 1500)"' in svg
+    top, second = [int(y) for y in re.findall(r'<path d="M\d+ (\d+) L', svg[svg.index('class="staff"'):])[:2]]
+    assert second - top == 175
+
+
+def test_words_are_set_in_musescores_text_font_at_ten_points():
+    root = ET.fromstring(score(note(duration=8)))
+    edit.ensure_note_ids(root)
+    edit.set_lyric(root, root.find(".//note").get("id"), "la")
+    svg = render_pages(to_text(root))[0]
+    assert 'font-family="Edwin, C059,' in svg and "Times, serif" in svg
+    assert re.search(r'font-size="(\d+)px">la<', svg).group(1) == "353"
+
+
+def test_a_flat_in_a_chord_symbol_is_no_taller_than_its_letter():
+    root = ET.fromstring(score(note(duration=8)))
+    root.find(".//measure").insert(1, harmony_element(Chord("Bb", "")))
+    svg = render_pages(to_text(root))[0]
+    letter, sign = re.search(r'font-size="(\d+)px">B</tspan>\s*<tspan font-family="Noto Music" font-size="(\d+)px">♭', svg).groups()
+    assert int(sign) <= int(letter) * 1.5
+
+
+def test_spaces_inside_a_tempo_mark_are_kept_when_printed():
+    root = ET.fromstring(score(note(duration=8)))
+    edit.ensure_note_ids(root)
+    marks.set_tempo(root, root.find(".//note").get("id"), "Allegro 132")
+    svg = render_pages(to_text(root))[0]
+    tempo = svg[svg.index('class="tempo"'):]
+    assert tempo[:tempo.index("</text>")].count('xml:space="preserve"') == 1

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from pipeline.engrave import glyph_script
+
 STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
 NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(NODE is None, reason="Node isn't installed")
@@ -41,10 +43,15 @@ async function fetch(url) {
 """
 
 
+def page_scripts() -> list[str]:
+    """Return the page's own scripts, in the order the page loads them."""
+    page = (STATIC / "index.html").read_text(encoding="utf-8")
+    return [name for name in re.findall(r'<script src="([\w.]+)"></script>', page) if (STATIC / name).exists()]
+
+
 def page_functions() -> str:
     """Return every top-level function of the page, in the order the page loads them."""
-    page = (STATIC / "index.html").read_text(encoding="utf-8")
-    source = "\n".join(re.findall(r"<script>(.*?)</script>", page, re.S)) + "\n" + (STATIC / "editor.js").read_text(encoding="utf-8")
+    source = "\n".join((STATIC / name).read_text(encoding="utf-8") for name in page_scripts())
     return "\n\n".join(re.findall(r"^(?:async )?function \w+\(.*?^\}$", source, re.S | re.M))
 
 
@@ -70,3 +77,68 @@ def test_a_cut_copies_and_then_deletes():
 
 def test_a_copy_still_copies_on_its_own():
     assert run("copySelection", copy_fails=False) == {"asked": ["copy"], "shown": [], "clipboard": [{"type": "quarter"}]}
+
+
+def run_script(program: str) -> object:
+    done = subprocess.run([NODE, "-"], input=program, capture_output=True, text=True, timeout=30, check=True)
+    return json.loads(done.stdout)
+
+
+def test_the_page_loads_the_scripts_these_tests_read():
+    assert page_scripts() == ["page.js", "palettes.js", "shell.js", "editor.js"]
+
+
+def palettes() -> list[dict]:
+    """Build the palettes as the page does, with the engraver's own symbols to draw from."""
+    functions = page_functions()
+    drawing = "\n".join(re.findall(r"^function (?:setGlyphs|glyphIcon)\(.*?^\}$", functions, re.S | re.M))
+    program = (
+        glyph_script() + "const UNITS_PER_SPACE = 250;\n" + drawing + (STATIC / "palettes.js").read_text(encoding="utf-8")
+        + "console.log(JSON.stringify(buildPalettes().map(palette => ({ ...palette, cells: palette.cells.map(cell => ({ ...cell, runs: typeof cell.run === 'function' })) }))));\n"
+    )
+    return run_script(program)
+
+
+def test_the_palettes_musescore_shows_at_first_come_in_its_order():
+    usual = [palette["name"] for palette in palettes() if palette.get("usual")]
+    assert usual == ["Clefs", "Key signatures", "Time signatures", "Tempo", "Accidentals", "Dynamics", "Articulations", "Text", "Repeats & jumps", "Barlines", "Layout"]
+
+
+def test_every_palette_cell_is_named_drawn_and_does_something():
+    cells = [cell for palette in palettes() for cell in palette["cells"]]
+    assert len(cells) > 90
+    assert len({cell["key"] for cell in cells}) == len(cells)
+    for cell in cells:
+        assert cell["label"] and cell["runs"] and ("<svg" in cell["html"] or "<span" in cell["html"]), cell["key"]
+
+
+def test_key_signature_cells_run_from_one_sharp_round_to_no_sharps_or_flats():
+    keys = next(palette for palette in palettes() if palette["id"] == "keys")
+    assert [cell["key"] for cell in keys["cells"]] == [f"key:{fifths}" for fifths in [1, 2, 3, 4, 5, 6, 7, -7, -6, -5, -4, -3, -2, -1, 0]]
+    assert keys["cells"][0]["label"] == "G major, E minor" and keys["cells"][-1]["label"] == "C major, A minor"
+    # A cell shows as many signs as its key has.
+    assert [cell["html"].count("<path") for cell in keys["cells"][:3]] == [1, 2, 3]
+
+
+def test_shortcuts_are_listed_as_keys_with_their_joining_words_left_plain():
+    functions = page_functions()
+    wanted = re.search(r"^function keysHtml\(.*?^\}$", functions, re.S | re.M).group(0)
+    shown = run_script(wanted + 'console.log(JSON.stringify(["Ctrl+Shift+Z", "+  -  =", "A to G", "Ins, Ctrl+B", "<  >"].map(keysHtml)));')
+    assert shown == [
+        "<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>",
+        "<kbd>+</kbd> <kbd>-</kbd> <kbd>=</kbd>",
+        "<kbd>A</kbd> to <kbd>G</kbd>",
+        "<kbd>Ins</kbd>, <kbd>Ctrl</kbd>+<kbd>B</kbd>",
+        "<kbd>&lt;</kbd> <kbd>&gt;</kbd>",
+    ]
+
+
+def test_time_signature_cells_follow_musescores_order_with_the_two_signs():
+    times = next(palette for palette in palettes() if palette["id"] == "times")
+    assert [cell["key"].removeprefix("time:") for cell in times["cells"]] == ["2/4", "3/4", "4/4", "5/4", "6/4", "3/8", "4/8", "5/8", "6/8", "7/8", "9/8", "12/8", "common", "cut", "2/2", "3/2"]
+    assert [cell["label"] for cell in times["cells"][12:14]] == ["Common time", "Cut time"]
+
+
+def test_barline_cells_follow_musescores_order():
+    barlines = next(palette for palette in palettes() if palette["id"] == "barlines")
+    assert [cell["key"].removeprefix("barline:") for cell in barlines["cells"]] == ["single", "double", "forward", "backward", "dashed", "final", "heavy", "heavyDouble", "dotted"]

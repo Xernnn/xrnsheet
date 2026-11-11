@@ -1,5 +1,7 @@
 """Turn MusicXML back into pages, as SVG for the screen and PDF for printing."""
 
+import functools
+import json
 import re
 import subprocess
 import tempfile
@@ -15,8 +17,58 @@ from pipeline.structure import BREAK_PREFIX, bars_per_line
 # Verovio keeps its font location per thread, so a web server's worker threads must set it.
 RESOURCE_PATH = str(Path(verovio.__file__).parent / "data")
 RENDER_LOCK = threading.Lock()
-TITLE_SCALE = 2
 LYRIC_WORD_SPACE = 2.5  # Verovio's default leaves neighbouring words almost touching.
+
+# The page follows MuseScore's defaults, so a score looks the same here as it does there: its
+# music font, a 1.75 mm staff space on A4 with 15 mm margins, and its line weights.
+MUSIC_FONT = "Leland"
+STAFF_UNIT = 8.75  # Half a staff space, in tenths of a millimetre.
+PAGE_MARGIN = 150
+SYSTEM_SPACING = 12  # In half staff spaces, between what one system draws and the next.
+LINE_WEIGHTS = {  # In staff spaces, as the music font's own defaults give them.
+    "staffLineThickness": 0.11,
+    "stemThickness": 0.10,
+    "legerLineThickness": 0.16,
+    "legerLineExtension": 0.35,
+    "slurEndpointThickness": 0.07,
+    "slurMidpointThickness": 0.21,
+    "tieEndpointThickness": 0.07,
+    "tieMidpointThickness": 0.21,
+    "thinBarlineThickness": 0.18,
+    "thickBarlineThickness": 0.55,
+    "barlineSeparation": 0.37,
+    "repeatBarlineDotSeparation": 0.37,
+    "bracketThickness": 0.45,
+    "hairpinThickness": 0.12,
+    "tupletBracketThickness": 0.10,
+    "textEnclosureThickness": 0.16,
+    "octaveLineThickness": 0.11,
+    "pedalLineThickness": 0.11,
+    "repeatEndingLineThickness": 0.11,
+    "lyricLineThickness": 0.10,
+}
+# MuseScore sets its text in Edwin, which is drawn from the same Century design as C059. Verovio
+# only knows how wide Times is, and these are wider, so the text is laid out in Times a little
+# larger than it's wanted and then drawn in the wider font at the size that fills the same room.
+TEXT_FONTS = "Edwin, C059, 'Century Schoolbook', 'New Century Schoolbook', 'Times New Roman', Times, serif"
+TIMES_WIDTH = 0.864  # How wide Times is beside those fonts, measured over ordinary words and chords.
+POINT = 35.28  # One point of type, in the hundredths of a millimetre a page is drawn in.
+TEXT_POINTS = 10  # Lyrics, chord symbols and staff text.
+TITLE_POINTS = 22
+COMPOSER_POINTS = 10
+# The title frame is ten staff spaces tall, with the title at its top and the composer at its
+# bottom. These are in the hundredths of a millimetre a page is drawn in, from the top margin.
+FRAME_HEIGHT = 1750
+TITLE_BASELINE = 580
+COMPOSER_BASELINE = 1670
+ONE_LINE_OF_TEXT = 353  # What Verovio has already left for the header.
+HEADER_ROOM = 2 + (FRAME_HEIGHT - ONE_LINE_OF_TEXT) / (STAFF_UNIT * 10)  # Under the header, in half staff spaces.
+FONT_SIZE = re.compile(r'font-size="(\d+)px"')
+# A sharp or flat inside words, as in a chord symbol. Verovio sizes it for its music font, where a
+# sign is drawn small within a tall box, and the ordinary font that takes its place fills the box.
+SIGN_IN_TEXT = re.compile(r'(<tspan font-family="Noto Music" font-size=")(\d+)(px">[♭♮♯])')
+SIGN_SCALE = 0.75
+PLACED_TEXT = re.compile(r'(<text x="[^"]*" y="[^"]*")')
 
 # Verovio writes these symbols in a private music font that the SVG rasterizer cannot
 # find, so they would come out as garbage. Swap them for their ordinary Unicode versions.
@@ -38,7 +90,8 @@ MUSIC_TEXT_GLYPHS = {
 def replace_private_glyphs(svg: str) -> str:
     for private, standard in MUSIC_TEXT_GLYPHS.items():
         svg = svg.replace(private, standard)
-    return svg.replace('font-family="Leipzig"', 'font-family="Noto Music"')
+    # The benchmark's pages are drawn in Leipzig, so either font's name may be here.
+    return svg.replace(f'font-family="{MUSIC_FONT}"', 'font-family="Noto Music"').replace('font-family="Leipzig"', 'font-family="Noto Music"')
 
 
 def drop_spelled_degrees(musicxml: str) -> str:
@@ -157,16 +210,63 @@ def prepare_for_drawing(musicxml: str) -> str:
     return drop_spelled_degrees(ET.tostring(root, encoding="unicode"))
 
 
-def enlarge_title(svg: str) -> str:
-    """Make the title stand out. Verovio prints credits in one size, whatever they ask for."""
+@functools.lru_cache(maxsize=1)
+def glyph_outlines() -> dict[str, list]:
+    """Return each symbol of the music font as its outline, its box and how far it moves the pen.
+
+    The toolbar and palettes draw their symbols from these, so they show the very shapes a page is
+    engraved with. They come with Verovio. Distances are in thousandths of four staff spaces, with
+    y going up.
+    """
+    folder = Path(RESOURCE_PATH)
+    found = {}
+    for box in ET.parse(folder / f"{MUSIC_FONT}.xml").getroot().findall("g"):
+        code = box.get("c")
+        path = folder / MUSIC_FONT / f"{code}.xml"
+        outline = " ".join(piece.get("d") for piece in ET.parse(path).getroot().iter("path")) if path.exists() else ""
+        if outline:
+            found[code] = [outline, *(round(float(box.get(name))) for name in ("x", "y", "w", "h", "h-a-x"))]
+    return found
+
+
+def glyph_script() -> str:
+    """The outlines as a script the page loads before its own."""
+    return f"const GLYPHS = {json.dumps(glyph_outlines(), separators=(',', ':'))};\n"
+
+
+def set_text_font(svg: str) -> str:
+    """Draw the words in MuseScore's text font, at the width Verovio left room for."""
+    svg = FONT_SIZE.sub(lambda found: f'font-size="{round(int(found.group(1)) * TIMES_WIDTH)}px"', svg)
+    svg = SIGN_IN_TEXT.sub(lambda found: f"{found.group(1)}{round(int(found.group(2)) * SIGN_SCALE)}{found.group(3)}", svg)
+    return svg.replace('font-family="Times, serif"', f'font-family="{TEXT_FONTS}"').replace("font-family:Times,serif", f"font-family:{TEXT_FONTS}")
+
+
+def size_header(svg: str) -> str:
+    """Lay the title and the composer out as MuseScore's title frame does.
+
+    Verovio prints every credit in one size on one line. The title goes at the top of the frame in
+    its own size, and the composer at the bottom right. HEADER_ROOM is what makes room for them.
+    """
     head = svg.find('class="pgHead"')
     if head < 0:
         return svg
-    # The title is the centred line. A composer on their own is right-aligned and stays as it is.
-    centred = svg.find('text-anchor="middle"', head)
-    if centred < 0:
-        return svg
-    return svg[:centred] + re.sub(r'font-size="(\d{3,})px"', lambda found: f'font-size="{int(found.group(1)) * TITLE_SCALE}px"', svg[centred:], count=1)
+    end = svg.find("</g>", head)
+    pieces = re.split(r"(?=<text )", svg[head:end])
+    for index, piece in enumerate(pieces[1:], start=1):
+        is_title = 'text-anchor="middle"' in piece  # The title is the centred line.
+        points, baseline = (TITLE_POINTS, TITLE_BASELINE) if is_title else (COMPOSER_POINTS, COMPOSER_BASELINE)
+        piece = FONT_SIZE.sub(lambda found: f'font-size="{round(points * POINT) if int(found.group(1)) else 0}px"', piece)
+        pieces[index] = re.sub(r' y="-?\d+"', f' y="{baseline}"', piece)
+    return svg[:head] + "".join(pieces) + svg[end:]
+
+
+def keep_spaces(svg: str) -> str:
+    """Keep the spaces in "Allegro ♩ = 132".
+
+    Each piece of it is text of its own, and a space at the edge of one is dropped when a PDF is
+    made. The line breaks between the pieces are kept too, but those are written at no size.
+    """
+    return PLACED_TEXT.sub(r'\1 xml:space="preserve"', svg)
 
 
 def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970) -> list[str]:
@@ -179,7 +279,17 @@ def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970)
             "pageWidth": page_width,
             "pageHeight": page_height,
             "scale": 45,
+            "font": MUSIC_FONT,
+            "unit": STAFF_UNIT,
+            "pageMarginLeft": PAGE_MARGIN,
+            "pageMarginRight": PAGE_MARGIN,
+            "pageMarginTop": PAGE_MARGIN,
+            "pageMarginBottom": PAGE_MARGIN,
+            "spacingSystem": SYSTEM_SPACING,
+            "engravingDefaults": LINE_WEIGHTS,
+            "lyricSize": TEXT_POINTS * POINT / TIMES_WIDTH / (STAFF_UNIT * 10),
             "header": "auto" if has_title else "none",
+            "bottomMarginHeader": HEADER_ROOM,
             "footer": "none",
             "breaks": "smart" if 'new-system="yes"' in prepared else "auto",
             "breaksSmartSb": 0.0,  # A break someone asked for always counts, however short the line.
@@ -187,7 +297,7 @@ def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970)
         })
         if not toolkit.loadData(prepared):
             raise UnreadableScore("Could not read this MusicXML")
-        return [enlarge_title(replace_private_glyphs(toolkit.renderToSVG(page))) for page in range(1, toolkit.getPageCount() + 1)]
+        return [keep_spaces(size_header(set_text_font(replace_private_glyphs(toolkit.renderToSVG(page))))) for page in range(1, toolkit.getPageCount() + 1)]
 
 
 def export_pdf(musicxml: str, out_path: Path) -> None:

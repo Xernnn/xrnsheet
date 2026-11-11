@@ -10,7 +10,7 @@ Upload a sheet, check the result beside the original, fix notes and chord symbol
 
 It works well on clean, computer-rendered sheets. It's weak on real handwriting, and it hasn't been tested on real phone photos or real printed pages yet. See [the project report](docs/PROJECT_REPORT.md) for the full results, and [the knowledge guide](docs/KNOWLEDGE_GUIDE.md) for the ideas behind them.
 
-<img src="docs/screenshots/editor.png" alt="The editor with a score written from scratch: Twinkle, Twinkle, Little Star in 4/4, with chord symbols C, F and G7 above the notes and the lyrics below">
+<img src="docs/screenshots/editor.png" alt="The editor with a score written from scratch: Twinkle, Twinkle, Little Star in 4/4, with chord symbols C, F and G7 above the notes and the lyrics below. Above the page are the menu bar, the Home, Score and Publish tabs and the note toolbar, and on the left the palettes">
 
 ## Setup
 
@@ -49,59 +49,92 @@ To read notes with the model in this repository and not homr, which only works f
 .venv/bin/python -m app.server --notes own
 ```
 
-To write music with no photo behind it, choose "Or start a blank score" on the start page and pick a key, time, instrument and number of bars. You can also open a `.musicxml`, `.xml` or `.mxl` file from another program the same way as a photo, and it goes straight to the editor.
+You can also open a `.musicxml`, `.xml` or `.mxl` file from another program the same way as a photo, and it goes straight to the editor.
 
-The keys follow MuseScore. Press `N` to start entering notes, pick a length, and type the letters or click the staff. A new bar appears when you write past the last one.
+### The editor
+
+The window is laid out like MuseScore Studio's, so what you know from there is where you expect it.
+
+- **Menu bar:** File, Edit, View, Add, Format, Tools and Help. Help ▸ Keyboard shortcuts lists every key.
+- **Home:** your scores as pictures of their first pages, with a search box. "New" starts a blank score, "Open other…" opens a photo, PDF or MusicXML file, and "Take a photo" uses a phone's camera. You can also drop a file there.
+- **New score:** choose the instruments first, by family or by searching, then the key, time signature, tempo, number of measures, pickup, title and composer.
+- **Score:** the note toolbar on top, a panel on the left with Palettes, Instruments and Properties, the pages at their printed size, and a status bar with the zoom.
+- **Publish:** Print, and Export to PDF, MusicXML, MIDI or audio.
+
+A score read from a photo or PDF also has the original sheet in a panel on the right, with a box round each chord it found, the chords to check, and "Mark as checked". View ▸ Original sheet hides or shows it.
+
+**Entering notes.** Press `N`, pick a duration, and type the letters or click the staff. A new measure appears when you write past the last one. A longer note overwrites what comes after it and a shorter one leaves a rest, so every measure stays full. A note too long for its measure carries into the next one, tied. A MIDI keyboard works while entering notes, and keys pressed together make a chord.
+
+**Palettes.** Select a note, a stretch or a measure, then click a cell: Clefs, Key signatures, Time signatures (with common and cut time), Tempo, Accidentals (with double sharp and double flat), Dynamics, Articulations, Text, Repeats & jumps, Barlines and Layout. "Add Palettes" has Ornaments, Breaths & pauses, Grace notes, Arpeggios and Lines. The magnifying glass searches every palette. A key or time signature applies from the selected measure, and a barline goes at its end.
+
+**Selecting.** Click a note or rest. Shift-click another to select the stretch between them, which gets a blue box. Click an empty part of a measure to select the whole measure. A stretch moves, deletes or copies as one undo step, within one voice. Click a dynamic, tempo, text, sign, slur or hairpin to select it: Delete removes it, and a double-click or `F2` changes its text. A right-click opens a menu for whatever is under the pointer.
+
+**Instruments and parts.** The Instruments panel adds and removes instruments, and a transposing instrument gets its own key. "Parts" opens one instrument alone as a PDF.
+
+**Properties.** With nothing selected it has the title and composer and the system breaks. With a note selected it moves or respells the note, clears its marks, and adds a chord symbol or lyrics. It also inserts and deletes measures, makes the first measure a pickup, and removes or inserts a beat.
 
 | Key | Action |
 |---|---|
 | `N` | Start or stop entering notes |
-| `A` to `G` | Write that note and move on |
-| Shift+`A` to `G` | Add that note to the chord just written |
-| `1` to `7` | Length, from a 64th to a whole note. `5` is a quarter note |
+| `A` to `G` | While entering notes, write that note and move on. On a selected note, rename it |
+| Shift+`A` to `G` | Add that note to the chord |
+| Alt+`2` to `9` | Add a note that interval above |
+| `1` to `7` | Duration, from a 64th to a whole note. `5` is a quarter note |
+| `Q` `W` | Half or twice as long. With Shift, step through the dotted lengths |
 | `.` | Dotted |
 | `0` | Rest |
 | `T` | Tie to the next note |
-| Ctrl+`3` | Make a triplet from the chosen length, or take one away. Ctrl+`5`, `6` and `7` make other tuplets |
-| `#` `-` `=` | Sharp, flat, natural. `b` also means flat when you aren't entering notes |
-| ↑ ↓ | Move a note. With Ctrl, move an octave |
-| ← → | Previous or next note |
-| Shift+click, Shift+← → | Select a stretch of notes |
+| Ctrl+`3` | Make a triplet from the chosen duration, or take one away. Ctrl+`5`, `6` and `7` make other tuplets |
+| `+` `-` `=` | Sharp, flat, natural. `#` is also sharp |
+| ↑ ↓ | Move a note a semitone. With Ctrl, an octave. With Alt+Shift, one step of the scale |
+| ← → | Previous or next note. With Ctrl, previous or next measure |
+| Ctrl+Home, Ctrl+End | First or last note of the staff |
+| Shift with any of those, Shift+click | Select a stretch of notes |
 | Ctrl+A | Select the whole staff |
 | Ctrl+C, Ctrl+X, Ctrl+V | Copy, cut, paste, also between scores |
-| Ctrl+L | Type lyrics. Space moves on, `-` joins syllables, ↓ ↑ change verse, Enter finishes. On the last note both stay in the word |
+| `R` | Repeat this note or stretch |
+| Delete | Turn into a rest, or remove a selected mark |
+| Ctrl+Delete | Remove the selected time: measures selected from end to end go, and less than a measure pulls the later notes in |
+| Insert, Ctrl+B | Insert a measure before the selection, or add one at the end |
+| Ctrl+L | Type lyrics. Space moves on, `-` joins syllables, ↓ ↑ change verse, Enter finishes |
+| Ctrl+K | Chord symbol |
+| Ctrl+T, Ctrl+E, Ctrl+M | Staff text, expression text, rehearsal mark |
+| Alt+Shift+T | Tempo marking |
 | `S` | Slur a stretch, or this note to the next |
 | `<` `>` | Crescendo, diminuendo over a stretch |
 | Shift+`S` `V` `N` `O` | Staccato, accent, tenuto, marcato |
 | `/` | Add a grace note before this note |
-| `R` | Repeat this note or stretch |
 | `J` | Swap for the same note under another name, as C♯ for D♭ |
 | `X` | Flip the stem |
 | Ctrl+Alt+`1` to `4` | Write in that voice, or move the selection to it |
-| Enter | Start a new line at this bar |
+| Enter | Start a new line at this measure, or open a selected mark's text |
 | Space | Play or stop, from the selected note |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
-| Delete, Ctrl+Delete | Turn into a rest, or remove the beat and pull later notes in |
-| Esc | Stop entering notes, or close the chord editor |
+| `F9`, `F7`, `F8` | Show or hide Palettes, Instruments, Properties |
+| Ctrl+`=`, Ctrl+`-`, Ctrl+`0` | Zoom in, zoom out, 100%. Ctrl and the mouse wheel also zoom |
+| Esc | Stop entering notes, clear the selection, or close a menu or box |
 | Click the staff | While entering notes, place a note there. Shift+click adds it to a chord |
 | Drag a selected note | Move it up or down |
-| Click a dynamic, tempo, text, slur or hairpin | Change or remove it |
+| Drag the paper | Move the pages about |
+| Double-click the title | Change the title and composer |
 
-A longer note overwrites what comes after it, and a shorter one leaves a rest, so every bar stays full. Bars that don't add up to the time signature are listed above the score, which is usually how a misread rhythm shows itself. Click one to go there, then fix it with "Remove beat" or "Insert beat". The toolbar also adds and deletes bars, and changes the key or time from the selected bar. A new time signature doesn't move notes between bars: the ones that no longer fit are listed for you to fix.
+The keys are MuseScore's where MuseScore has one. A browser keeps a few for itself: in an ordinary tab Ctrl+T opens a new tab, so use Add ▸ Text ▸ Staff text there.
 
-A note too long for its bar carries into the next one, tied. A selected stretch moves, deletes or copies as one undo step, within one voice.
+Measures that don't add up to the time signature are listed above the score, which is usually how a misread rhythm shows itself. Click one to go there, then fix it with "Remove beat" or "Insert beat" in the Properties panel. A new time signature doesn't move notes between measures: the ones that no longer fit are listed for you to fix.
 
-Play sounds the notes and the chord symbols, starting from the selected note. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, and articulations and ornaments. The menu beside Play slows it down or speeds it up.
+Play sounds the notes and the chord symbols, starting from the selected note. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, and articulations and ornaments. The cog beside Play slows it down or speeds it up.
 
-The row of menus above the score adds marks, dynamics, tempos, text, rehearsal letters, jumps and clefs. "Transpose…" moves the selection, or the whole score if nothing is selected, by an interval, for a B♭, E♭ or F instrument, or to a key, and the chord symbols move with it. "Instruments…" adds a part, and a transposing instrument gets its own key. "Layout…" sets how many bars go on a line, and "Time…" also makes the first bar a pickup. A part can be printed alone, and the MIDI link saves a file for other music programs. A MIDI keyboard works while entering notes, and keys pressed together make a chord.
+Tools ▸ Transpose moves the selection, or the whole score if nothing is selected, to a key or by an interval, and the chord symbols move with it. Format ▸ Add/remove system breaks sets how many measures go on a line.
 
-A staff can hold four voices. Choose one with V1 to V4 or Ctrl+Alt and a number, and the arrows stay in that voice. If you write a rest in an extra voice, it stays there so you can carry on, and Delete removes it.
+A staff can hold four voices. Choose one with the coloured buttons or Ctrl+Alt and a number, and the arrows stay in that voice. If you write a rest in an extra voice, it stays there so you can carry on, and Delete removes it.
 
-To write a triplet, pick the length it should fill, press Ctrl+`3`, and type its three notes. A quarter gives eighth-note triplets. A triplet can't be cut in half, so selecting or copying any note of one takes the whole triplet.
+To write a triplet, pick the duration it should fill, press Ctrl+`3`, and type its three notes. A quarter gives eighth-note triplets. A triplet can't be cut in half, so selecting or copying any note of one takes the whole triplet.
 
-The "Repeat…" menu starts or ends a repeat at the selected bar, and marks it as a first or second ending. Select several bars to put one ending over all of them. The title and composer you type above the score are printed. A title recognition guessed isn't printed until you save it.
+Repeats & jumps starts or ends a repeat at the selected measure, and marks it as a first or second ending. Select several measures to put one ending over all of them. A title recognition guessed isn't printed until you save it in File ▸ Project properties.
 
-Click a chord to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. Bars you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
+Click a chord symbol to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. Measures you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
+
+What MuseScore has and this editor doesn't yet: the mixer, the piano keyboard, the timeline, continuous view, concert pitch, the playback toolbar's loop, metronome and position, and page and style settings.
 
 To recognize a sheet without the app:
 

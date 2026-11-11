@@ -1,15 +1,16 @@
-// Note entry, selection, the toolbar and playback. This loads after the main script and starts the page.
+// Note entry, selection, the note toolbar and playback. This loads last and starts the page.
+// In the order the toolbar shows them, which is MuseScore's: shortest first.
 const LENGTHS = [
-  { key: "7", type: "whole", label: "Whole note" },
-  { key: "6", type: "half", label: "Half note" },
-  { key: "5", type: "quarter", label: "Quarter note" },
-  { key: "4", type: "eighth", label: "Eighth note" },
-  { key: "3", type: "16th", label: "Sixteenth note" },
-  { key: "2", type: "32nd", label: "32nd note" },
-  { key: "1", type: "64th", label: "64th note" },
+  { key: "1", type: "64th", label: "64th note", glyph: "E1DD" },
+  { key: "2", type: "32nd", label: "32nd note", glyph: "E1DB" },
+  { key: "3", type: "16th", label: "16th note", glyph: "E1D9" },
+  { key: "4", type: "eighth", label: "Eighth note", glyph: "E1D7" },
+  { key: "5", type: "quarter", label: "Quarter note", glyph: "E1D5" },
+  { key: "6", type: "half", label: "Half note", glyph: "E1D3" },
+  { key: "7", type: "whole", label: "Whole note", glyph: "E1D2" },
 ];
 const AFTER = "after:"; // A cursor past the last note of the score.
-const GROUP_ACTIONS = new Set(["up", "down", "octaveUp", "octaveDown", "sharp", "flat", "natural", "delete", "clear", "respell", "flip"]);
+const GROUP_ACTIONS = new Set(["up", "down", "octaveUp", "octaveDown", "semitoneUp", "semitoneDown", "doubleSharp", "doubleFlat", "sharp", "flat", "natural", "delete", "clear", "respell", "flip"]);
 const REACH_IN_STEPS = 10; // How far off a staff a click still counts as on it.
 const EVENTS = "g.note, g.rest, g.mRest";
 const VOICES = 4;
@@ -30,10 +31,13 @@ const FAMILY_SOUNDS = {
   9: { wave: "sine", level: 1.2 }, // Flutes.
 };
 const USUAL_SOUND = { wave: "triangle", level: 1 };
+const MARK_NAMES = { dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin" };
 const EXPRESSIONS = { staff: "Text, e.g. solo", expression: "Expression, e.g. dolce" };
 const editor = { on: false, type: "quarter", dots: 0, voice: 1, cursor: null, last: null, trail: [], future: [] };
 let player = null;
 let range = null; // A selected stretch: { first, last, ids }.
+let selectedMark = null; // The id of a selected dynamic, text, slur or other mark.
+let pan = null; // The pages being dragged about.
 let clipboard = readClipboard();
 let lyricNote = null;
 let lyricSoFar = "";
@@ -43,16 +47,6 @@ let dragged = false;
 let drag = null;
 let lastMidiKey = 0;
 let midiAsked = false;
-
-function noteIcon(type) {
-  const open = type === "whole" || type === "half";
-  const flags = { eighth: 1, "16th": 2, "32nd": 3, "64th": 4 }[type] || 0;
-  const head = `<ellipse cx="5.5" cy="16" rx="4" ry="2.9" transform="rotate(-20 5.5 16)" fill="${open ? "none" : "currentColor"}" stroke="currentColor" stroke-width="1.4"/>`;
-  const stem = type === "whole" ? "" : `<path d="M9.2 15V2" stroke="currentColor" stroke-width="1.3"/>`;
-  let marks = "";
-  for (let flag = 0; flag < flags; flag++) marks += `<path d="M9.2 ${2 + flag * 2.6}c1 2.4 4.2 2.8 3.3 6.2" fill="none" stroke="currentColor" stroke-width="1.3"/>`;
-  return `<svg viewBox="0 0 15 20" width="13" height="18" aria-hidden="true">${head}${stem}${marks}</svg>`;
-}
 
 function plainId(id) {
   return id?.startsWith(AFTER) ? id.slice(AFTER.length) : id;
@@ -113,25 +107,30 @@ function receive(data) {
   draw();
 }
 
+// Switch off what needs a note while there's none to act on. Palettes call this when they're redrawn.
+function enableTools() {
+  const target = score ? actionTarget() : null;
+  document.querySelectorAll("[data-needs]").forEach(control => { control.disabled = !target; });
+  document.querySelectorAll("#voices button").forEach(button => { button.disabled = !editor.on && !target; });
+}
+
 function updateTools() {
-  const target = actionTarget();
-  document.querySelectorAll("#tools [data-needs]").forEach(control => { control.disabled = !target; });
+  enableTools();
   document.querySelectorAll("#lengths button").forEach(button => {
     button.setAttribute("aria-pressed", String(editor.on && button.dataset.type === editor.type));
   });
   $("dotButton").setAttribute("aria-pressed", String(editor.on && editor.dots > 0));
   document.querySelectorAll("#voices button").forEach(button => {
     button.setAttribute("aria-pressed", String(editor.on && Number(button.dataset.voice) === editor.voice));
-    button.disabled = !editor.on && !target;
   });
-  for (const id of ["markChoice", "dynamicChoice", "tempoChoice", "textChoice", "jumpChoice", "clefChoice"]) $(id).disabled = !target;
   $("inputToggle").setAttribute("aria-pressed", String(editor.on));
-  $("inputToggle").textContent = editor.on ? "Stop entering" : "Enter notes";
-  $("pitches").hidden = !editor.on;
-  $("paste").disabled = !clipboard || !(editor.on ? editor.cursor : selected);
-  const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : selected ? "Selected. Choose a length or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
-  $("toolLabel").textContent = hint || (editor.on ? "Entering notes. Press A to G, 0 for a rest, or click the staff." : selection);
+  $("caret").dataset.voice = editor.voice;
+  const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
+  const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
+  const chosen = mark ? `${MARK_NAMES[mark.kind] ?? "Mark"}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : selection;
+  $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : chosen);
   hint = "";
+  drawProperties();
 }
 
 function staffLines(staff) {
@@ -141,7 +140,44 @@ function staffLines(staff) {
   return { left: top.left, right: top.right, top: top.top, bottom: bottom.top, step: (bottom.top - top.top) / 8 };
 }
 
+// A box around a selected stretch on each staff it crosses, as MuseScore draws one. Where every
+// note of a measure is selected the box takes in the whole measure.
+function drawRangeBoxes() {
+  document.querySelectorAll(".rangeBox").forEach(box => box.remove());
+  if (!range || editor.on) return;
+  const frame = $("pagesFrame").getBoundingClientRect();
+  const chosen = new Set(range.ids);
+  const staves = new Map();
+  const boxes = new Map();
+  for (const id of range.ids) {
+    const element = document.getElementById(id);
+    const staff = element?.closest("g.staff");
+    if (!staff) continue;
+    if (!staves.has(staff)) {
+      const events = [...staff.querySelectorAll(EVENTS)];
+      staves.set(staff, { lines: staffLines(staff), whole: events.every(event => chosen.has(event.id)) });
+    }
+    const { lines, whole } = staves.get(staff);
+    const head = headBox(element);
+    const key = `${[...document.querySelectorAll("#pages g.system")].indexOf(staff.closest("g.system"))}/${staffNumber(element)}`;
+    const box = boxes.get(key) ?? { left: Infinity, right: -Infinity, top: lines.top - lines.step * 2, bottom: lines.bottom + lines.step * 2 };
+    box.left = Math.min(box.left, whole ? lines.left : head.left - 4);
+    box.right = Math.max(box.right, whole ? lines.right : head.right + 4);
+    boxes.set(key, box);
+  }
+  for (const box of boxes.values()) {
+    const shown = document.createElement("div");
+    shown.className = "rangeBox";
+    shown.style.left = `${box.left - frame.left}px`;
+    shown.style.top = `${box.top - frame.top}px`;
+    shown.style.width = `${box.right - box.left}px`;
+    shown.style.height = `${box.bottom - box.top}px`;
+    $("pagesFrame").append(shown);
+  }
+}
+
 function drawCursor() {
+  drawRangeBoxes();
   const caret = $("caret");
   if (!editor.on) { caret.hidden = true; return; }
   if (!document.getElementById(plainId(editor.cursor))) {
@@ -167,7 +203,7 @@ function drawRange() {
   if (!range) return;
   range.ids = range.ids.filter(id => document.getElementById(id));
   if (!document.getElementById(range.first) || !document.getElementById(range.last)) { range = null; return; }
-  range.ids.forEach(id => document.getElementById(id).classList.add("selected"));
+  range.ids.forEach(id => markSelected(document.getElementById(id)));
 }
 
 function drawBarChecks() {
@@ -187,9 +223,8 @@ function drawBarChecks() {
 }
 
 function drawTitle() {
-  for (const [id, value] of [["titleInput", score.title], ["composerInput", score.composer]]) {
-    if (document.activeElement !== $(id)) $(id).value = value ?? "";
-  }
+  $("scoreName").textContent = score.title || "Untitled score";
+  document.title = score.title ? `${score.title} - xrnsheet` : "xrnsheet";
 }
 
 function moveCursor(id) {
@@ -326,6 +361,199 @@ function moveAlong(delta, extend = false) {
   });
 }
 
+// The measure's staff a click landed on, if it wasn't on a note.
+function staffUnder(x, y) {
+  for (const staff of document.querySelectorAll("#pages g.staff")) {
+    const lines = staffLines(staff);
+    if (x >= lines.left && x <= lines.right && y >= lines.top - lines.step && y <= lines.bottom + lines.step) return staff;
+  }
+  return null;
+}
+
+// Clicking an empty part of a measure selects the whole measure, and with Shift everything up to it.
+async function selectMeasure(staff, extend) {
+  const events = [...(staff.querySelector("g.layer") ?? staff).querySelectorAll(EVENTS)].filter(element => stepOf(element) === element);
+  if (!events.length) { select(null); return; }
+  if (!extend || !selected) select(events[0].id);
+  await growRange(events.at(-1).id);
+}
+
+// Ctrl+Delete takes the selected time out of the score: measures selected from end to end go, and
+// anything less closes up. A whole-measure rest is all there is in its measure, so the measure goes.
+function removeRange() {
+  if (!range && !document.getElementById(actionTarget() ?? "")?.matches("g.mRest")) return noteAction("close");
+  return enqueue(async () => {
+    const notes = range ? range.ids : [actionTarget()];
+    range = null;
+    selected = null;
+    await send("group", { action: "remove", notes });
+  });
+}
+
+// Delete every measure the selection touches.
+function deleteBars() {
+  return enqueue(async () => {
+    const body = { action: "delete", note: range?.first ?? actionTarget(), last: range?.last ?? null };
+    range = null;
+    selected = null;
+    await send("bars", body);
+  });
+}
+
+// A mark with words can be retyped. A jump's words are fixed, and a sign, slur or hairpin has none.
+function markEditable(mark) {
+  return Boolean(mark?.text) && mark.kind !== "jump" && mark.kind !== "repeat-sign";
+}
+
+function selectMark(element) {
+  const id = markIdOf(element);
+  if (!score.marks.some(item => item.id === id)) return;
+  select(null);
+  selectedMark = id;
+  markElements(id).forEach(piece => piece.classList.add("selected"));
+  updateTools();
+}
+
+// A slur or hairpin carried over a line break is drawn in pieces, and they're selected together.
+function markElements(id) {
+  return [...document.querySelectorAll("#pages g[data-mark], #pages g.slur, #pages g.hairpin")].filter(element => markIdOf(element) === id);
+}
+
+function removeMark() {
+  return enqueue(async () => {
+    if (!selectedMark) return;
+    const id = selectedMark;
+    selectedMark = null;
+    await send("marks", { action: "label", id, text: "" });
+  });
+}
+
+function openSelectedMark() {
+  const element = selectedMark && markElements(selectedMark)[0];
+  if (element) openMark(element);
+}
+
+// Go to a note or rest: move the cursor there, select it, or stretch the selection to it.
+async function goTo(element, extend) {
+  if (!element) return;
+  if (editor.on) moveCursor(element.id);
+  else if (extend) await growRange(element.id);
+  else select(element.id);
+  element.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function moveByMeasure(delta, extend = false) {
+  return enqueue(async () => {
+    const position = editor.on ? editor.cursor : range?.last ?? selected;
+    const current = stepOf(document.getElementById(plainId(position)));
+    if (!current) return;
+    const measures = [...document.querySelectorAll("#pages g.measure")];
+    const here = measures.indexOf(current.closest("g.measure"));
+    const staff = staffNumber(current);
+    const inMeasure = measure => allEvents().filter(element => element.closest("g.measure") === measure && staffNumber(element) === staff);
+    // Back goes to the start of this measure first, then to the one before.
+    const atStart = inMeasure(measures[here])[0] === current;
+    const target = measures[Math.min(Math.max(here + (delta < 0 && !atStart ? 0 : delta), 0), measures.length - 1)];
+    await goTo(inMeasure(target)[0], extend);
+  });
+}
+
+function moveToEnd(last, extend = false) {
+  return enqueue(async () => {
+    const position = editor.on ? editor.cursor : range?.last ?? selected;
+    const current = stepOf(document.getElementById(plainId(position))) ?? allEvents()[0];
+    if (!current) return;
+    const list = eventsInVoice(staffNumber(current), layerNumber(current));
+    await goTo(last ? list.at(-1) : list[0], extend);
+  });
+}
+
+// W and Q: twice or half as long. With Shift, one step along quarter, dotted quarter, half.
+function scaleLength(longer, byDot) {
+  return enqueue(async () => {
+    if (!editor.on) {
+      await applyToNote(byDot ? (longer ? "dotLonger" : "dotShorter") : (longer ? "double" : "halve"));
+      return;
+    }
+    let index = LENGTHS.findIndex(item => item.type === editor.type);
+    let dots = editor.dots;
+    if (!byDot) index += longer ? 1 : -1;
+    else if (longer) [index, dots] = dots ? [index + 1, 0] : [index, 1];
+    else [index, dots] = dots ? [index, 0] : [index - 1, 1];
+    if (index < 0 || index >= LENGTHS.length) return;
+    editor.type = LENGTHS[index].type;
+    editor.dots = dots;
+    updateTools();
+  });
+}
+
+// What a right-click offers: the menus' own actions for whatever is under the pointer.
+function contextItems() {
+  const mark = selectedMark && score.marks.find(item => item.id === selectedMark);
+  if (mark) {
+    return [
+      { label: "Edit text", keys: "F2", enabled: markEditable(mark), run: openSelectedMark },
+      { label: "Delete", keys: "Del", run: removeMark },
+    ];
+  }
+  if (!actionTarget()) {
+    return [...menuItems("File", "Project properties…"), ...menuItems("Format", "Add/remove system breaks…"), null, ...menuItems("View", "Zoom in", "Zoom out")];
+  }
+  return [
+    ...menuItems("Edit", "Cut", "Copy", "Paste", "Delete"),
+    null,
+    ...addItems(),
+    null,
+    ...menuItems("Tools", "Voices", "Respell pitches", "Repeat selection"),
+    null,
+    ...menuItems("Edit", "Delete selected measures"),
+    ...menuItems("Tools", "Remove selected range"),
+  ];
+}
+
+// A right-click selects what it's on, unless that's already part of the selection, and opens its menu.
+function openContextMenu(event) {
+  if (publishing) return;
+  event.preventDefault();
+  closeEditor();
+  closeMenus();
+  if (editor.on) return;
+  const x = event.clientX, y = event.clientY;
+  const mark = markAt(event);
+  const note = mark ? null : event.target.closest(EVENTS) || nearest("#pages g.note, #pages g.rest, #pages g.mRest", x, y, 14);
+  const staff = mark || note ? null : staffUnder(x, y);
+  enqueue(async () => {
+    if (mark) selectMark(mark);
+    else if (note) { if (note.id !== selected && !range?.ids.includes(note.id)) select(note.id); }
+    else if (staff) { if (![...staff.querySelectorAll(EVENTS)].some(element => range?.ids.includes(element.id))) await selectMeasure(staff, false); }
+    else select(null);
+    openMenuAt(x, y, contextItems());
+  });
+}
+
+function startPan(event) {
+  // A drag that ended off the pages got no click to swallow, and mustn't swallow the next one.
+  if (!drag) dragged = false;
+  if (event.button !== 0 || editor.on || event.target.closest("g.note, input, button")) return;
+  const desk = $("desk");
+  pan = { x: event.clientX, y: event.clientY, left: desk.scrollLeft, top: desk.scrollTop, inPages: Boolean(event.target.closest("#pages")), moved: false };
+}
+
+function movePan(event) {
+  if (!pan) return;
+  const dx = event.clientX - pan.x, dy = event.clientY - pan.y;
+  if (!pan.moved && Math.hypot(dx, dy) < DRAG_START_PX) return;
+  pan.moved = true;
+  $("desk").scrollLeft = pan.left - dx;
+  $("desk").scrollTop = pan.top - dy;
+}
+
+// A click follows a drag that ends on the pages, and mustn't select what the pointer happens to be over.
+function endPan() {
+  if (pan?.moved && pan.inPages) dragged = true;
+  pan = null;
+}
+
 async function growRange(id) {
   const first = range?.first ?? selected;
   if (!first) { select(id); return; }
@@ -333,7 +561,9 @@ async function growRange(id) {
   document.querySelectorAll("#pages g.selected").forEach(element => element.classList.remove("selected"));
   range = { first, last: id, ids: data.ids };
   selected = id;
+  selectedMark = null;
   drawRange();
+  drawRangeBoxes();
   updateTools();
 }
 
@@ -457,6 +687,7 @@ function closeLyric() {
   const input = $("lyricInput");
   lyricNote = null;
   lyricSoFar = input.placeholder = "";
+  input.blur();
   input.hidden = true;
   input.value = "";
 }
@@ -605,16 +836,8 @@ function markAt(event) {
     ?? nearest("#pages g[data-mark], #pages g.hairpin", event.clientX, event.clientY, 4);
 }
 
-function drawParts() {
-  const names = score.parts ?? [];
-  const choice = $("partPdf");
-  choice.hidden = names.length < 2;
-  if (choice.hidden) return;
-  choice.replaceChildren(new Option("Print a part…", ""), ...names.map((name, index) => new Option(name || `Instrument ${index + 1}`, index)));
-}
-
 function startDrag(event) {
-  if (editor.on || event.shiftKey) return;
+  if (event.button !== 0 || editor.on || event.shiftKey) return;
   const note = event.target.closest("g.note");
   if (!note || note.id !== selected) return;
   const staff = note.closest("g.staff");
@@ -786,7 +1009,14 @@ function stopPlaying() {
   player.audio.close();
   player = null;
   clearPlaying();
-  $("play").textContent = "Play";
+  showPlaying(false);
+}
+
+function showPlaying(on) {
+  const button = $("play");
+  button.setAttribute("aria-label", on ? "Stop" : "Play");
+  button.setAttribute("aria-pressed", String(on));
+  button.innerHTML = icon(on ? "stop" : "play");
 }
 
 async function startPlaying() {
@@ -802,11 +1032,11 @@ async function startPlaying() {
     clearPlaying();
     const element = document.getElementById(note.id);
     element?.classList.add("playing");
-    element?.scrollIntoView({ block: "nearest" });
+    element?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, (at(note.start) - started + 0.1) * 1000));
   timers.push(setTimeout(stopPlaying, (at(data.total) - started + 0.3) * 1000));
   player = { audio, timers };
-  $("play").textContent = "Stop";
+  showPlaying(true);
   $("play").dataset.notes = notes.length;
   $("play").dataset.chords = chords.length;
 }
@@ -816,12 +1046,16 @@ function togglePlaying() {
 }
 
 function setUpToolbar() {
-  $("lengths").replaceChildren(...LENGTHS.map(({ key, type, label }) => {
+  // One frame for them all, so the notes stand on one line as they do in MuseScore's toolbar.
+  const boxes = LENGTHS.map(({ glyph }) => setGlyphs(glyph));
+  const frame = { top: Math.max(...boxes.map(box => box.top)), bottom: Math.min(...boxes.map(box => box.bottom)) };
+  $("lengths").replaceChildren(...LENGTHS.map(({ key, type, label, glyph }) => {
     const button = document.createElement("button");
+    button.className = "flat";
     button.dataset.type = type;
     button.title = `${label} (${key})`;
     button.setAttribute("aria-label", label);
-    button.innerHTML = noteIcon(type);
+    button.innerHTML = glyphIcon(glyph, 5.5, frame);
     button.addEventListener("click", () => chooseLength(type));
     return button;
   }));
@@ -831,101 +1065,53 @@ function setUpToolbar() {
     button.addEventListener("click", () => writeAt(step));
     return button;
   }), Object.assign(document.createElement("button"), { textContent: "Rest", onclick: () => writeAt(null) }));
-  const names = ["C♭", "G♭", "D♭", "A♭", "E♭", "B♭", "F", "C", "G", "D", "A", "E", "B", "F♯", "C♯"];
-  const minors = ["a♭", "e♭", "b♭", "f", "c", "g", "d", "a", "e", "b", "f♯", "c♯", "g♯", "d♯", "a♯"];
-  const options = names.map((name, index) => new Option(`${name} major / ${minors[index]} minor`, index - 7));
-  $("keyChoice").append(...options);
-  $("blankKey").append(...options.map(option => new Option(option.text, option.value)));
-  $("blankKey").value = "0";
   $("voices").replaceChildren(...Array.from({ length: VOICES }, (_, index) => {
     const button = document.createElement("button");
+    button.className = "flat";
     button.dataset.voice = index + 1;
-    button.textContent = `V${index + 1}`;
-    button.title = `Write in voice ${index + 1}, or move the selection to it (Ctrl+Alt+${index + 1})`;
+    button.innerHTML = `${glyphIcon("E1D5", 4.4)}<sup>${index + 1}</sup>`;
+    button.setAttribute("aria-label", `Voice ${index + 1}`);
+    button.title = `Voice ${index + 1} (Ctrl+Alt+${index + 1})`;
     button.addEventListener("click", () => chooseVoice(index + 1));
     return button;
   }));
-  $("transposeKeys").append(...names.map((name, index) => new Option(`To ${name} major`, `key:${index - 7}`)));
-  const whenChosen = (id, act) => $(id).addEventListener("change", event => {
-    if (event.target.value) act(event.target.value);
-    event.target.value = "";
-    event.target.blur();
+  document.querySelectorAll("#noteBar button[data-mark]").forEach(button => {
+    button.addEventListener("click", () => markAction("toggle", { name: button.dataset.mark }));
   });
-  whenChosen("markChoice", name => markAction("toggle", { name }));
-  whenChosen("dynamicChoice", name => markAction("dynamic", { name }));
-  whenChosen("tempoChoice", choice => {
-    if (choice === "type") askForText("Tempo, e.g. Allegro 132", { action: "tempo" });
-    else if (choice === "swing" || choice === "straight") markAction("swing", { on: choice === "swing" });
-    else markAction("tempo", { text: choice });
-  });
-  whenChosen("textChoice", choice => {
-    if (choice === "rehearsal") markAction("rehearsal");
-    else askForText(EXPRESSIONS[choice], { action: "text", name: choice });
-  });
-  whenChosen("jumpChoice", name => markAction("jump", { name }));
-  whenChosen("clefChoice", clef => barAction("clef", { clef }));
-  whenChosen("transposeChoice", transposeBy);
-  whenChosen("partChoice", name => enqueue(() => send("parts", name === "remove" ? { action: "remove", note: actionTarget() } : { action: "add", name })));
-  whenChosen("layoutChoice", choice => (choice === "break" ? barAction("break") : barAction("barsPerLine", { count: Number(choice) })));
-  $("partPdf").addEventListener("change", event => {
-    if (event.target.value !== "") window.open(`/api/scores/${scoreId}/score.pdf?part=${event.target.value}`);
-    event.target.value = "";
-  });
+  $("restButton").addEventListener("click", () => (editor.on ? writeAt(null) : noteAction("delete")));
   $("slurButton").addEventListener("click", () => markAction("slur"));
-  $("crescButton").addEventListener("click", () => markAction("hairpin", { name: "crescendo" }));
-  $("dimButton").addEventListener("click", () => markAction("hairpin", { name: "diminuendo" }));
-  $("graceButton").addEventListener("click", addGrace);
-  const instruments = [...$("partChoice").querySelectorAll("optgroup option")];
-  $("blankClef").append(...instruments.filter(option => option.value !== "piano").map(option => new Option(option.text, option.value)));
   $("pages").addEventListener("pointerdown", startDrag);
   window.addEventListener("pointermove", moveDrag);
   window.addEventListener("pointerup", endDrag);
+  $("desk").addEventListener("contextmenu", openContextMenu);
+  $("desk").addEventListener("pointerdown", startPan);
+  window.addEventListener("pointermove", movePan);
+  window.addEventListener("pointerup", endPan);
+  $("desk").addEventListener("wheel", event => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    stepZoom(event.deltaY < 0 ? 1 : -1);
+  }, { passive: false });
+  $("pages").addEventListener("dblclick", event => {
+    if (editor.on || publishing) return;
+    const mark = markAt(event);
+    if (mark) openMark(mark);
+    else if (event.target.closest("g.pgHead")) openProject();
+  });
   $("audio").addEventListener("click", saveAudio);
   $("dotButton").addEventListener("click", chooseDot);
   $("tripletButton").addEventListener("click", () => toggleTuplet());
   $("inputToggle").addEventListener("click", toggleInput);
   $("addBar").addEventListener("click", () => barAction("insert"));
-  $("deleteBar").addEventListener("click", () => barAction("delete"));
-  $("copy").addEventListener("click", copySelection);
-  $("paste").addEventListener("click", pasteHere);
+  $("deleteBar").addEventListener("click", deleteBars);
   $("lyricButton").addEventListener("click", startLyrics);
-  $("keyChoice").addEventListener("change", event => {
-    if (event.target.value !== "") barAction("key", { fifths: Number(event.target.value) });
-    event.target.value = "";
-    event.target.blur();
-  });
-  $("timeChoice").addEventListener("change", event => {
-    const choice = event.target.value;
-    if (choice.startsWith("pickup:")) barAction("pickup", { count: Number(choice.slice("pickup:".length)) });
-    else if (choice) {
-      const [beats, beat_type] = choice.split("/").map(Number);
-      barAction("time", { beats, beat_type });
-    }
-    event.target.value = "";
-    event.target.blur();
-  });
-  $("repeatChoice").addEventListener("change", event => {
-    const choice = event.target.value;
-    if (choice === "forward" || choice === "backward") barAction(choice);
-    else if (choice) barAction("ending", { number: Number(choice), last: range?.last ?? null });
-    event.target.value = "";
-    event.target.blur();
-  });
   // A clicked button keeps the focus, and Space would press it again instead of playing.
-  $("tools").addEventListener("click", event => event.target.closest("button")?.blur());
-  $("play").addEventListener("click", event => { event.currentTarget.blur(); togglePlaying(); });
+  for (const id of ["noteBar", "side", "mainBar", "statusBar", "pitches"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
+  $("play").addEventListener("click", togglePlaying);
   $("redo").addEventListener("click", redoEdit);
   window.addEventListener("resize", drawCursor);
   $("pages").addEventListener("mousemove", event => drawGhost(event.clientX, event.clientY));
   $("pages").addEventListener("mouseleave", () => { $("ghost").hidden = true; });
-  for (const id of ["titleInput", "composerInput"]) {
-    // Read now, because a reply arriving first redraws these fields with what the server knew.
-    $(id).addEventListener("change", () => {
-      const body = { title: $("titleInput").value, composer: $("composerInput").value };
-      enqueue(() => send("title", body));
-    });
-    $(id).addEventListener("keydown", event => { if (event.key === "Enter") event.target.blur(); });
-  }
   $("lyricInput").addEventListener("keydown", event => {
     if (event.key === " ") { event.preventDefault(); saveLyric(false, true, " "); }
     else if (event.key === "-") { event.preventDefault(); saveLyric(true, true, "-"); }
@@ -936,25 +1122,6 @@ function setUpToolbar() {
   });
 }
 
-function setUpBlankForm() {
-  $("blankOpen").addEventListener("click", () => { $("blankForm").hidden = false; $("blankOpen").hidden = true; });
-  $("blankForm").addEventListener("submit", async event => {
-    event.preventDefault();
-    const [beats, beat_type] = $("blankTime").value.split("/").map(Number);
-    const response = await fetch("/api/scores/blank", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fifths: Number($("blankKey").value), beats, beat_type, clef: $("blankClef").value, measures: Number($("blankBars").value) }),
-    });
-    const data = await response.json();
-    if (!response.ok) { message(typeof data.detail === "string" ? data.detail : "Those settings didn't work."); return; }
-    scoreId = data.id;
-    location.hash = scoreId;
-    await poll();
-    setInput(true);
-  });
-}
-
 const PITCH_KEYS = { "#": "sharp", "+": "sharp", "-": "flat", "=": "natural" };
 const MARK_KEYS = { S: "staccato", V: "accent", N: "tenuto", O: "marcato" };
 
@@ -962,6 +1129,16 @@ function handleControlKey(event) {
   const key = event.key.toLowerCase();
   if (event.altKey && /^[1-4]$/.test(key)) { event.preventDefault(); chooseVoice(Number(key)); return; }
   const actions = {
+    "=": () => stepZoom(1),
+    "+": () => stepZoom(1),
+    "-": () => stepZoom(-1),
+    0: () => setZoom(100),
+    f9: () => { showSide("palettes"); searchPalettes(true); },
+    b: appendBar,
+    k: addChordHere,
+    t: () => askForText(EXPRESSIONS.staff, { action: "text", name: "staff" }),
+    e: () => askForText(EXPRESSIONS.expression, { action: "text", name: "expression" }),
+    m: () => markAction("rehearsal"),
     z: () => (event.shiftKey ? redoEdit() : undoEdit()),
     y: redoEdit,
     c: copySelection,
@@ -975,22 +1152,45 @@ function handleControlKey(event) {
     7: () => toggleTuplet(7),
     arrowup: () => noteAction("octaveUp"),
     arrowdown: () => noteAction("octaveDown"),
-    delete: () => noteAction("close"),
-    backspace: () => noteAction("close"),
+    arrowleft: () => moveByMeasure(-1, event.shiftKey),
+    arrowright: () => moveByMeasure(1, event.shiftKey),
+    home: () => moveToEnd(false, event.shiftKey),
+    end: () => moveToEnd(true, event.shiftKey),
+    delete: removeRange,
+    backspace: removeRange,
   };
   if (actions[key]) { event.preventDefault(); actions[key](); }
 }
 
+const PANEL_KEYS = { F9: "palettes", F7: "instruments", F8: "properties" };
+
 document.addEventListener("keydown", event => {
-  if (["INPUT", "SELECT"].includes(event.target.tagName) || $("workspace").hidden) return;
   const key = event.key;
+  if (key === "Escape" && openMenus.length) { closeMenus(); return; }
+  // A field keeps the focus for a moment after its dialog or box has closed. It isn't being typed in then.
+  const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName) && event.target.getClientRects().length > 0;
+  if (typing || $("workspace").hidden || publishing || document.querySelector("dialog[open]")) return;
   if (event.ctrlKey || event.metaKey) { handleControlKey(event); return; }
   const handled = () => event.preventDefault();
+  // A button someone has tabbed to is pressed by Space, so it mustn't also start playing.
+  if (key === " " && event.target.tagName === "BUTTON") return;
+  if (PANEL_KEYS[key]) { handled(); toggleSide(PANEL_KEYS[key]); return; }
+  if (key === "Insert") { handled(); barAction("insert"); return; }
+  if (event.altKey && event.shiftKey && key.toLowerCase() === "t") { handled(); askForTempo(); return; }
+  if (event.altKey && event.shiftKey && key === "ArrowUp") { handled(); noteAction("up"); return; }
+  if (event.altKey && event.shiftKey && key === "ArrowDown") { handled(); noteAction("down"); return; }
+  if (event.altKey && /^[2-9]$/.test(key)) { handled(); noteAction("interval", { interval: Number(key) }); return; }
+  if (event.altKey) return;
+  if (key === "i" || key === "I") { handled(); showSide("instruments"); openAddPart(); return; }
 
   if (key === "Escape") {
     closeEditor();
     enqueue(async () => { if (editor.on) setInput(false); else select(null); });
     return;
+  }
+  if (selectedMark && !editor.on) {
+    if (key === "Delete" || key === "Backspace") { handled(); removeMark(); return; }
+    if (key === "F2" || key === "Enter") { handled(); openSelectedMark(); return; }
   }
   if (key === " ") { handled(); togglePlaying(); return; }
   if (MARK_KEYS[key]) { handled(); markAction("toggle", { name: MARK_KEYS[key] }); return; }
@@ -1005,8 +1205,9 @@ document.addEventListener("keydown", event => {
   if (key === "n" || key === "N") { handled(); toggleInput(); return; }
   if (key === "ArrowLeft") { handled(); moveAlong(-1, event.shiftKey); return; }
   if (key === "ArrowRight") { handled(); moveAlong(1, event.shiftKey); return; }
-  if (key === "ArrowUp") { handled(); noteAction("up"); return; }
-  if (key === "ArrowDown") { handled(); noteAction("down"); return; }
+  if (key === "ArrowUp") { handled(); noteAction("semitoneUp"); return; }
+  if (key === "ArrowDown") { handled(); noteAction("semitoneDown"); return; }
+  if (key.toLowerCase() === "q" || key.toLowerCase() === "w") { handled(); scaleLength(key.toLowerCase() === "w", event.shiftKey); return; }
   if (key === ".") { handled(); chooseDot(); return; }
   if (key === "t" || key === "T") { handled(); noteAction("tie"); return; }
   if (PITCH_KEYS[key]) { handled(); noteAction(PITCH_KEYS[key]); return; }
@@ -1022,10 +1223,12 @@ document.addEventListener("keydown", event => {
     return;
   }
   if (key === "0" || key === "Delete" || key === "Backspace") { handled(); noteAction("delete"); return; }
-  if (key === "b") { handled(); noteAction("flat"); }
+  // Outside note input a letter renames the selected note, and with Shift adds to its chord.
+  if (/^[a-gA-G]$/.test(key)) { handled(); noteAction(event.shiftKey ? "stack" : "repitch", { step: key.toUpperCase() }); }
 });
 
+setUpPage();
+setUpShell();
 setUpToolbar();
-setUpBlankForm();
 updateTools();
 if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); } else drawHistory();

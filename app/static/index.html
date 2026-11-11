@@ -5,577 +5,317 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>xrnsheet</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<style>
-:root {
-  --paper: #fbfaf7; --panel: #ffffff; --ink: #1f2328; --muted: #646b73;
-  --line: #e2dfd8; --accent: #1f6feb; --warn: #c2570c; --warn-soft: #fff1e6;
-  color-scheme: light;
-}
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 system-ui, sans-serif; }
-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
-header h1 { font-size: 17px; margin: 0 auto 0 0; letter-spacing: -.01em; }
-button, .button { font: inherit; padding: 7px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); cursor: pointer; text-decoration: none; display: inline-block; }
-button:hover:not(:disabled), .button:hover { border-color: #b9b5ab; }
-button:disabled { opacity: .45; cursor: default; }
-button:focus-visible, .button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.primary:hover { filter: brightness(1.08); }
-main { padding: 16px; max-width: 1500px; margin: 0 auto; }
-#start { max-width: 560px; margin: 8vh auto; text-align: center; }
-#start h2 { font-size: 26px; letter-spacing: -.02em; margin: 0 0 6px; }
-#start p { color: var(--muted); margin: 0 0 22px; }
-#drop { border: 1.5px dashed #bdb8ac; border-radius: 12px; padding: 36px 20px; background: var(--panel); }
-#drop.over { border-color: var(--accent); background: #f2f7ff; }
-#drop .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
-.hint { color: var(--muted); font-size: 13px; margin-top: 14px; }
-#busy { text-align: center; margin: 14vh auto; }
-.spinner { width: 28px; height: 28px; margin: 0 auto 14px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
-#message { position: sticky; top: 62px; z-index: 4; padding: 9px 14px; background: var(--warn-soft); color: #7a3606; border-radius: 8px; margin-bottom: 12px; }
-#workspace { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 16px; align-items: start; }
-@media (max-width: 860px) { #workspace { grid-template-columns: minmax(0, 1fr); } }
-#workspace.solo { grid-template-columns: minmax(0, 1fr); }
-section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
-section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
-#original { position: sticky; top: 68px; }
-#images { max-height: calc(100vh - 150px); overflow-y: auto; }
-.imageBox { position: relative; line-height: 0; }
-.imageBox + .imageBox { margin-top: 10px; }
-.imageBox img { width: 100%; height: auto; border-radius: 4px; }
-@media (max-width: 860px) { #original { position: static; } #images { max-height: 60vh; } }
-#history { margin-top: 26px; text-align: left; }
-#history h3 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
-#history a { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); text-decoration: none; margin-bottom: 6px; }
-#history a:hover { border-color: #b9b5ab; }
-#history .state { color: var(--muted); font-size: 13px; white-space: nowrap; }
-#checked.done { background: #e8f6ef; border-color: #2e9e6b; color: #14573a; }
-.box { position: absolute; border: 1.5px solid #2e9e6b; border-radius: 2px; pointer-events: none; }
-.box.unsure { border-color: var(--warn); background: rgba(194, 87, 12, .13); }
-.box.active { border-color: var(--accent); background: rgba(31, 111, 235, .16); }
-#tools { display: grid; gap: 6px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); position: sticky; top: 56px; z-index: 3; background: var(--panel); }
-#tools .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-#tools button, #tools select { font: inherit; min-width: 34px; min-height: 34px; padding: 4px 9px; }
-#tools select { max-width: 138px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); }
-#tools .group { display: inline-flex; flex-wrap: wrap; gap: 2px; }
-#tools .gap { width: 6px; }
-#tools .label { color: var(--muted); font-size: 13px; }
-#tools button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
-#lengths button { padding: 4px 7px; line-height: 0; }
-#pagesFrame { position: relative; }
-@media (max-width: 860px) {
-  /* A page is drawn to fit a desktop, so on a phone it scrolls sideways instead of shrinking. */
-  #tools { position: static; }
-  #pagesFrame { overflow-x: auto; }
-  #pages { min-width: 820px; }
-}
-#caret { position: absolute; background: rgba(31, 111, 235, .17); border-left: 2px solid var(--accent); border-radius: 2px; pointer-events: none; }
-#keysHelp { margin-bottom: 8px; font-size: 13px; color: var(--muted); }
-#keysHelp table { border-collapse: collapse; margin-top: 6px; }
-#keysHelp td { padding: 2px 14px 2px 0; }
-#keysHelp kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; background: var(--paper); color: var(--ink); }
-#barChecks { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-#blankStart { margin-top: 14px; }
-#blankForm { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); text-align: left; }
-#blankForm label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); min-width: 0; }
-#blankForm select, #blankForm input { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
-#blankForm button { grid-column: 1 / -1; }
-#pages svg { display: block; width: 100%; height: auto; }
-#pages { scroll-margin-top: 68px; }
-#pages g.note, #pages g.rest, #pages g.mRest, #pages g.harm { cursor: pointer; }
-body.inputting #pages { cursor: crosshair; }
-#ghost { position: absolute; border-radius: 50%; background: var(--accent); opacity: .45; pointer-events: none; transform: rotate(-20deg); }
-#lyricInput { position: absolute; z-index: 2; width: 110px; padding: 2px 6px; font: inherit; border: 1px solid var(--accent); border-radius: 5px; background: var(--panel); color: var(--ink); }
-#titleFields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 8px; margin-bottom: 8px; }
-#titleFields input { font: inherit; width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); box-sizing: border-box; }
-#pages g.note:hover, #pages g.rest:hover, #pages g.mRest:hover { fill: var(--accent); stroke: var(--accent); }
-#pages g.selected, #pages g.selected * { fill: var(--accent); stroke: var(--accent); }
-#pages g.playing, #pages g.playing * { fill: #2e9e6b; stroke: #2e9e6b; }
-#pages g.harm:hover text, #pages g.harm.active text { fill: var(--accent); }
-#pages g[data-mark], #pages g.slur, #pages g.hairpin { cursor: pointer; }
-#pages g[data-mark]:hover text, #pages g[data-mark]:hover tspan { fill: var(--accent); }
-#pages g.harm.unsure text { fill: var(--warn); }
-#checks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
-#checks .label { color: var(--muted); font-size: 13px; }
-.chip { padding: 3px 9px; border-radius: 999px; border: 1px solid #efc7a6; background: var(--warn-soft); color: #7a3606; font-size: 14px; }
-#editor { position: absolute; z-index: 10; display: flex; gap: 6px; padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 6px 22px rgba(0,0,0,.14); }
-#editor input { width: 130px; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
-#editorError { position: absolute; left: 8px; top: 100%; margin-top: 4px; width: max-content; max-width: 280px; padding: 5px 9px; background: #7a1f1f; color: #fff; border-radius: 6px; font-size: 13px; }
-[hidden] { display: none !important; }
-</style>
+<link rel="stylesheet" href="app.css">
 </head>
-<body>
-<header>
-  <h1>xrnsheet</h1>
-  <button id="play" hidden title="Play from the selected note (Space)">Play</button>
-  <button id="undo" hidden disabled>Undo</button>
-  <button id="redo" hidden disabled>Redo</button>
-  <button id="checked" hidden title="Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.">Mark as checked</button>
-  <select id="speed" hidden aria-label="Playback speed"><option value="0.5">50%</option><option value="0.75">75%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select>
-  <a id="xml" class="button" hidden>MusicXML</a>
-  <a id="midi" class="button" hidden>MIDI</a>
-  <button id="audio" hidden>Audio</button>
-  <select id="partPdf" hidden aria-label="Print one instrument's part"></select>
-  <a id="pdf" class="button primary" hidden>Download PDF</a>
-  <button id="again" hidden>New sheet</button>
-</header>
-<main>
-  <div id="start">
-    <h2>Turn a sheet into a score you can edit</h2>
-    <p>Notes and chord symbols are read for you. Fix what's wrong, then print a clean PDF.</p>
-    <div id="drop">
-      <div class="actions">
-        <label class="button primary" tabindex="0">Choose a file<input id="file" type="file" accept="image/*,.pdf,.musicxml,.xml,.mxl" hidden></label>
-        <label class="button" tabindex="0">Take a photo<input id="camera" type="file" accept="image/*" capture="environment" hidden></label>
-      </div>
-      <div class="hint">Or drop a photo, PDF or MusicXML file here. Flat, well-lit pages read best.</div>
-    </div>
-    <div id="blankStart">
-      <button id="blankOpen">Or start a blank score</button>
-      <form id="blankForm" hidden>
-        <label>Key<select id="blankKey"></select></label>
-        <label>Time<select id="blankTime"><option>4/4</option><option>3/4</option><option>2/4</option><option>2/2</option><option>6/8</option><option>9/8</option><option>12/8</option><option>5/4</option></select></label>
-        <label>Staff<select id="blankClef"><option value="treble">Treble</option><option value="bass">Bass</option><option value="piano">Piano</option></select></label>
-        <label>Bars<input id="blankBars" type="number" min="1" max="1000" value="32"></label>
-        <button class="primary" type="submit">Create score</button>
-      </form>
-    </div>
-    <div id="history" hidden><h3>Your sheets</h3><div id="historyList"></div></div>
+<body class="atHome">
+<div id="menuBar" role="menubar" aria-label="Menus"></div>
+<div id="mainBar">
+  <nav id="tabs" role="tablist" aria-label="Views">
+    <button id="homeTab" role="tab" aria-selected="true">Home</button>
+    <button id="scoreTab" role="tab" aria-selected="false" disabled>Score</button>
+    <button id="publishTab" role="tab" aria-selected="false" disabled>Publish</button>
+  </nav>
+  <div id="centreTools" class="scoreOnly">
+    <button id="partsButton" title="Open or print one instrument's part"><span data-icon="parts"></span><span>Parts</span></button>
   </div>
-  <div id="busy" hidden><div class="spinner"></div><div id="busyText">Reading your sheet. This usually takes under a minute.</div></div>
-  <div id="message" role="status" hidden></div>
-  <div id="workspace" hidden>
-    <section id="original" aria-label="Your original sheet">
-      <h2>Your sheet</h2>
+  <div id="playTools" class="scoreOnly" role="toolbar" aria-label="Playback">
+    <button id="play" class="flat" aria-label="Play" aria-pressed="false" title="Play from the selected note, or stop (Space)"><span data-icon="play"></span></button>
+    <button id="playSettings" class="flat" aria-label="Playback settings" title="Playback settings"><span data-icon="cog"></span></button>
+  </div>
+  <div id="undoTools" class="scoreOnly">
+    <button id="undo" class="flat" aria-label="Undo" title="Undo (Ctrl+Z)" disabled><span data-icon="undo"></span></button>
+    <button id="redo" class="flat" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled><span data-icon="redo"></span></button>
+  </div>
+</div>
+<div id="message" role="status" hidden></div>
+
+<div id="start">
+  <nav id="homeSide" aria-label="Home"><button aria-current="page"><span data-icon="music"></span>Scores</button></nav>
+  <div id="homeMain">
+    <div id="homeHead"><h2>Scores</h2><input id="homeSearch" type="search" placeholder="Search" aria-label="Search your scores"></div>
+    <div id="homeSub"><span>New &amp; recent</span></div>
+    <div id="homeScroll"><div id="historyList"></div></div>
+    <div id="homeFoot">
+      <span class="hint">Open a photo, a PDF or a MusicXML file, or drop one here. Notes and chord symbols in a photo are read for you.</span>
+      <label class="button" tabindex="0">Take a photo<input id="camera" type="file" accept="image/*" capture="environment" hidden></label>
+      <button id="blankOpen">New</button>
+      <label class="button" tabindex="0">Open other…<input id="file" type="file" accept="image/*,.pdf,.musicxml,.xml,.mxl" hidden></label>
+    </div>
+  </div>
+</div>
+<div id="busy" hidden><div class="spinner"></div><div id="busyText">Reading your sheet. This usually takes under a minute.</div></div>
+
+<div id="workspace" hidden>
+  <div id="noteBar" role="toolbar" aria-label="Note input">
+    <button id="inputToggle" class="flat" title="Note input (N)" aria-label="Note input" aria-pressed="false"><span data-icon="pen"></span></button>
+    <span id="lengths" role="group" aria-label="Duration"></span>
+    <span class="divider"></span>
+    <button id="dotButton" class="flat" title="Augmentation dot (.)" aria-label="Augmentation dot" aria-pressed="false"><span data-glyph="E1E7" data-space="7"></span></button>
+    <button id="restButton" class="flat" data-needs="note" title="Rest (0)" aria-label="Rest"><span data-glyph="E4E5" data-space="4.5"></span></button>
+    <span class="divider"></span>
+    <button class="flat" data-action="doubleFlat" data-needs="note" title="Double flat" aria-label="Double flat"><span data-glyph="E264" data-space="5.5"></span></button>
+    <button class="flat" data-action="flat" data-needs="note" title="Flat (-)" aria-label="Flat"><span data-glyph="E260" data-space="5.5"></span></button>
+    <button class="flat" data-action="natural" data-needs="note" title="Natural (=)" aria-label="Natural"><span data-glyph="E261" data-space="5.5"></span></button>
+    <button class="flat" data-action="sharp" data-needs="note" title="Sharp (+)" aria-label="Sharp"><span data-glyph="E262" data-space="5.5"></span></button>
+    <button class="flat" data-action="doubleSharp" data-needs="note" title="Double sharp" aria-label="Double sharp"><span data-glyph="E263" data-space="5.5"></span></button>
+    <span class="divider"></span>
+    <button class="flat" data-action="tie" data-needs="note" title="Tie (T)" aria-label="Tie"><span data-icon="tie"></span></button>
+    <button id="slurButton" class="flat" data-needs="note" title="Slur (S)" aria-label="Slur"><span data-icon="slur"></span></button>
+    <span class="divider"></span>
+    <button class="flat" data-mark="marcato" data-needs="note" title="Marcato (Shift+O)" aria-label="Marcato"><span data-glyph="E4AC" data-space="7.5"></span></button>
+    <button class="flat" data-mark="accent" data-needs="note" title="Accent (Shift+V)" aria-label="Accent"><span data-glyph="E4A0" data-space="7.5"></span></button>
+    <button class="flat" data-mark="tenuto" data-needs="note" title="Tenuto (Shift+N)" aria-label="Tenuto"><span data-glyph="E4A4" data-space="7.5"></span></button>
+    <button class="flat" data-mark="staccato" data-needs="note" title="Staccato (Shift+S)" aria-label="Staccato"><span data-glyph="E4A2" data-space="7.5"></span></button>
+    <span class="divider"></span>
+    <button id="tripletButton" class="flat" data-needs="note" title="Triplet (Ctrl+3)" aria-label="Triplet"><span data-icon="tuplet"></span></button>
+    <button class="flat" data-action="flip" data-needs="note" title="Flip direction (X)" aria-label="Flip direction"><span data-icon="flip"></span></button>
+    <span class="divider"></span>
+    <span id="voices" role="group" aria-label="Voice"></span>
+    <span class="divider"></span>
+    <button id="addButton" class="flat" title="Add" aria-label="Add" aria-haspopup="menu"><span data-icon="plus"></span></button>
+  </div>
+  <div id="pitches"></div>
+  <div id="publishBar" role="toolbar" aria-label="Publish">
+    <a id="pdf" class="button primary" title="Open the score as a PDF, to print or save">Print</a>
+    <a id="pdfSave" class="button" download="score.pdf">Export PDF</a>
+    <a id="xml" class="button">Export MusicXML</a>
+    <a id="midi" class="button">Export MIDI</a>
+    <button id="audio">Export audio</button>
+  </div>
+  <div id="scoreBody">
+    <aside id="side" aria-label="Panels">
+      <div id="sideTabs" role="tablist">
+        <button role="tab" data-panel="palettes" aria-selected="true">Palettes</button>
+        <button role="tab" data-panel="instruments" aria-selected="false">Instruments</button>
+        <button role="tab" data-panel="properties" aria-selected="false">Properties</button>
+      </div>
+      <div id="palettesPanel" class="sidePanel" role="tabpanel">
+        <div class="top">
+          <button id="addPalettes" aria-haspopup="menu">Add Palettes</button>
+          <button id="paletteSearchOpen" aria-label="Search palettes" title="Search palettes (Ctrl+F9)"><span data-icon="search"></span></button>
+        </div>
+        <div class="top" id="paletteSearchRow" hidden><input id="paletteSearch" type="search" placeholder="Search" aria-label="Search palettes"></div>
+        <div id="paletteTree"></div>
+      </div>
+      <div id="instrumentsPanel" class="sidePanel" role="tabpanel" hidden>
+        <div class="top">
+          <button id="partAdd" title="Add instruments (I)">Add</button>
+          <button id="partRemove" aria-label="Remove the selected instrument" title="Remove the selected instrument" disabled><span data-icon="trash"></span></button>
+        </div>
+        <ul id="partList" role="listbox" aria-label="Instruments in this score"></ul>
+      </div>
+      <div id="propertiesPanel" class="sidePanel" role="tabpanel" hidden>
+        <section id="propScore">
+          <h3>Score</h3>
+          <div class="fields">
+            <button id="projectOpen">Project properties…</button>
+            <button id="breaksOpen">Add/remove system breaks…</button>
+          </div>
+        </section>
+        <section id="propMark" hidden>
+          <h3 id="propMarkKind">Mark</h3>
+          <div class="fields">
+            <div class="pair">
+              <button id="markEdit" title="Change what it says (F2, or double-click it)">Edit text</button>
+              <button id="markDelete" title="Remove it from the score (Del)">Delete</button>
+            </div>
+          </div>
+        </section>
+        <section id="propNote">
+          <h3 id="propKind">Note</h3>
+          <div class="fields">
+            <div class="pair">
+              <button data-action="semitoneUp" data-needs="note" title="Up a semitone (↑)">Pitch up</button>
+              <button data-action="semitoneDown" data-needs="note" title="Down a semitone (↓)">Pitch down</button>
+            </div>
+            <div class="pair">
+              <button data-action="respell" data-needs="note" title="Write the same note under its other name (J)">Respell</button>
+              <button data-action="clear" data-needs="note" title="Remove a fermata, ornament or articulation from this note">Clear marks</button>
+            </div>
+            <div class="pair">
+              <button id="addChord" data-needs="note" title="Chord symbol (Ctrl+K)">Chord symbol</button>
+              <button id="lyricButton" data-needs="note" title="Lyrics (Ctrl+L)">Lyrics</button>
+            </div>
+          </div>
+        </section>
+        <section id="propMeasure">
+          <h3>Measure</h3>
+          <div class="fields">
+            <div class="pair">
+              <button id="addBar" title="Insert a measure before the selected one, or at the end (Ins)">Insert measure</button>
+              <button id="deleteBar" data-needs="note" title="Delete the selected measures (Ctrl+Del with whole measures selected)">Delete measure</button>
+            </div>
+            <label class="field">Pickup at the start
+              <select id="pickupChoice"><option value="">Choose…</option><option value="2">An eighth note</option><option value="4">A quarter note</option><option value="8">A half note</option><option value="12">Three quarter notes</option><option value="0">No pickup</option></select>
+            </label>
+          </div>
+        </section>
+        <section id="propBeats">
+          <h3>Beats in this measure</h3>
+          <div class="fields">
+            <div class="pair">
+              <button data-action="close" data-needs="note" title="Remove this and pull later notes in. Fixes a measure with too many beats (Ctrl+Del)">Remove beat</button>
+              <button data-action="insert" data-needs="note" title="Open a gap here. Fixes a measure with too few beats">Insert beat</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </aside>
+    <div id="stage">
+      <div id="scoreTabs"><div class="tab"><span id="scoreName"></span><button id="closeScore" class="flat" aria-label="Close this score" title="Close"><span data-icon="close"></span></button></div></div>
+      <div id="barChecks" hidden></div>
+      <div id="desk">
+        <div id="pagesFrame">
+          <div id="pages"></div>
+          <div id="caret" hidden></div>
+          <div id="ghost" hidden></div>
+          <input id="lyricInput" aria-label="Lyric" hidden autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+    </div>
+    <aside id="original" aria-label="Your original sheet">
+      <header><span>Original sheet</span>
+        <button id="checked" title="Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.">Mark as checked</button>
+        <button id="originalClose" class="flat" aria-label="Hide the original sheet" title="Hide"><span data-icon="close"></span></button>
+      </header>
       <div id="images"></div>
       <div id="checks" hidden><span class="label">Please check:</span></div>
-    </section>
-    <section aria-label="Recognized score">
-      <div id="titleFields">
-        <input id="titleInput" aria-label="Title" placeholder="Title" maxlength="200">
-        <input id="composerInput" aria-label="Composer" placeholder="Composer" maxlength="200">
-      </div>
-      <div id="tools">
-        <div class="row">
-          <button id="inputToggle" title="Enter notes with the keyboard (N)" aria-pressed="false">Enter notes</button>
-          <span class="group" id="lengths" role="group" aria-label="Note length"></span>
-          <button id="dotButton" title="Dotted (.)" aria-label="Dotted note" aria-pressed="false">•</button>
-          <button data-action="tie" data-needs="note" title="Tie to the next note (T)">Tie</button>
-          <button id="tripletButton" data-needs="note" title="Make a triplet here, or take it away (Ctrl+3)">Triplet</button>
-          <span class="gap"></span>
-          <button data-action="up" data-needs="note" title="Move up (↑), or an octave with Ctrl" aria-label="Move note up">↑</button>
-          <button data-action="down" data-needs="note" title="Move down (↓), or an octave with Ctrl" aria-label="Move note down">↓</button>
-          <button data-action="sharp" data-needs="note" title="Sharp (#)" aria-label="Make sharp">♯</button>
-          <button data-action="flat" data-needs="note" title="Flat (-)" aria-label="Make flat">♭</button>
-          <button data-action="natural" data-needs="note" title="Natural (=)" aria-label="Make natural">♮</button>
-        </div>
-        <div class="row" id="pitches" hidden></div>
-        <div class="row">
-          <button data-action="delete" data-needs="note" title="Turn this note into a rest (Del)">Delete</button>
-          <button data-action="close" data-needs="note" title="Remove this and pull later notes in. Fixes a bar with too many beats (Ctrl+Del)">Remove beat</button>
-          <button data-action="insert" data-needs="note" title="Open a gap here. Fixes a bar with too few beats">Insert beat</button>
-          <button data-action="clear" data-needs="note" title="Remove a fermata, ornament or accent from this note">Clear marks</button>
-          <button id="addChord" data-needs="note">Add chord</button>
-          <button id="lyricButton" data-needs="note" title="Type words under the notes (Ctrl+L)">Lyrics</button>
-          <button id="copy" data-needs="note" title="Copy the selection (Ctrl+C)">Copy</button>
-          <button id="paste" disabled title="Paste here (Ctrl+V)">Paste</button>
-          <span class="gap"></span>
-          <button id="addBar" title="Add a bar before the selected one, or at the end">Add bar</button>
-          <button id="deleteBar" data-needs="note" title="Delete the selected bar">Delete bar</button>
-          <select id="keyChoice" aria-label="Change the key from this bar. Notes stay on their lines."><option value="">Key…</option></select>
-          <select id="timeChoice" aria-label="Change the time from this bar. Notes stay in their bars."><option value="">Time…</option><option>2/2</option><option>2/4</option><option>3/4</option><option>4/4</option><option>5/4</option><option>6/4</option><option>3/8</option><option>6/8</option><option>9/8</option><option>12/8</option><optgroup label="Start with a pickup"><option value="pickup:2">Pickup of an eighth</option><option value="pickup:4">Pickup of a quarter</option><option value="pickup:8">Pickup of a half</option><option value="pickup:12">Pickup of three quarters</option><option value="pickup:0">No pickup</option></optgroup></select>
-          <select id="repeatChoice" aria-label="Add a repeat or ending at this bar"><option value="">Repeat…</option><option value="forward">Start repeat</option><option value="backward">End repeat</option><option value="1">First ending</option><option value="2">Second ending</option><option value="0">No ending</option></select>
-        </div>
-        <div class="row" id="markRow">
-          <span class="group" id="voices" role="group" aria-label="Voice"></span>
-          <button id="slurButton" data-needs="note" title="Slur a stretch, or this note to the next (S)">Slur</button>
-          <button id="crescButton" data-needs="note" title="Crescendo over this stretch (&lt;)">Cresc.</button>
-          <button id="dimButton" data-needs="note" title="Diminuendo over this stretch (&gt;)">Dim.</button>
-          <button id="graceButton" data-needs="note" title="Grace note before this note (/)">Grace</button>
-          <select id="markChoice" aria-label="Add a mark to this note"><option value="">Mark…</option>
-            <optgroup label="Articulation"><option value="staccato">Staccato</option><option value="tenuto">Tenuto</option><option value="accent">Accent</option><option value="marcato">Marcato</option><option value="staccatissimo">Staccatissimo</option><option value="fermata">Fermata</option><option value="breath">Breath mark</option></optgroup>
-            <optgroup label="Ornament"><option value="trill">Trill</option><option value="mordent">Mordent</option><option value="prall">Upper mordent</option><option value="turn">Turn</option><option value="arpeggio">Arpeggio</option></optgroup>
-            <optgroup label="Strings"><option value="downbow">Down bow</option><option value="upbow">Up bow</option></optgroup>
-          </select>
-          <select id="dynamicChoice" aria-label="Add a dynamic at this note"><option value="">Dynamic…</option><option>ppp</option><option>pp</option><option>p</option><option>mp</option><option>mf</option><option>f</option><option>ff</option><option>fff</option><option>sf</option><option>sfz</option><option>fp</option><option>rfz</option></select>
-          <select id="tempoChoice" aria-label="Set the tempo from this note"><option value="">Tempo…</option><option>Largo 50</option><option>Adagio 70</option><option>Andante 92</option><option>Moderato 112</option><option>Allegro 132</option><option>Presto 172</option><option value="type">Type a tempo…</option><option value="swing">Swing</option><option value="straight">Straight</option></select>
-          <select id="textChoice" aria-label="Add text at this note"><option value="">Text…</option><option value="staff">Staff text…</option><option value="expression">Expression…</option><option value="rehearsal">Rehearsal letter</option></select>
-          <select id="jumpChoice" aria-label="Add a jump at this bar"><option value="">Jump…</option><option value="segno">Segno</option><option value="coda">Coda</option><option value="tocoda">To Coda</option><option value="fine">Fine</option><option value="dc">D.C.</option><option value="dcfine">D.C. al Fine</option><option value="dccoda">D.C. al Coda</option><option value="ds">D.S.</option><option value="dsfine">D.S. al Fine</option><option value="dscoda">D.S. al Coda</option></select>
-          <select id="clefChoice" aria-label="Change the clef from this bar"><option value="">Clef…</option><option value="treble">Treble</option><option value="treble8">Treble, octave down</option><option value="bass">Bass</option><option value="alto">Alto</option><option value="tenor">Tenor</option></select>
-          <select id="transposeChoice" aria-label="Transpose the selection, or the whole score if nothing is selected"><option value="">Transpose…</option>
-            <optgroup label="By interval"><option value="m2:up">Up a semitone</option><option value="m2:down">Down a semitone</option><option value="M2:up">Up a tone</option><option value="M2:down">Down a tone</option><option value="P4:up">Up a fourth</option><option value="P5:up">Up a fifth</option><option value="P8:up">Up an octave</option><option value="P8:down">Down an octave</option></optgroup>
-            <optgroup label="For an instrument"><option value="M2:up">For B♭ instruments</option><option value="M6:up">For E♭ instruments</option><option value="P5:up">For F instruments</option></optgroup>
-            <optgroup label="To a key" id="transposeKeys"></optgroup>
-          </select>
-          <select id="partChoice" aria-label="Add or remove an instrument"><option value="">Instruments…</option>
-            <optgroup label="Add"><option value="voice">Voice</option><option value="piano">Piano</option><option value="guitar">Guitar</option><option value="bass-guitar">Bass guitar</option><option value="violin">Violin</option><option value="viola">Viola</option><option value="cello">Cello</option><option value="double-bass">Double bass</option><option value="flute">Flute</option><option value="oboe">Oboe</option><option value="clarinet">Clarinet in B♭</option><option value="alto-sax">Alto saxophone</option><option value="tenor-sax">Tenor saxophone</option><option value="baritone-sax">Baritone saxophone</option><option value="trumpet">Trumpet in B♭</option><option value="horn">Horn in F</option><option value="trombone">Trombone</option></optgroup>
-            <option value="remove">Remove this instrument</option>
-          </select>
-          <select id="layoutChoice" aria-label="Change how bars are laid out"><option value="">Layout…</option><option value="break">Line break here</option><option value="0">Fit bars to the page</option><option value="2">2 bars a line</option><option value="3">3 bars a line</option><option value="4">4 bars a line</option><option value="5">5 bars a line</option><option value="6">6 bars a line</option><option value="8">8 bars a line</option></select>
-        </div>
-        <span class="label" id="toolLabel"></span>
-      </div>
-      <div id="barChecks" hidden></div>
-      <details id="keysHelp">
-        <summary>Keyboard shortcuts</summary>
-        <table>
-          <tr><td><kbd>N</kbd></td><td>Start or stop entering notes</td></tr>
-          <tr><td><kbd>A</kbd> to <kbd>G</kbd></td><td>Write that note, then move on</td></tr>
-          <tr><td><kbd>Shift</kbd>+<kbd>A</kbd> to <kbd>G</kbd></td><td>Add that note to the chord just written</td></tr>
-          <tr><td><kbd>1</kbd> to <kbd>7</kbd></td><td>Length, from a 64th to a whole note. <kbd>5</kbd> is a quarter note</td></tr>
-          <tr><td><kbd>.</kbd></td><td>Dotted</td></tr>
-          <tr><td><kbd>0</kbd></td><td>Rest</td></tr>
-          <tr><td><kbd>T</kbd></td><td>Tie to the next note</td></tr>
-          <tr><td><kbd>#</kbd> <kbd>-</kbd> <kbd>=</kbd></td><td>Sharp, flat, natural</td></tr>
-          <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Move a note. With <kbd>Ctrl</kbd>, move an octave</td></tr>
-          <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous or next note</td></tr>
-          <tr><td><kbd>Space</kbd></td><td>Play or stop</td></tr>
-          <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd>, <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Undo, redo</td></tr>
-          <tr><td><kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>Del</kbd></td><td>Make a rest, or remove the beat</td></tr>
-          <tr><td><kbd>Ctrl</kbd>+<kbd>3</kbd></td><td>Make a triplet from the chosen length, then type its notes. <kbd>5</kbd> <kbd>6</kbd> <kbd>7</kbd> make other tuplets</td></tr>
-          <tr><td><kbd>Shift</kbd>+click, <kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>Select a stretch of notes</td></tr>
-          <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd> <kbd>A</kbd></td><td>Copy, cut, paste, select everything on the staff</td></tr>
-          <tr><td><kbd>S</kbd></td><td>Slur a stretch, or this note to the next</td></tr>
-          <tr><td><kbd>&lt;</kbd> <kbd>&gt;</kbd></td><td>Crescendo, diminuendo</td></tr>
-          <tr><td><kbd>Shift</kbd>+<kbd>S</kbd> <kbd>V</kbd> <kbd>N</kbd> <kbd>O</kbd></td><td>Staccato, accent, tenuto, marcato</td></tr>
-          <tr><td><kbd>/</kbd></td><td>Grace note before this note</td></tr>
-          <tr><td><kbd>R</kbd></td><td>Repeat this note or stretch</td></tr>
-          <tr><td><kbd>J</kbd></td><td>Swap for the same note under another name</td></tr>
-          <tr><td><kbd>X</kbd></td><td>Flip the stem</td></tr>
-          <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>1</kbd> to <kbd>4</kbd></td><td>Write in that voice, or move the selection to it</td></tr>
-          <tr><td><kbd>Enter</kbd></td><td>Start a new line at this bar</td></tr>
-          <tr><td>Drag a selected note</td><td>Move it up or down</td></tr>
-          <tr><td>Click a dynamic, slur or text</td><td>Change or remove it</td></tr>
-          <tr><td><kbd>Ctrl</kbd>+<kbd>L</kbd></td><td>Type lyrics. <kbd>Space</kbd> moves on, <kbd>-</kbd> joins syllables, <kbd>↓</kbd> <kbd>↑</kbd> change verse, <kbd>Enter</kbd> finishes</td></tr>
-          <tr><td>Click the staff</td><td>While entering notes, place a note there. <kbd>Shift</kbd>+click adds it to a chord</td></tr>
-        </table>
-      </details>
-      <div id="pagesFrame">
-        <div id="pages"></div>
-        <div id="caret" hidden></div>
-        <div id="ghost" hidden></div>
-        <input id="lyricInput" aria-label="Lyric" hidden autocomplete="off" spellcheck="false">
-      </div>
-    </section>
+    </aside>
   </div>
-</main>
+  <div id="statusBar">
+    <span id="toolLabel"></span>
+    <button id="zoomOut" class="flat" aria-label="Zoom out" title="Zoom out (Ctrl+-)"><span data-icon="zoomOut"></span></button>
+    <button id="zoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+=)"><span data-icon="zoomIn"></span></button>
+    <select id="zoomChoice" aria-label="Zoom"></select>
+  </div>
+</div>
+
 <div id="editor" hidden>
   <input id="chordInput" aria-label="Chord symbol" autocomplete="off" spellcheck="false" placeholder="e.g. Bbmaj7">
   <button id="chordSave" class="primary">Save</button>
   <button id="chordDelete">Remove</button>
   <div id="editorError" hidden></div>
 </div>
-<script>
-const $ = id => document.getElementById(id);
-const UNSURE_BELOW = 0.8;
-let scoreId = null, score = null, selected = null, editing = null;
-let queue = Promise.resolve();
+<div id="playPopup" class="popup" hidden>
+  <label>Tempo <select id="speed" aria-label="Playback speed"><option value="0.5">50%</option><option value="0.75">75%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>
+</div>
 
-// Edits run one at a time, in order. Fast typing would otherwise race its own responses.
-// Edits run one at a time, in the order they were asked for. Anything that changes where the
-// next edit lands, such as a note length or a cursor move, has to wait its turn here too, or a
-// quick typist's choice reaches notes that are still waiting to be sent.
-function enqueue(task) {
-  queue = queue.then(task).catch(error => message(error.message));
-  return queue;
-}
+<dialog id="newDialog" aria-labelledby="newTitle">
+  <form id="blankForm" method="dialog">
+    <h2 id="newTitle">New score</h2>
+    <div class="content" id="newInstruments">
+      <div class="columns" id="newChooser"></div>
+    </div>
+    <div class="content" id="newDetails" hidden>
+      <div class="pair">
+        <label class="field">Key signature<select id="blankKey"></select></label>
+        <label class="field">Time signature<select id="blankTime"><option>2/4</option><option>3/4</option><option selected>4/4</option><option>5/4</option><option>6/4</option><option value="4/4/common">Common time</option><option value="2/2/cut">Cut time</option><option>2/2</option><option>3/2</option><option>3/8</option><option>6/8</option><option>9/8</option><option>12/8</option></select></label>
+      </div>
+      <div class="pair">
+        <label class="field">Tempo, such as Andante 92<input id="blankTempo" maxlength="60" placeholder="None"></label>
+        <label class="field">Measures<input id="blankBars" type="number" min="1" max="1000" value="32"></label>
+      </div>
+      <div class="pair">
+        <label class="field">Pickup measure<select id="blankPickup"><option value="0">None</option><option value="2">An eighth note</option><option value="4">A quarter note</option><option value="8">A half note</option><option value="12">Three quarter notes</option></select></label>
+        <span></span>
+      </div>
+      <div class="pair">
+        <label class="field">Title<input id="blankTitle" maxlength="200"></label>
+        <label class="field">Composer<input id="blankComposer" maxlength="200"></label>
+      </div>
+      <div class="error" id="blankError" role="alert" hidden></div>
+    </div>
+    <div class="buttons">
+      <button type="button" id="blankCancel">Cancel</button>
+      <button type="button" id="blankBack" hidden>Back</button>
+      <button type="button" id="blankNext" disabled>Next</button>
+      <button type="submit" id="blankDone" class="primary" disabled>Done</button>
+    </div>
+  </form>
+</dialog>
 
-function show(view) {
-  $("start").hidden = view !== "start";
-  $("busy").hidden = view !== "busy";
-  $("workspace").hidden = view !== "workspace";
-  for (const id of ["play", "speed", "undo", "redo", "checked", "xml", "midi", "audio", "pdf", "again"]) $(id).hidden = view !== "workspace";
-  if (view === "workspace") {
-    $("checked").hidden = score.blank;
-    $("original").hidden = score.blank;
-    $("workspace").classList.toggle("solo", score.blank);
-  }
-  if (view === "start") { stopPlaying(); setInput(false); drawHistory(); }
-}
+<dialog id="partDialog" aria-labelledby="partTitle">
+  <form method="dialog">
+    <h2 id="partTitle">Instruments</h2>
+    <div class="content"><div class="columns" id="partChooser"></div></div>
+    <div class="buttons"><button type="button" data-close>Cancel</button><button type="submit" id="partOk" class="primary" disabled>OK</button></div>
+  </form>
+</dialog>
 
-async function drawHistory() {
-  const response = await fetch("/api/scores");
-  if (!response.ok) return;
-  const sheets = await response.json();
-  $("history").hidden = sheets.length === 0;
-  $("historyList").replaceChildren(...sheets.map(sheet => {
-    const link = document.createElement("a");
-    link.href = `#${sheet.id}`;
-    link.addEventListener("click", event => { event.preventDefault(); location.hash = sheet.id; scoreId = sheet.id; poll(); });
-    const title = document.createElement("span");
-    const when = new Date(sheet.saved * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
-    title.textContent = sheet.title ? `${sheet.title}, ${when}` : sheet.blank ? `${when}, written from scratch` : `${when}, ${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.chords} ${sheet.chords === 1 ? "chord" : "chords"}`;
-    const state = document.createElement("span");
-    state.className = "state";
-    state.textContent = sheet.blank ? "" : sheet.checked ? "Checked" : "Not checked";
-    link.append(title, state);
-    return link;
-  }));
-}
+<dialog id="partsDialog" aria-labelledby="partsTitle">
+  <form method="dialog">
+    <h2 id="partsTitle">Parts</h2>
+    <div class="content"><ul class="pickList" id="partsList" role="listbox" aria-label="Parts"></ul></div>
+    <div class="buttons"><button type="button" data-close>Close</button><button type="submit" id="partsOpen" class="primary">Open selected</button></div>
+  </form>
+</dialog>
 
-function message(text) {
-  $("message").textContent = text || "";
-  $("message").hidden = !text;
-}
+<dialog id="projectDialog" aria-labelledby="projectTitle">
+  <form method="dialog">
+    <h2 id="projectTitle">Project properties</h2>
+    <div class="content">
+      <label class="field">Work title<input id="titleInput" maxlength="200"></label>
+      <label class="field">Composer<input id="composerInput" maxlength="200"></label>
+    </div>
+    <div class="buttons"><button type="button" data-close>Cancel</button><button type="submit" class="primary">OK</button></div>
+  </form>
+</dialog>
 
-async function upload(file) {
-  if (!file) return;
-  message("");
-  show("busy");
-  const body = new FormData();
-  body.append("file", file);
-  const response = await fetch("/api/scores", { method: "POST", body });
-  const data = await response.json();
-  if (!response.ok) { show("start"); message(data.detail); return; }
-  scoreId = data.id;
-  location.hash = scoreId;
-  poll();
-}
+<dialog id="transposeDialog" aria-labelledby="transposeTitle">
+  <form method="dialog">
+    <h2 id="transposeTitle">Transpose</h2>
+    <div class="content">
+      <div class="note" id="transposeWhat"></div>
+      <fieldset>
+        <label><input type="radio" name="transposeMode" value="key" checked> To key <select id="transposeKey"></select></label>
+        <label><input type="radio" name="transposeMode" value="interval"> By interval <select id="transposeInterval">
+          <option value="m2">Minor second</option><option value="M2">Major second</option><option value="m3">Minor third</option><option value="M3">Major third</option><option value="P4">Perfect fourth</option><option value="A4">Augmented fourth</option><option value="P5">Perfect fifth</option><option value="m6">Minor sixth</option><option value="M6">Major sixth</option><option value="m7">Minor seventh</option><option value="M7">Major seventh</option><option value="P8">Perfect octave</option>
+        </select></label>
+        <label><span>Direction</span> <select id="transposeDirection"><option value="up">Up</option><option value="down">Down</option></select></label>
+      </fieldset>
+      <div class="error" id="transposeError" role="alert" hidden></div>
+    </div>
+    <div class="buttons"><button type="button" data-close>Cancel</button><button type="submit" class="primary">OK</button></div>
+  </form>
+</dialog>
 
-async function poll() {
-  const response = await fetch(`/api/scores/${scoreId}`);
-  if (!response.ok) { show("start"); return; }
-  const data = await response.json();
-  if (data.status === "processing") {
-    $("busyText").textContent = data.message || "Reading your sheet. This usually takes under a minute.";
-    show("busy");
-    setTimeout(poll, 1500);
-    return;
-  }
-  if (data.status === "failed") { show("start"); message(data.message); return; }
-  message(data.message);
-  score = data;
-  drawOriginals();
-  $("xml").href = `/api/scores/${scoreId}/score.musicxml`;
-  $("midi").href = `/api/scores/${scoreId}/score.mid`;
-  $("pdf").href = `/api/scores/${scoreId}/score.pdf`;
-  show("workspace");
-  draw();
-}
+<dialog id="breaksDialog" aria-labelledby="breaksTitle">
+  <form method="dialog">
+    <h2 id="breaksTitle">Add/remove system breaks</h2>
+    <div class="content">
+      <fieldset>
+        <label><input type="radio" name="breaksMode" value="every" checked> Break systems every <input id="breaksCount" type="number" min="1" max="16" value="4" style="width: 70px"> measures</label>
+        <label><input type="radio" name="breaksMode" value="fit"> Fit the measures to the page</label>
+      </fieldset>
+    </div>
+    <div class="buttons"><button type="button" data-close>Cancel</button><button type="submit" class="primary">OK</button></div>
+  </form>
+</dialog>
 
-function draw() {
-  $("pages").innerHTML = score.pages.join("");
-  $("undo").disabled = !score.canUndo;
-  $("redo").disabled = !score.canRedo;
-  $("checked").textContent = score.checked ? "Checked ✓" : "Mark as checked";
-  $("checked").classList.toggle("done", score.checked);
-  const shown = [...document.querySelectorAll("#pages g.harm")];
-  score.chords.forEach((chord, index) => {
-    const element = shown[index];
-    if (!element) return;
-    element.dataset.index = index;
-    if (chord.confidence !== null && chord.confidence < UNSURE_BELOW) element.classList.add("unsure");
-  });
-  tagMarks();
-  drawParts();
-  drawBoxes();
-  drawChecks();
-  drawBarChecks();
-  drawTitle();
-  if (selected) {
-    const element = document.getElementById(selected);
-    if (element) element.classList.add("selected"); else selected = null;
-  }
-  drawRange();
-  drawCursor();
-  updateTools();
-}
+<dialog id="keysDialog" aria-labelledby="keysTitle">
+  <form method="dialog">
+    <h2 id="keysTitle">Keyboard shortcuts</h2>
+    <div class="content"><table id="keysTable"></table></div>
+    <div class="buttons"><button type="submit" class="primary">Close</button></div>
+  </form>
+</dialog>
 
-function drawOriginals() {
-  $("images").replaceChildren(...score.sourcePages.map(number => {
-    const frame = document.createElement("div");
-    frame.className = "imageBox";
-    frame.dataset.page = number;
-    const image = new Image();
-    image.alt = `Page ${number} of your sheet`;
-    image.addEventListener("load", drawBoxes);
-    image.src = `/api/scores/${scoreId}/source/${number}.jpg`;
-    frame.append(image);
-    return frame;
-  }));
-}
+<dialog id="aboutDialog" aria-labelledby="aboutTitle">
+  <form method="dialog">
+    <h2 id="aboutTitle">About xrnsheet</h2>
+    <div class="content" style="max-width: 460px">
+      <div>xrnsheet reads a photo or PDF of sheet music into a score you can edit, play and print.</div>
+      <div>Its window, shortcuts and page layout follow MuseScore Studio, so what you know from there works here. It is a separate program and shares no code with it.</div>
+      <div>Pages are engraved by Verovio in the Leland music font (SIL Open Font Licence).</div>
+    </div>
+    <div class="buttons"><button type="submit" class="primary">Close</button></div>
+  </form>
+</dialog>
 
-function drawBoxes() {
-  document.querySelectorAll(".box").forEach(box => box.remove());
-  for (const chord of score.chords) {
-    if (!chord.box) continue;
-    const frame = document.querySelector(`.imageBox[data-page="${chord.page}"]`);
-    const image = frame?.querySelector("img");
-    if (!image?.naturalWidth) continue;
-    const [left, top, right, bottom] = chord.box;
-    const box = document.createElement("div");
-    box.className = "box" + (chord.confidence !== null && chord.confidence < UNSURE_BELOW ? " unsure" : "");
-    box.dataset.index = chord.index;
-    box.style.left = `${left / image.naturalWidth * 100}%`;
-    box.style.top = `${top / image.naturalHeight * 100}%`;
-    box.style.width = `${(right - left) / image.naturalWidth * 100}%`;
-    box.style.height = `${(bottom - top) / image.naturalHeight * 100}%`;
-    frame.append(box);
-  }
-}
-
-function drawChecks() {
-  document.querySelectorAll(".chip").forEach(chip => chip.remove());
-  const unsure = score.chords.filter(chord => chord.confidence !== null && chord.confidence < UNSURE_BELOW);
-  $("checks").hidden = unsure.length === 0;
-  for (const chord of unsure) {
-    const chip = document.createElement("button");
-    chip.className = "chip";
-    chip.textContent = chord.text;
-    chip.addEventListener("click", () => {
-      const element = document.querySelector(`#pages g.harm[data-index="${chord.index}"]`);
-      if (element) openEditor(element.getBoundingClientRect(), chord.index, chord.text);
-    });
-    $("checks").append(chip);
-  }
-}
-
-function select(id) {
-  document.querySelectorAll("#pages g.selected").forEach(element => element.classList.remove("selected"));
-  range = null;
-  selected = id;
-  if (id) document.getElementById(id)?.classList.add("selected");
-  updateTools();
-}
-
-async function send(path, body) {
-  const response = await fetch(`/api/scores/${scoreId}/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "That edit didn't work.");
-  const before = editor.cursor;
-  receive(data);
-  if (editor.on && path !== "undo" && path !== "redo") {
-    editor.trail.push({ before, after: editor.cursor });
-    editor.future = [];
-  }
-  return data;
-}
-
-async function applyToNote(action, extra = {}) {
-  if (range && GROUP_ACTIONS.has(action)) {
-    await send("group", { action, notes: range.ids });
-    return;
-  }
-  const id = actionTarget();
-  if (id) await send(`notes/${id}`, { action, type: editor.type, dots: editor.dots, ...extra });
-}
-
-function noteAction(action, extra = {}) {
-  return enqueue(() => applyToNote(action, extra));
-}
-
-function openEditor(rect, index, text, noteId = null) {
-  editing = { index, noteId };
-  document.querySelectorAll(".box.active").forEach(box => box.classList.remove("active"));
-  const active = document.querySelector(`.box[data-index="${index}"]`);
-  active?.classList.add("active");
-  active?.scrollIntoView({ block: "nearest" });
-  $("editor").hidden = false;
-  $("editorError").hidden = true;
-  $("chordDelete").hidden = index === null;
-  $("chordInput").hidden = $("chordSave").hidden = false;
-  $("chordInput").placeholder = "e.g. Bbmaj7";
-  const width = $("editor").offsetWidth;
-  $("editor").style.left = `${Math.max(8, Math.min(rect.left + scrollX, innerWidth - width - 8))}px`;
-  $("editor").style.top = `${rect.bottom + scrollY + 6}px`;
-  $("chordInput").value = text;
-  $("chordInput").focus();
-  $("chordInput").select();
-}
-
-function closeEditor() {
-  editing = null;
-  $("editor").hidden = true;
-  document.querySelectorAll(".box.active").forEach(box => box.classList.remove("active"));
-}
-
-async function saveChord(text) {
-  if (!editing) return;
-  try {
-    if (editing.mark) await send("marks", { action: "label", id: editing.mark, text });
-    else if (editing.newMark) await send("marks", { ...editing.newMark, text });
-    else if (editing.index === null) await send("chords", { note: editing.noteId, text });
-    else await send(`chords/${editing.index}`, { text });
-    closeEditor();
-  } catch (error) {
-    $("editorError").textContent = error.message;
-    $("editorError").hidden = false;
-  }
-}
-
-// Noteheads are tiny and staff lines can sit on top of them, so a near miss still counts.
-function nearest(selector, x, y, reach) {
-  let best = null, bestDistance = reach;
-  for (const element of document.querySelectorAll(selector)) {
-    const box = headBox(element);
-    const dx = Math.max(box.left - x, 0, x - box.right);
-    const dy = Math.max(box.top - y, 0, y - box.bottom);
-    const distance = Math.hypot(dx, dy);
-    if (distance < bestDistance) { best = element; bestDistance = distance; }
-  }
-  return best;
-}
-
-$("pages").addEventListener("click", event => {
-  if (dragged) { dragged = false; return; }
-  if (editor.on) {
-    const spot = placeUnder(event.clientX, event.clientY);
-    closeEditor();
-    if (spot) placeNote(spot, event.shiftKey);
-    return;
-  }
-  const mark = markAt(event);
-  if (mark) { openMark(mark); return; }
-  const chord = event.target.closest("g.harm") || nearest("#pages g.harm", event.clientX, event.clientY, 6);
-  if (chord && chord.dataset.index !== undefined) {
-    const index = Number(chord.dataset.index);
-    openEditor(chord.getBoundingClientRect(), index, score.chords[index].text);
-    return;
-  }
-  const note = event.target.closest("g.note, g.rest, g.mRest") || nearest("#pages g.note, #pages g.rest, #pages g.mRest", event.clientX, event.clientY, 14);
-  closeEditor();
-  enqueue(async () => {
-    if (event.shiftKey && note && selected) await growRange(note.id); else select(note ? note.id : null);
-  });
-});
-
-document.querySelectorAll("#tools button[data-action]").forEach(button => {
-  button.addEventListener("click", () => noteAction(button.dataset.action));
-});
-
-$("addChord").addEventListener("click", () => enqueue(async () => {
-  const id = actionTarget();
-  const note = id && document.getElementById(id);
-  if (note) openEditor(headBox(note), null, "", id);
-}));
-// The text is read now and saved in turn, as a reply that's on its way can redraw the box.
-const saveInTurn = text => enqueue(() => saveChord(text));
-$("chordSave").addEventListener("click", () => saveInTurn($("chordInput").value));
-$("chordDelete").addEventListener("click", () => saveInTurn(""));
-$("chordInput").addEventListener("keydown", event => {
-  if (event.key === "Enter") saveInTurn(event.target.value);
-  if (event.key === "Escape") closeEditor();
-});
-
-$("undo").addEventListener("click", () => undoEdit());
-$("checked").addEventListener("click", () => enqueue(() => send("checked", { checked: !score.checked })));
-$("again").addEventListener("click", () => { history.replaceState(null, "", " "); scoreId = null; selected = null; message(""); show("start"); });
-$("file").addEventListener("change", event => upload(event.target.files[0]));
-$("camera").addEventListener("change", event => upload(event.target.files[0]));
-
-const drop = $("drop");
-for (const name of ["dragenter", "dragover"]) drop.addEventListener(name, event => { event.preventDefault(); drop.classList.add("over"); });
-for (const name of ["dragleave", "drop"]) drop.addEventListener(name, event => { event.preventDefault(); drop.classList.remove("over"); });
-drop.addEventListener("drop", event => upload(event.dataTransfer.files[0]));
-document.querySelectorAll("label.button").forEach(label => {
-  label.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); } });
-});
-</script>
+<script src="glyphs.js"></script>
+<script src="page.js"></script>
+<script src="palettes.js"></script>
+<script src="shell.js"></script>
 <script src="editor.js"></script>
 </body>
 </html>
