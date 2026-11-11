@@ -394,6 +394,26 @@ def test_music_a_file_puts_before_its_own_start_still_gives_a_midi_file(opening)
     assert [event.pitch for event in found.tracks[1].events if event.isNoteOn()] == [60, 62]
 
 
+def events_named(track, name):
+    return [event for event in track.events if event.type == name or getattr(event.type, "name", "") == name]
+
+
+def test_a_tempo_slower_than_a_midi_file_can_hold_is_written_as_its_slowest():
+    """An eighth note at 10 is 5 quarter notes a minute, and a fermata holds its note at half of that."""
+    root = blank()
+    ids, _ = melody(root, "C", "D")
+    marks.set_tempo(root, ids[0], "10", "eighth")
+    marks.toggle_mark(root, [ids[0]], "fermata")
+    found = midi_notes(midi_bytes(playback(root)))
+    assert [int.from_bytes(event.data, "big") for event in events_named(found.tracks[0], "SET_TEMPO")] == [0xFFFFFF, 12_000_000]
+
+
+def test_a_tempo_of_nothing_is_left_out_of_a_midi_file():
+    tempos = [{"start": 0.0, "bpm": 0.0}, {"start": 1.0, "bpm": 120.0}]
+    found = midi_notes(midi_bytes({"tempos": tempos, "programs": [1], "chords": [], "notes": []}))
+    assert [int.from_bytes(event.data, "big") for event in events_named(found.tracks[0], "SET_TEMPO")] == [500000]
+
+
 def test_drums_channel_is_skipped():
     assert 9 not in [channel_of(part) for part in range(30)]
     assert all(0 <= channel_of(part) <= 15 for part in range(30))

@@ -9,6 +9,7 @@ CHORD_VELOCITY = 50
 MOST_CHANNELS = 16
 DRUM_CHANNEL = 9  # General MIDI keeps this channel for drums, so it's skipped.
 HIGHEST_NOTE = 127  # A note number has seven bits, because a set top bit starts the next event.
+LONGEST_BEAT = 0xFFFFFF  # A tempo is the microseconds a quarter note lasts, in three bytes: 3.6 a minute at the slowest.
 
 
 def variable_length(value: int) -> bytes:
@@ -63,7 +64,9 @@ def midi_bytes(data: dict) -> bytes:
     """Turn what playback returns into the bytes of a MIDI file."""
     tempo_events = []
     for change in data["tempos"]:
-        microseconds = round(60_000_000 / change["bpm"])
+        if not change["bpm"] > 0:
+            continue  # No speed at all, which only a file from elsewhere can ask for.
+        microseconds = min(max(round(60_000_000 / change["bpm"]), 1), LONGEST_BEAT)
         tempo_events.append((ticks(change["start"]), 0, b"\xff\x51\x03" + microseconds.to_bytes(3, "big")))
     tracks = [track(tempo_events)]
     programs = data.get("programs") or [1]
