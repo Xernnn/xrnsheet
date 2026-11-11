@@ -127,8 +127,7 @@ function updateTools() {
   $("caret").dataset.voice = editor.voice;
   const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
   const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
-  const editable = mark?.text && mark.kind !== "jump" && mark.kind !== "repeat-sign";
-  const chosen = mark ? `${MARK_NAMES[mark.kind] ?? "Mark"}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${editable ? ", or double-click to change it" : ""}.` : selection;
+  const chosen = mark ? `${MARK_NAMES[mark.kind] ?? "Mark"}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : selection;
   $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : chosen);
   hint = "";
   drawProperties();
@@ -401,6 +400,11 @@ function deleteBars() {
   });
 }
 
+// A mark with words can be retyped. A jump's words are fixed, and a sign, slur or hairpin has none.
+function markEditable(mark) {
+  return Boolean(mark?.text) && mark.kind !== "jump" && mark.kind !== "repeat-sign";
+}
+
 function selectMark(element) {
   const id = markIdOf(element);
   if (!score.marks.some(item => item.id === id)) return;
@@ -480,6 +484,50 @@ function scaleLength(longer, byDot) {
     editor.type = LENGTHS[index].type;
     editor.dots = dots;
     updateTools();
+  });
+}
+
+// What a right-click offers: the menus' own actions for whatever is under the pointer.
+function contextItems() {
+  const mark = selectedMark && score.marks.find(item => item.id === selectedMark);
+  if (mark) {
+    return [
+      { label: "Edit text", keys: "F2", enabled: markEditable(mark), run: openSelectedMark },
+      { label: "Delete", keys: "Del", run: removeMark },
+    ];
+  }
+  if (!actionTarget()) {
+    return [...menuItems("File", "Project properties…"), ...menuItems("Format", "Add/remove system breaks…"), null, ...menuItems("View", "Zoom in", "Zoom out")];
+  }
+  return [
+    ...menuItems("Edit", "Cut", "Copy", "Paste", "Delete"),
+    null,
+    ...addItems(),
+    null,
+    ...menuItems("Tools", "Voices", "Respell pitches", "Repeat selection"),
+    null,
+    ...menuItems("Edit", "Delete selected measures"),
+    ...menuItems("Tools", "Remove selected range"),
+  ];
+}
+
+// A right-click selects what it's on, unless that's already part of the selection, and opens its menu.
+function openContextMenu(event) {
+  if (publishing) return;
+  event.preventDefault();
+  closeEditor();
+  closeMenus();
+  if (editor.on) return;
+  const x = event.clientX, y = event.clientY;
+  const mark = markAt(event);
+  const note = mark ? null : event.target.closest(EVENTS) || nearest("#pages g.note, #pages g.rest, #pages g.mRest", x, y, 14);
+  const staff = mark || note ? null : staffUnder(x, y);
+  enqueue(async () => {
+    if (mark) selectMark(mark);
+    else if (note) { if (note.id !== selected && !range?.ids.includes(note.id)) select(note.id); }
+    else if (staff) { if (![...staff.querySelectorAll(EVENTS)].some(element => range?.ids.includes(element.id))) await selectMeasure(staff, false); }
+    else select(null);
+    openMenuAt(x, y, contextItems());
   });
 }
 
@@ -789,7 +837,7 @@ function markAt(event) {
 }
 
 function startDrag(event) {
-  if (editor.on || event.shiftKey) return;
+  if (event.button !== 0 || editor.on || event.shiftKey) return;
   const note = event.target.closest("g.note");
   if (!note || note.id !== selected) return;
   const staff = note.closest("g.staff");
@@ -1035,6 +1083,7 @@ function setUpToolbar() {
   $("pages").addEventListener("pointerdown", startDrag);
   window.addEventListener("pointermove", moveDrag);
   window.addEventListener("pointerup", endDrag);
+  $("desk").addEventListener("contextmenu", openContextMenu);
   $("desk").addEventListener("pointerdown", startPan);
   window.addEventListener("pointermove", movePan);
   window.addEventListener("pointerup", endPan);
@@ -1118,7 +1167,9 @@ const PANEL_KEYS = { F9: "palettes", F7: "instruments", F8: "properties" };
 document.addEventListener("keydown", event => {
   const key = event.key;
   if (key === "Escape" && openMenus.length) { closeMenus(); return; }
-  if (["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName) || $("workspace").hidden || publishing || document.querySelector("dialog[open]")) return;
+  // A field keeps the focus for a moment after its dialog or box has closed. It isn't being typed in then.
+  const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName) && event.target.getClientRects().length > 0;
+  if (typing || $("workspace").hidden || publishing || document.querySelector("dialog[open]")) return;
   if (event.ctrlKey || event.metaKey) { handleControlKey(event); return; }
   const handled = () => event.preventDefault();
   // A button someone has tabbed to is pressed by Space, so it mustn't also start playing.

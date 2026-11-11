@@ -74,6 +74,7 @@ const SHORTCUTS = [
   ["Click a dynamic, slur or text", "Select it. Del removes it, and a double-click or F2 changes it"],
   ["Double-click the title", "Change the title and composer"],
   ["Ctrl+wheel, drag the desk", "Zoom, and move the pages about"],
+  ["Right-click", "A menu for the note, measure or mark under the pointer"],
   ["Click the staff", "In note input, place a note there. Shift+click adds it to a chord"],
 ];
 let openMenus = [];
@@ -163,6 +164,18 @@ function openMenu(owner, items, beside = false) {
   owner.setAttribute("aria-expanded", "true");
   openMenus.push({ element: menu, owner });
   return menu;
+}
+
+// Open a menu at a point, as a right-click does.
+function openMenuAt(x, y, items) {
+  const point = { getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y - 2 }), setAttribute() {}, contains: () => false, parentElement: null };
+  return openMenu(point, items);
+}
+
+// Items of a menu-bar menu by their labels, so another menu offers the very same actions.
+function menuItems(menu, ...labels) {
+  const items = menuList().find(item => item.label === menu).items;
+  return labels.map(label => items.find(item => item?.label === label));
 }
 
 function addItems() {
@@ -553,7 +566,7 @@ function drawProperties() {
   $("propMark").hidden = !mark;
   if (mark) {
     $("propMarkKind").textContent = MARK_NAMES[mark.kind] ?? "Mark";
-    $("markEdit").hidden = !mark.text || mark.kind === "jump" || mark.kind === "repeat-sign";
+    $("markEdit").hidden = !markEditable(mark);
   }
   $("propScore").hidden = Boolean(element) || Boolean(mark);
   $("propNote").hidden = $("propBeats").hidden = !element;
@@ -598,6 +611,11 @@ function setUpShell() {
     const names = [...partChooser.picked];
     enqueue(() => send("parts", { action: "add", names }));
   });
+  // A dialog opened from a menu has nothing to hand the focus back to, since the menu has gone. Its
+  // field would keep it after closing and swallow every key meant for the score.
+  document.querySelectorAll("dialog").forEach(dialog => dialog.addEventListener("close", () => {
+    if (dialog.contains(document.activeElement)) document.activeElement.blur();
+  }));
   $("projectOpen").addEventListener("click", openProject);
   $("markEdit").addEventListener("click", openSelectedMark);
   $("markDelete").addEventListener("click", removeMark);

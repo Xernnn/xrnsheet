@@ -939,6 +939,96 @@ def test_barlines(page, base: str, shots: Path | None, created: list[str]) -> No
     check("nothing selected, a barline cell can't be chosen", page.is_disabled('#paletteTree [data-cell="barline:double"]'))
 
 
+def right_click(page, x: float, y: float) -> list[str]:
+    """Right-click a point and return what the menu that opens offers."""
+    page.mouse.click(x, y, button="right")
+    settle(page)
+    return page.evaluate("""() => [...document.querySelectorAll(".menu")].at(-1)
+        ? [...[...document.querySelectorAll(".menu")].at(-1).querySelectorAll("button")].map(button => button.querySelector("span").textContent) : []""")
+
+
+def pick(page, label: str) -> None:
+    page.locator(".menu").last.locator(f'button:has(span:text-is("{label}"))').click()
+    settle(page)
+
+
+def centre_of(page, selector: str, index: int = 0) -> tuple[float, float]:
+    box = page.evaluate("""([selector, index]) => {
+        const found = document.querySelectorAll(selector)[index];
+        const box = found.matches("g.note") ? headBox(found) : found.getBoundingClientRect();
+        return [(box.left + box.right) / 2, (box.top + box.bottom) / 2];
+    }""", [selector, index])
+    return box[0], box[1]
+
+
+def test_context_menu(page, base: str, created: list[str]) -> None:
+    score_id = written_melody(page, base, created)
+    tune = pitched(read_notes(base, score_id))
+    ids = page.evaluate("() => [...document.querySelectorAll('#pages g.note')].map(note => note.id)")
+    measures = lambda: len(saved_score(base, score_id).find("part").findall("measure"))
+
+    offered = right_click(page, *centre_of(page, "#pages g.note", 1))
+    check("right-clicking a note selects it", page.evaluate("() => selected") == ids[1])
+    check("and opens a menu with the Edit menu's actions", offered[:4] == ["Cut", "Copy", "Paste", "Delete"] and "Delete selected measures" in offered and "Remove selected range" in offered, offered)
+    check("and the Add menu's", all(label in offered for label in ["Notes", "Tuplets", "Measures", "Text", "Lines"]), offered)
+    press(page, "Escape")
+    check("Escape closes it", page.locator(".menu").count() == 0)
+    right_click(page, *centre_of(page, "#pages g.note", 1))
+    pick(page, "Delete")
+    check("Delete from the menu turns the note into a rest", pitched(read_notes(base, score_id)) == [tune[0], *tune[2:]] and page.locator(".menu").count() == 0)
+    press(page, "Control+z")
+    check("which undo reverses", pitched(read_notes(base, score_id)) == tune)
+
+    select_notes(page, 0, 1)
+    right_click(page, *centre_of(page, "#pages g.note", 1))
+    check("right-clicking inside a selected stretch keeps the stretch", page.evaluate("() => range?.ids.length") == 2)
+    pick(page, "Copy")
+    right_click(page, *centre_of(page, "#pages g.note", 6))
+    check("right-clicking outside it selects the note clicked", page.evaluate("() => selected") == ids[6] and page.evaluate("() => range") is None)
+    pick(page, "Paste")
+    check("Copy and Paste from the menu work as the keys do", pitched(read_notes(base, score_id)) == [*tune[:6], tune[0], tune[1]], pitched(read_notes(base, score_id)))
+    press(page, "Control+z")
+
+    right_click(page, *centre_of(page, "#pages g.note", 2))
+    page.locator(".menu").last.locator('button:has(span:text-is("Text"))').click()
+    pick(page, "Staff text")
+    check("a submenu's action runs from there too", page.is_visible("#editor"))
+    page.fill("#chordInput", "dolce")
+    press(page, "Enter")
+    check("and the text is written", "dolce" in page.inner_text("#pages"))
+    offered = right_click(page, *centre_of(page, "#pages g.dir"))
+    check("right-clicking text selects it and offers to edit or delete it", offered == ["Edit text", "Delete"] and mark_chosen(page).startswith("Text: dolce"), offered)
+    pick(page, "Edit text")
+    check("Edit text opens it", page.is_visible("#editor") and page.input_value("#chordInput") == "dolce")
+    press(page, "Escape")
+    right_click(page, *centre_of(page, "#pages g.dir"))
+    pick(page, "Delete")
+    check("Delete removes it", "dolce" not in page.inner_text("#pages"))
+    press(page, "Control+z")
+    check("and undo brings it back", "dolce" in page.inner_text("#pages"))
+
+    spot = empty_spot(page, 3)
+    offered = right_click(page, spot["x"], spot["y"])
+    check("right-clicking an empty part of a measure selects the measure", page.evaluate("() => range?.ids.length") == 1 and "Delete selected measures" in offered, offered)
+    pick(page, "Delete selected measures")
+    check("and its menu deletes it", measures() == 3)
+    press(page, "Control+z")
+    check("which undo reverses too", measures() == 4)
+
+    paper = page.locator("#pages .page").first.bounding_box()
+    offered = right_click(page, paper["x"] + 30, paper["y"] + paper["height"] / 2)
+    check("right-clicking bare paper offers the score's own things", offered == ["Project properties…", "Add/remove system breaks…", "Zoom in", "Zoom out"] and page.evaluate("() => selected") is None, offered)
+    pick(page, "Project properties…")
+    check("such as its properties", page.is_visible("#projectDialog"))
+    press(page, "Escape")
+
+    press(page, "n")
+    check("keys reach the score again once a dialog opened from a menu has closed", page.evaluate("() => editor.on"))
+    offered = right_click(page, *centre_of(page, "#pages g.note", 3))
+    check("while entering notes a right-click opens no menu and writes nothing", offered == [] and pitched(read_notes(base, score_id)) == tune, offered)
+    press(page, "Escape")
+
+
 def empty_spot(page, measure: int) -> dict:
     """Find a point on a measure's staff that's clear of its notes, with the staff's edges."""
     return page.evaluate("""index => {
@@ -1880,6 +1970,7 @@ def main() -> None:
             test_desk(page, base, created)
             test_time_signs(page, base, arguments.shots, created)
             test_barlines(page, base, arguments.shots, created)
+            test_context_menu(page, base, created)
             test_lyrics(page, base, arguments.shots, created)
             test_titles_and_repeats(page, base, arguments.shots, created)
             test_sound(page, base, created)
