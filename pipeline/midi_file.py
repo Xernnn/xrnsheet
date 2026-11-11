@@ -22,7 +22,12 @@ def variable_length(value: int) -> bytes:
 
 
 def ticks(position: float) -> int:
-    return round(position * TICKS_PER_QUARTER)
+    """Return a moment as a count from the start of the file, which is the earliest there is.
+
+    A score from another program can put a note or a tempo before its own start. A wait can't be
+    less than nothing, and writing one never ended.
+    """
+    return max(round(position * TICKS_PER_QUARTER), 0)
 
 
 def track(events: list[tuple[int, int, bytes]]) -> bytes:

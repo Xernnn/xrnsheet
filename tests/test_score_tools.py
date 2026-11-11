@@ -1,11 +1,13 @@
 """Instruments, tuplets, verses, line breaks, MIDI files, opening files and copying marks."""
 
 import io
+import signal
 import xml.etree.ElementTree as ET
 import zipfile
 from fractions import Fraction
 
 import pytest
+from helpers import note, parsed
 
 from pipeline import edit, engrave, marks, rhythm, structure, transpose
 from pipeline.midi_file import channel_of, midi_bytes, variable_length
@@ -364,6 +366,32 @@ def test_notes_a_midi_file_cannot_hold_are_left_out_of_it():
     notes = [{"start": start, "length": 1, "midi": number, "part": 0} for start, number in enumerate((60, 131, -9))]
     found = midi_notes(midi_bytes({"tempos": [], "programs": [1], "chords": [], "notes": notes}))
     assert [event.pitch for event in found.tracks[1].events if event.isNoteOn()] == [60]
+
+
+def before_giving_up(action, seconds=2):
+    """Run something that once never finished, so it fails its own test and doesn't hold up the rest."""
+
+    def give_up(*_):
+        raise TimeoutError("This was still running.")
+
+    signal.signal(signal.SIGALRM, give_up)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        return action()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, signal.SIG_DFL)
+
+
+@pytest.mark.parametrize("opening", [
+    "<backup><duration>2</duration></backup>",
+    '<direction><direction-type><words>Slow</words></direction-type><offset>-1</offset><sound tempo="90"/></direction>',
+])
+def test_music_a_file_puts_before_its_own_start_still_gives_a_midi_file(opening):
+    """A file from another program can step back past the start of its first bar, or hang a tempo there."""
+    root = parsed(opening + note() + note("D"))
+    found = midi_notes(before_giving_up(lambda: midi_bytes(playback(root))))
+    assert [event.pitch for event in found.tracks[1].events if event.isNoteOn()] == [60, 62]
 
 
 def test_drums_channel_is_skipped():
