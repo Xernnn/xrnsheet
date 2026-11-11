@@ -193,6 +193,7 @@ body.publishing #noteBar, body.publishing #side, body.publishing #pitches, body:
 #pages g.harm:hover text, #pages g.harm.active text { fill: var(--voice1); }
 #pages g[data-mark]:hover text, #pages g[data-mark]:hover tspan { fill: var(--voice1); }
 #pages g.selected text, #pages g.selected tspan { fill: var(--voice1); }
+#pages g.selected g.verse, #pages g.selected g.verse * { fill: var(--notes); stroke: none; }
 #pages g.harm.unsure text { fill: var(--warn); }
 body.inputting #pages { cursor: crosshair; }
 #caret { position: absolute; background: color-mix(in srgb, var(--voice1) 22%, transparent); border-left: 2px solid var(--voice1); pointer-events: none; }
