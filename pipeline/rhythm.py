@@ -11,6 +11,8 @@ Only measures that are edited get rewritten, so the rest of a score stays as it 
 
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from fractions import Fraction
 from math import lcm
@@ -186,6 +188,73 @@ def contexts(part: ET.Element) -> Iterator[Context]:
                 clefs[clef.get("number", "1")] = clef.findtext("sign") or "G"
                 tops[clef.get("number", "1")] = top_line_of(clef)
         yield Context(index, measure, divisions, beats, beat_type, fifths, dict(clefs), staves, dict(tops))
+
+
+@dataclass
+class Index:
+    """Where each note of a score is, found in one pass through it.
+
+    An edit to many notes looks each one up, with its bar and the bars around it, and searching
+    the score every time made an edit to a whole staff take seconds. The index holds while an edit
+    leaves the bars, and what's in force in them, as they were. A note that has left its bar
+    since, or an id that more than one note has, is searched for as before.
+    """
+
+    root: ET.Element
+    notes: dict[str | None, ET.Element]
+    places: dict[ET.Element, tuple[ET.Element, Context]]
+    bars: dict[ET.Element, tuple[int, list[Context]]]  # Each part's size, to tell if bars came or went.
+
+    @classmethod
+    def of(cls, root: ET.Element) -> "Index":
+        index = cls(root, {}, {}, {})
+        shared: set[str | None] = set()
+        for note in root.iter("note"):
+            if index.notes.setdefault(note.get("id"), note) is not note:
+                shared.add(note.get("id"))
+        for note_id in shared:
+            del index.notes[note_id]
+        for part in root.findall("part"):
+            known = list(contexts(part))
+            index.bars[part] = (len(part), known)
+            for context in known:
+                for note in context.measure.iter("note"):
+                    index.places.setdefault(note, (part, context))
+        return index
+
+    def place_of(self, note: ET.Element) -> tuple[ET.Element, Context] | None:
+        """Return a note's part and bar, or None if it may not be where it was."""
+        found = self.places.get(note)
+        if found is None or self.bars[found[0]][0] != len(found[0]) or not any(child is note for child in found[1].measure):
+            return None
+        return found
+
+
+current_index: ContextVar[Index | None] = ContextVar("current_index", default=None)
+
+
+@contextmanager
+def indexed(root: ET.Element) -> Iterator[None]:
+    """Look notes up in an index for the length of an edit to many of them."""
+    token = current_index.set(Index.of(root))
+    try:
+        yield
+    finally:
+        current_index.reset(token)
+
+
+def index_of(root: ET.Element) -> Index | None:
+    index = current_index.get()
+    return index if index is not None and index.root is root else None
+
+
+def part_contexts(part: ET.Element) -> list[Context]:
+    """Return what's in force at each bar of a part, from the index if there is one."""
+    index = current_index.get()
+    found = index.bars.get(part) if index is not None else None
+    if found is not None and found[0] == len(part):
+        return found[1]
+    return list(contexts(part))
 
 
 def fit_divisions(root: ET.Element, also_divides_by: int = 1) -> None:
@@ -654,7 +723,7 @@ def tie_ends(timelines: dict[int, Timeline], number: int, ordered: list[Event], 
 
 def repair_ties(part: ET.Element, index: int) -> None:
     """Remove half-ties around an edited measure, left when the note at one end has gone."""
-    known = list(contexts(part))
+    known = part_contexts(part)
     timelines = {number: read_measure(known[number].measure, known[number].divisions) for number in range(max(index - 2, 0), min(index + 3, len(known)))}
     for number in range(max(index - 1, 0), min(index + 2, len(known))):
         for line in timelines[number].lines.values():

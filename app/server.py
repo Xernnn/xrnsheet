@@ -32,16 +32,16 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.datastructures import Headers
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
 from pipeline import edit, marks, structure, transpose
 from pipeline.engrave import export_pdf, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
-from pipeline.musicxml import read_score_file, to_text
+from pipeline.musicxml import UnreadableScore, read_score_file, to_text
 from pipeline.playback import playback
-from pipeline.rhythm import fit_divisions
+from pipeline.rhythm import fit_divisions, indexed
 
 JOB_DIR = ROOT / "data" / "jobs"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -49,7 +49,12 @@ IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".pdf"
 SCORE_TYPES = {".musicxml", ".xml", ".mxl"}
 ALLOWED_TYPES = IMAGE_TYPES | SCORE_TYPES
 MAX_UPLOAD_BYTES = 40 * 1024 * 1024
+FORM_BYTES = 64 * 1024  # What an upload wraps its file in: the file's name and type, and the form's edges.
+TOO_LARGE = "That file is too large. The limit is 40 MB."
 MAX_PDF_PAGES = 40
+# A PDF page is drawn at 250 dots an inch, but no larger than this on its longest side: a page can
+# say it's 200 inches across, which would take gigabytes. At 250 dots an inch, A3 is about 4,100.
+LONGEST_PDF_PAGE = 5000
 PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
@@ -99,7 +104,42 @@ class OwnPagesOnly:
         await self.inner(scope, receive, send)
 
 
+class SizeLimit:
+    """Refuse a request larger than an upload can be, without taking it in first.
+
+    An upload is saved to disk as it arrives and only then read and measured, so one far over the
+    limit would fill the disk and then the memory before being refused. A request that says it's
+    too large is refused before any of it is read, and one that doesn't say is stopped as soon as
+    it passes the limit.
+    """
+
+    def __init__(self, inner: ASGIApp) -> None:
+        self.inner = inner
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.inner(scope, receive, send)
+            return
+        limit = MAX_UPLOAD_BYTES + FORM_BYTES
+        stated = Headers(scope=scope).get("content-length", "")
+        if stated.isdigit() and int(stated) > limit:
+            await JSONResponse({"detail": TOO_LARGE}, status_code=413)(scope, receive, send)
+            return
+        taken = 0
+
+        async def receive_within_limit() -> Message:
+            nonlocal taken
+            message = await receive()
+            taken += len(message.get("body", b""))
+            if taken > limit:
+                raise HTTPException(413, TOO_LARGE)
+            return message
+
+        await self.inner(scope, receive_within_limit, send)
+
+
 app = FastAPI(title="xrnsheet", lifespan=lifespan)
+app.add_middleware(SizeLimit)
 app.add_middleware(OwnPagesOnly)
 one_at_a_time = threading.Semaphore(1)  # Recognition is memory hungry.
 # The page being read now, and whether the app is stopping, so that the page can stop with it.
@@ -281,7 +321,8 @@ def versions(folder: Path) -> list[Path]:
 
 
 def current_root(folder: Path) -> ET.Element:
-    return ET.parse(versions(folder)[-1]).getroot()
+    with edit_lock:  # An undo moves the latest version away, so it can't land between finding it and reading it.
+        return ET.parse(versions(folder)[-1]).getroot()
 
 
 def undone(folder: Path) -> list[Path]:
@@ -304,7 +345,9 @@ def pdf_to_images(path: Path) -> tuple[list[Path], str]:
     images = []
     for index in range(min(len(document), MAX_PDF_PAGES)):
         image_path = folder / f"page_{index + 1:03d}.png"
-        document[index].render(scale=250 / 72).to_pil().convert("RGB").save(image_path)
+        page = document[index]
+        scale = min(250 / 72, LONGEST_PDF_PAGE / max(*page.get_size(), 1))  # A PDF counts 72 points an inch.
+        page.render(scale=scale).to_pil().convert("RGB").save(image_path)
         images.append(image_path)
     note = f"Only the first {MAX_PDF_PAGES} of {len(document)} pages were read." if len(document) > MAX_PDF_PAGES else ""
     document.close()
@@ -318,7 +361,10 @@ def recognize_page(image: Path, out_dir: Path) -> str | None:
     """
     command = [sys.executable, "-m", "pipeline.recognize", str(image), "--out", str(out_dir), "--notes", os.environ.get("XRNSHEET_NOTES", "homr")]
     if shutil.which("systemd-run"):
-        command = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={MEMORY_LIMIT}", *command]
+        # The app stops a page that takes too long, but if the app is killed outright nothing would,
+        # so the system ends it a minute after the app would have.
+        limits = ["-p", f"MemoryMax={MEMORY_LIMIT}", "-p", f"RuntimeMaxSec={PAGE_TIMEOUT_SECONDS + 60}"]
+        command = ["systemd-run", "--user", "--scope", "-q", *limits, *command]
     with reading_lock:  # So that a page can't start just as the app stops, and be missed.
         if stopping.is_set():
             return INTERRUPTED
@@ -405,7 +451,7 @@ async def create_score(file: UploadFile) -> dict:
         raise HTTPException(415, "Please upload a photo, a PDF or a MusicXML file.")
     data = await file.read()
     if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "That file is too large. The limit is 40 MB.")
+        raise HTTPException(413, TOO_LARGE)
     if suffix in SCORE_TYPES:
         return open_score_file(data, suffix)
     if suffix != ".pdf" and cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE) is None:
@@ -431,7 +477,7 @@ def open_score_file(data: bytes, suffix: str) -> dict:
         playback(root)
         render_pages(to_text(root))
     except (ValueError, TypeError, AttributeError, ZeroDivisionError) as error:
-        message = str(error) if isinstance(error, ValueError) and "MusicXML" in str(error) else "That score couldn't be opened."
+        message = str(error) if isinstance(error, UnreadableScore) else "That score couldn't be opened."
         raise HTTPException(415, message) from error
     score_id = uuid.uuid4().hex
     folder = JOB_DIR / score_id
@@ -628,14 +674,15 @@ def change_group(score_id: str, body: GroupEdit) -> dict:
 
     def change(root: ET.Element) -> None:
         done = 0
-        # Respelling a note respells the notes tied to it, so a second one of those would undo it.
-        chosen = edit.one_note_per_tie(root, body.notes) if body.action == "respell" else body.notes
-        for note_id in chosen:
-            try:
-                GROUP_ACTIONS[body.action](root, note_id)
-                done += 1
-            except edit.EditError:
-                pass  # Rests can't move, and most notes have no marks. The rest of the selection can.
+        with indexed(root):  # Every chosen note is looked up, so they are found in one pass, not one search each.
+            # Respelling a note respells the notes tied to it, so a second one of those would undo it.
+            chosen = edit.one_note_per_tie(root, body.notes) if body.action == "respell" else body.notes
+            for note_id in chosen:
+                try:
+                    GROUP_ACTIONS[body.action](root, note_id)
+                    done += 1
+                except edit.EditError:
+                    pass  # Rests can't move, and most notes have no marks. The rest of the selection can.
         if not done:
             raise edit.EditError("That doesn't apply to anything selected.")
 

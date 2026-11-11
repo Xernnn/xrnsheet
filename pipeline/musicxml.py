@@ -57,6 +57,10 @@ PAGE_BREAKS = re.compile("[\x0b\x0c]")
 NOT_XML = re.compile("[\x00-\x08\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 
 
+class UnreadableScore(ValueError):
+    """A score file this app can't open, with the reason to give the person who chose it."""
+
+
 @dataclass
 class Event:
     onset: float
@@ -90,7 +94,7 @@ def unpacked(archive: zipfile.ZipFile, name: str) -> bytes:
     with archive.open(name) as file:
         data = file.read(MOST_UNPACKED_BYTES + 1)
     if len(data) > MOST_UNPACKED_BYTES:
-        raise ValueError("That file is too large.")
+        raise UnreadableScore("That file is too large.")
     return data
 
 
@@ -104,9 +108,9 @@ def read_score_file(data: bytes, suffix: str) -> ET.Element:
                 data = unpacked(archive, name)
         root = ET.fromstring(data)
     except (ET.ParseError, zipfile.BadZipFile, KeyError, StopIteration) as error:
-        raise ValueError("That file couldn't be read as MusicXML.") from error
+        raise UnreadableScore("That file couldn't be read as MusicXML.") from error
     if root.tag != "score-partwise" or root.find("part") is None:
-        raise ValueError("Only MusicXML scores written part by part can be opened.")
+        raise UnreadableScore("Only MusicXML scores written part by part can be opened.")
     return root
 
 

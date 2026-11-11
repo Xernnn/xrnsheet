@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import os
@@ -5,6 +6,7 @@ import signal
 import threading
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -13,6 +15,7 @@ from helpers import harmony, note, parsed, tied_note
 from PIL import Image
 
 from app import server
+from pipeline import rhythm
 from pipeline.musicxml import to_text
 
 
@@ -774,3 +777,217 @@ def test_a_sheet_whose_reading_was_stopped_is_left_for_the_next_start_to_report(
     folder, upload = job_for_pdf(3)
     server.recognize_job(folder, upload)
     assert tried == ["page_001", "page_002"] and server.read_status(folder)["status"] == "processing"
+
+
+def long_score(name):
+    """A ready score of twelve bars of four notes, saved straight to disk, with its note ids."""
+    score_id = name * 32
+    folder = server.JOB_DIR / score_id
+    folder.mkdir()
+    server.write_status(folder, "ready")
+    root = parsed(*["".join(note("CDEFGAB"[(bar * 4 + beat) % 7]) for beat in range(4)) for bar in range(12)])
+    server.edit.ensure_note_ids(root)
+    server.save_version(folder, root)
+    return score_id, [item.get("id") for item in root.iter("note")]
+
+
+def searches_during(client, monkeypatch, url, body):
+    """Count the times a request goes through the whole score to find a note or a bar's place."""
+    searches = []
+
+    class Watched(ET.Element):
+        def iter(self, tag=None):
+            if self.tag == "score-partwise" and tag == "note":
+                searches.append(tag)
+            return super().iter(tag)
+
+    def watched_root(folder):
+        return ET.parse(server.versions(folder)[-1], ET.XMLParser(target=ET.TreeBuilder(element_factory=Watched))).getroot()
+
+    every_bar = rhythm.contexts
+
+    def counted_bars(part):
+        searches.append("bars")
+        return every_bar(part)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(server, "current_root", watched_root)
+        for module in (rhythm, server.edit):
+            patched.setattr(module, "contexts", counted_bars)
+        assert client.post(url, json=body).status_code == 200
+    return len(searches)
+
+
+@pytest.mark.parametrize(("route", "body"), [
+    ("group", {"action": "up"}),
+    ("group", {"action": "sharp"}),
+    ("group", {"action": "respell"}),
+    ("group", {"action": "flip"}),
+    ("marks", {"action": "toggle", "name": "staccato"}),
+    ("copy", {}),
+], ids=["up", "sharp", "respell", "flip", "staccato", "copy"])
+def test_an_edit_to_many_notes_does_not_search_the_score_for_each(client, monkeypatch, route, body):
+    counts = []
+    for name, size in (("a", 4), ("b", 40)):
+        score_id, ids = long_score(name)
+        chosen = ids[:size]
+        sent = {"first": chosen[0], "last": chosen[-1]} if route == "copy" else body | {"notes": chosen}
+        counts.append(searches_during(client, monkeypatch, f"/api/scores/{score_id}/{route}", sent))
+    assert counts[1] == counts[0]
+
+
+def test_a_group_delete_passes_over_a_grace_note_that_went_with_its_note(client):
+    score_id, ids = long_score("c")
+    url = f"/api/scores/{score_id}"
+    grace = client.post(f"{url}/marks", json={"action": "grace", "notes": [ids[1]]}).json()["written"]
+    assert client.post(f"{url}/group", json={"action": "delete", "notes": [ids[1], grace, ids[2]]}).status_code == 200
+    left = notes_of(client, score_id)
+    assert grace not in [item.get("id") for item in left] and [item.find("rest") is not None for item in left[:4]] == [False, True, True, False]
+
+
+PIECE = 64 * 1024
+
+
+def upload_in_pieces(size, stated):
+    """Send a photo of this many bytes straight to the app, a piece at a time, as a browser would.
+
+    Returns the status and how many pieces the app took in. `stated` says whether the request
+    gives its size up front, as a browser's does, or only ends when it ends.
+    """
+    form = b'--edge\r\nContent-Disposition: form-data; name="file"; filename="page.png"\r\nContent-Type: image/png\r\n\r\n'
+    body = form + b"\0" * size + b"\r\n--edge--\r\n"
+    pieces = [body[start:start + PIECE] for start in range(0, len(body), PIECE)]
+    taken = 0
+    sent = []
+
+    async def receive():
+        nonlocal taken
+        if taken == len(pieces):
+            return {"type": "http.disconnect"}
+        taken += 1
+        return {"type": "http.request", "body": pieces[taken - 1], "more_body": taken < len(pieces)}
+
+    async def send(message):
+        sent.append(message)
+
+    headers = [(b"host", b"127.0.0.1:8000"), (b"content-type", b"multipart/form-data; boundary=edge")]
+    if stated:
+        headers.append((b"content-length", str(len(body)).encode()))
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http",
+        "path": "/api/scores", "raw_path": b"/api/scores", "root_path": "", "query_string": b"", "headers": headers,
+        "client": ("127.0.0.1", 50000), "server": ("127.0.0.1", 8000),
+    }
+    asyncio.run(server.app(scope, receive, send))
+    return next(message["status"] for message in sent if message["type"] == "http.response.start"), taken
+
+
+def test_an_upload_that_says_it_is_too_large_is_refused_before_it_is_taken_in(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    assert upload_in_pieces(2 * 1024 * 1024, stated=True) == (413, 0)
+
+
+def test_an_upload_that_does_not_say_its_size_stops_being_taken_in_at_the_limit(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    status, taken = upload_in_pieces(4 * 1024 * 1024, stated=False)
+    assert status == 413 and taken * PIECE <= 2 * 1024 * 1024
+
+
+def test_an_upload_within_the_limit_is_still_taken(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    monkeypatch.setattr(server, "recognize_job", lambda folder, upload: None)
+    image = io.BytesIO()
+    Image.new("RGB", (40, 40), "white").save(image, "PNG")
+    padded = image.getvalue() + b"\0" * (1024 * 1024 - len(image.getvalue()))  # A PNG may carry data after its end.
+    assert client.post("/api/scores", files={"file": ("page.png", padded)}).status_code == 200
+
+
+def test_a_pdf_page_too_large_to_read_in_full_detail_is_read_at_a_size_that_fits(tmp_path):
+    import pypdfium2
+
+    document = pypdfium2.PdfDocument.new()
+    document.new_page(2000, 1000)  # 28 inches across, which 250 dots an inch would make 7,000 pixels.
+    document.new_page(595, 842)  # A4, which is read in full detail.
+    document.save(tmp_path / "upload.pdf")
+    images, _ = server.pdf_to_images(tmp_path / "upload.pdf")
+    assert [Image.open(image).size for image in images] == [(5000, 2500), (2066, 2924)]
+
+
+@pytest.mark.parametrize(("name", "data", "reason"), [
+    ("big.mxl", "unpacks too large", "That file is too large."),
+    ("page.xml", b"<html/>", "Only MusicXML scores written part by part can be opened."),
+    ("broken.musicxml", b"<nonsense", "That file couldn't be read as MusicXML."),
+], ids=["too-large", "not-part-by-part", "not-musicxml"])
+def test_a_score_file_that_cannot_be_opened_says_why(client, monkeypatch, name, data, reason):
+    if data == "unpacks too large":
+        monkeypatch.setattr("pipeline.musicxml.MOST_UNPACKED_BYTES", 1000)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("META-INF/container.xml", '<container><rootfiles><rootfile full-path="score.xml"/></rootfiles></container>')
+            archive.writestr("score.xml", "<score-partwise><part/></score-partwise>" + " " * 5000)
+        data = buffer.getvalue()
+    response = client.post("/api/scores", files={"file": (name, io.BytesIO(data))})
+    assert response.status_code == 415 and response.json()["detail"] == reason
+
+
+def test_a_score_file_that_cannot_be_drawn_says_so(client, monkeypatch):
+    monkeypatch.setattr("verovio.toolkit.loadData", lambda self, data: False)  # As it does with a file it can't follow.
+    response = client.post("/api/scores", files={"file": ("song.musicxml", to_text(parsed(note())).encode())})
+    assert response.status_code == 415 and response.json()["detail"] == "Could not read this MusicXML"
+
+
+@pytest.mark.parametrize("read", [
+    lambda score_id: server.get_score(score_id),
+    lambda score_id: server.find_range(score_id, server.Stretch(first="note0", last="note1")),
+    lambda score_id: server.copy_notes(score_id, server.Stretch(first="note0", last="note1")),
+    lambda score_id: server.get_playback(score_id),
+    lambda score_id: server.download_musicxml(score_id),
+    lambda score_id: server.download_midi(score_id),
+], ids=["score", "range", "copy", "playback", "musicxml", "midi"])
+def test_a_score_read_as_an_edit_is_undone_reads_one_version_whole(client, ready_score, monkeypatch, read):
+    folder = server.JOB_DIR / ready_score
+    assert client.post(f"/api/scores/{ready_score}/notes/note0", json={"action": "up"}).status_code == 200
+    listed = server.versions
+    undoing = []
+
+    def listed_then_undone(place):
+        found = listed(place)
+        if not undoing:  # The read has just found the latest version, and an undo comes in.
+            undoing.append(threading.Thread(target=server.undo, args=(ready_score,)))
+            undoing[0].start()
+            undoing[0].join(timeout=0.3)
+        return found
+
+    monkeypatch.setattr(server, "versions", listed_then_undone)
+    read(ready_score)
+    undoing[0].join()
+    assert len(listed(folder)) == 1  # The undo still happened, once the read was done.
+
+
+def test_an_edit_sent_as_plain_text_is_not_read(client, ready_score):
+    """A page on another site can send plain text here without asking first, but not JSON."""
+    body = json.dumps({"text": "Bb7"})
+    response = client.post(f"/api/scores/{ready_score}/chords/0", content=body, headers={"Content-Type": "text/plain"})
+    assert response.status_code == 422
+    assert client.get(f"/api/scores/{ready_score}").json()["chords"][0]["text"] == "Dm7"
+
+
+def test_a_page_being_read_is_stopped_by_the_system_if_the_app_is_killed_outright(client, tmp_path, monkeypatch):
+    """Killed with SIGKILL, the app can't stop the page it's reading, so the system has to, a while after the app would have."""
+    started = []
+
+    class Finished:
+        returncode = 1
+
+        def __init__(self, command, **_):
+            started.append(command)
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+    monkeypatch.setattr(server.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(server.subprocess, "Popen", Finished)
+    server.recognize_page(tmp_path / "page.png", tmp_path / "out")
+    limits = [started[0][index + 1] for index, part in enumerate(started[0]) if part == "-p"]
+    longest = [int(limit.split("=")[1]) for limit in limits if limit.startswith("RuntimeMaxSec=")]
+    assert len(longest) == 1 and server.PAGE_TIMEOUT_SECONDS < longest[0] <= 2 * server.PAGE_TIMEOUT_SECONDS

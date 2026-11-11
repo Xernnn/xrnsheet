@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 from fractions import Fraction
 
 from pipeline.edit import Spot, copy_range, events_between, find_note, locate, next_note_id, paste
-from pipeline.rhythm import Context, EditError, Mark, contexts, make_note, place, read_measure, remove_wedge_end, repair_slurs, repair_wedges, respell, write_measure
+from pipeline.rhythm import Context, EditError, Mark, contexts, indexed, make_note, place, read_measure, remove_wedge_end, repair_slurs, repair_wedges, respell, write_measure
 from pipeline.structure import element_with_text
 
 # A mark on a note: which group it sits in inside <notations>, and its tag.
@@ -140,7 +140,8 @@ def toggle_mark(root: ET.Element, note_ids: list[str], name: str) -> None:
     """Add a mark to everything chosen, or take it away if everything chosen already has it."""
     if name not in NOTE_MARKS:
         raise EditError("That isn't a mark this app knows.")
-    heads = list({id(note): note for note in (event_head(root, note_id) for note_id in note_ids)}.values())
+    with indexed(root):
+        heads = list({id(note): note for note in (event_head(root, note_id) for note_id in note_ids)}.values())
     if name != "fermata":
         heads = [note for note in heads if note.find("pitch") is not None]
     if not heads:
@@ -590,23 +591,24 @@ def dynamic_at(context: Context, onset: Fraction) -> str | None:
 
 def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
     """Copy a stretch of a voice with its marks. A slur only comes if both its ends do."""
-    copied = copy_range(root, first_id, last_id)
-    ends: dict[str, int] = {}
-    for number, item in enumerate(copied["events"]):
-        source = item.pop("source")
-        item.update(marks=[], dynamic=None, slur=[])
-        if source is None:
-            continue
-        note = find_note(root, source)
-        spot = locate(root, source)
-        item["marks"] = mark_names(note)
-        item["dynamic"] = dynamic_at(spot.context, spot.event.onset)
-        for slur in note.findall("notations/slur"):
-            if slur.get("type") == "stop" and slur.get("number", "1") in ends:
-                copied["events"][ends.pop(slur.get("number", "1"))]["slur"].append(number)
-        for slur in note.findall("notations/slur"):
-            if slur.get("type") == "start":
-                ends[slur.get("number", "1")] = number
+    with indexed(root):
+        copied = copy_range(root, first_id, last_id)
+        ends: dict[str, int] = {}
+        for number, item in enumerate(copied["events"]):
+            source = item.pop("source")
+            item.update(marks=[], dynamic=None, slur=[])
+            if source is None:
+                continue
+            note = find_note(root, source)
+            spot = locate(root, source)
+            item["marks"] = mark_names(note)
+            item["dynamic"] = dynamic_at(spot.context, spot.event.onset)
+            for slur in note.findall("notations/slur"):
+                if slur.get("type") == "stop" and slur.get("number", "1") in ends:
+                    copied["events"][ends.pop(slur.get("number", "1"))]["slur"].append(number)
+            for slur in note.findall("notations/slur"):
+                if slur.get("type") == "start":
+                    ends[slur.get("number", "1")] = number
     return copied
 
 

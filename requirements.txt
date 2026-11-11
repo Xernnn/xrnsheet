@@ -7,7 +7,11 @@ rapidocr
 pypdfium2
 fonttools
 torch
-fastapi
+# Pinned, because the app's guard against other sites' pages relies on this FastAPI reading a
+# body as JSON only when it says it's JSON, and these two are what it reads and checks it with.
+fastapi==0.162.2
+starlette==1.10.0
+pydantic==2.14.3
 uvicorn
 python-multipart
 matplotlib
