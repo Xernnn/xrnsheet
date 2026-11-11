@@ -41,7 +41,7 @@ from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import read_score_file, to_text
 from pipeline.playback import playback
-from pipeline.rhythm import fit_divisions
+from pipeline.rhythm import fit_divisions, indexed
 
 JOB_DIR = ROOT / "data" / "jobs"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -628,14 +628,15 @@ def change_group(score_id: str, body: GroupEdit) -> dict:
 
     def change(root: ET.Element) -> None:
         done = 0
-        # Respelling a note respells the notes tied to it, so a second one of those would undo it.
-        chosen = edit.one_note_per_tie(root, body.notes) if body.action == "respell" else body.notes
-        for note_id in chosen:
-            try:
-                GROUP_ACTIONS[body.action](root, note_id)
-                done += 1
-            except edit.EditError:
-                pass  # Rests can't move, and most notes have no marks. The rest of the selection can.
+        with indexed(root):  # Every chosen note is looked up, so they are found in one pass, not one search each.
+            # Respelling a note respells the notes tied to it, so a second one of those would undo it.
+            chosen = edit.one_note_per_tie(root, body.notes) if body.action == "respell" else body.notes
+            for note_id in chosen:
+                try:
+                    GROUP_ACTIONS[body.action](root, note_id)
+                    done += 1
+                except edit.EditError:
+                    pass  # Rests can't move, and most notes have no marks. The rest of the selection can.
         if not done:
             raise edit.EditError("That doesn't apply to anything selected.")
 

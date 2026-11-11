@@ -28,6 +28,7 @@ from pipeline.rhythm import (
     contexts,
     diatonic,
     fit_divisions,
+    index_of,
     is_tied,
     line_end,
     make_note,
@@ -36,6 +37,7 @@ from pipeline.rhythm import (
     on_plain_grid,
     overwrite,
     overwrite_in_tuplet,
+    part_contexts,
     place,
     read_measure,
     repair_slurs,
@@ -100,6 +102,10 @@ def ensure_note_ids(root: ET.Element) -> None:
 
 
 def find_note(root: ET.Element, note_id: str) -> ET.Element:
+    index = index_of(root)
+    found = index.notes.get(note_id) if index is not None else None
+    if found is not None and found.get("id") == note_id and index.place_of(found) is not None:
+        return found
     for note in root.iter("note"):
         if note.get("id") == note_id:
             return note
@@ -107,6 +113,10 @@ def find_note(root: ET.Element, note_id: str) -> ET.Element:
 
 
 def context_of(root: ET.Element, target: ET.Element) -> tuple[ET.Element, Context]:
+    index = index_of(root)
+    found = index.place_of(target) if index is not None else None
+    if found is not None:
+        return found
     for part in root.findall("part"):
         for context in contexts(part):
             if any(note is target for note in context.measure.iter("note")):
@@ -539,7 +549,7 @@ def tied_notes(root: ET.Element, note: ET.Element) -> list[ET.Element]:
         if member.find("grace") is not None or not (is_tied(member, "start") or is_tied(member, "stop")):
             continue
         part, context = context_of(root, member)
-        known = list(contexts(part))
+        known = part_contexts(part)
         timelines = {number: read_measure(known[number].measure, known[number].divisions) for number in range(max(context.index - 1, 0), min(context.index + 2, len(known)))}
         for line in timelines[context.index].lines.values():
             ordered = sorted(line, key=lambda event: event.onset)

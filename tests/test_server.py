@@ -13,6 +13,7 @@ from helpers import harmony, note, parsed, tied_note
 from PIL import Image
 
 from app import server
+from pipeline import rhythm
 from pipeline.musicxml import to_text
 
 
@@ -774,3 +775,69 @@ def test_a_sheet_whose_reading_was_stopped_is_left_for_the_next_start_to_report(
     folder, upload = job_for_pdf(3)
     server.recognize_job(folder, upload)
     assert tried == ["page_001", "page_002"] and server.read_status(folder)["status"] == "processing"
+
+
+def long_score(name):
+    """A ready score of twelve bars of four notes, saved straight to disk, with its note ids."""
+    score_id = name * 32
+    folder = server.JOB_DIR / score_id
+    folder.mkdir()
+    server.write_status(folder, "ready")
+    root = parsed(*["".join(note("CDEFGAB"[(bar * 4 + beat) % 7]) for beat in range(4)) for bar in range(12)])
+    server.edit.ensure_note_ids(root)
+    server.save_version(folder, root)
+    return score_id, [item.get("id") for item in root.iter("note")]
+
+
+def searches_during(client, monkeypatch, url, body):
+    """Count the times a request goes through the whole score to find a note or a bar's place."""
+    searches = []
+
+    class Watched(ET.Element):
+        def iter(self, tag=None):
+            if self.tag == "score-partwise" and tag == "note":
+                searches.append(tag)
+            return super().iter(tag)
+
+    def watched_root(folder):
+        return ET.parse(server.versions(folder)[-1], ET.XMLParser(target=ET.TreeBuilder(element_factory=Watched))).getroot()
+
+    every_bar = rhythm.contexts
+
+    def counted_bars(part):
+        searches.append("bars")
+        return every_bar(part)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(server, "current_root", watched_root)
+        for module in (rhythm, server.edit):
+            patched.setattr(module, "contexts", counted_bars)
+        assert client.post(url, json=body).status_code == 200
+    return len(searches)
+
+
+@pytest.mark.parametrize(("route", "body"), [
+    ("group", {"action": "up"}),
+    ("group", {"action": "sharp"}),
+    ("group", {"action": "respell"}),
+    ("group", {"action": "flip"}),
+    ("marks", {"action": "toggle", "name": "staccato"}),
+    ("copy", {}),
+], ids=["up", "sharp", "respell", "flip", "staccato", "copy"])
+def test_an_edit_to_many_notes_does_not_search_the_score_for_each(client, monkeypatch, route, body):
+    counts = []
+    for name, size in (("a", 4), ("b", 40)):
+        score_id, ids = long_score(name)
+        chosen = ids[:size]
+        sent = {"first": chosen[0], "last": chosen[-1]} if route == "copy" else body | {"notes": chosen}
+        counts.append(searches_during(client, monkeypatch, f"/api/scores/{score_id}/{route}", sent))
+    assert counts[1] == counts[0]
+
+
+def test_a_group_delete_passes_over_a_grace_note_that_went_with_its_note(client):
+    score_id, ids = long_score("c")
+    url = f"/api/scores/{score_id}"
+    grace = client.post(f"{url}/marks", json={"action": "grace", "notes": [ids[1]]}).json()["written"]
+    assert client.post(f"{url}/group", json={"action": "delete", "notes": [ids[1], grace, ids[2]]}).status_code == 200
+    left = notes_of(client, score_id)
+    assert grace not in [item.get("id") for item in left] and [item.find("rest") is not None for item in left[:4]] == [False, True, True, False]
