@@ -254,6 +254,7 @@ class BarEdit(BaseModel):
     fifths: int = 0
     beats: int = 4
     beat_type: int = 4
+    symbol: str = ""  # "common" or "cut", for a time signature drawn as a sign.
     number: int = 0
     clef: str = ""
     count: int = 0
@@ -263,6 +264,7 @@ class BlankScore(BaseModel):
     fifths: int = 0
     beats: int = 4
     beat_type: int = 4
+    symbol: str = ""  # "common" or "cut".
     clef: str = "treble"
     measures: int = 16
     more: list[str] = []  # Instruments below the first.
@@ -541,7 +543,7 @@ def describe(folder: Path, status: dict) -> dict:
 def create_blank_score(body: BlankScore) -> dict:
     """Start an empty score to write in, with no photo behind it."""
     try:
-        root = structure.blank_score(body.fifths, body.beats, body.beat_type, body.clef, body.measures)
+        root = structure.blank_score(body.fifths, body.beats, body.beat_type, body.clef, body.measures, body.symbol)
         for name in body.more:
             structure.add_part(root, name)
         edit.ensure_note_ids(root)
@@ -849,7 +851,7 @@ def change_bars(score_id: str, body: BarEdit) -> dict:
         elif body.action == "key":
             structure.set_key(root, index or 0, body.fifths)
         elif body.action == "time":
-            structure.set_time(root, index or 0, body.beats, body.beat_type)
+            structure.set_time(root, index or 0, body.beats, body.beat_type, body.symbol)
         elif body.action == "pickup":
             structure.set_pickup(root, Fraction(body.count, SIXTEENTHS_PER_QUARTER))
         elif body.action in ("forward", "backward"):

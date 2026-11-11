@@ -437,10 +437,10 @@ async function openNewScore() {
 }
 
 async function createScore() {
-  const [beats, beat_type] = $("blankTime").value.split("/").map(Number);
+  const [beats, beat_type, symbol = ""] = $("blankTime").value.split("/");
   const [first, ...more] = newChooser.picked;
   const body = {
-    fifths: Number($("blankKey").value), beats, beat_type, clef: first, more, measures: Number($("blankBars").value),
+    fifths: Number($("blankKey").value), beats: Number(beats), beat_type: Number(beat_type), symbol, clef: first, more, measures: Number($("blankBars").value),
     title: $("blankTitle").value, composer: $("blankComposer").value, tempo: $("blankTempo").value, pickup: Number($("blankPickup").value),
   };
   const response = await fetch("/api/scores/blank", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

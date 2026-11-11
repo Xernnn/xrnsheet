@@ -728,3 +728,55 @@ def test_two_short_bars_that_dont_add_up_are_both_flagged():
     shorten(root, 1, 3)
     shorten(root, 2, 3)
     assert [item["measure"] for item in structure.check_measures(root)] == [1, 2]
+
+
+def times(root, part=0):
+    """Each time signature written in a part, as (measure, beats, beat type, sign)."""
+    return [(index, found.findtext("beats"), found.findtext("beat-type"), found.get("symbol")) for index, measure in enumerate(bars(root, part)) for found in measure.findall("attributes/time")]
+
+
+@pytest.mark.parametrize(("symbol", "beats", "beat_type", "glyph"), [("common", 4, 4, "E08A"), ("cut", 2, 2, "E08B")])
+def test_common_and_cut_time_are_written_as_signs_and_drawn_as_them(symbol, beats, beat_type, glyph):
+    root = blank(beats=3)
+    structure.set_time(root, 0, beats, beat_type, symbol)
+    assert times(root) == [(0, str(beats), str(beat_type), symbol)]
+    page = engrave.render_pages(to_text(root))[0]
+    assert f"#{glyph}" in page and "#E083" not in page  # The sign, and no figure 3 left from 3/4.
+    assert [context.length for context in contexts(root.find("part"))] == [4] * len(bars(root))
+
+
+def test_a_sign_only_goes_with_its_own_time():
+    root = blank()
+    for beats, beat_type, symbol in [(3, 4, "common"), (4, 4, "cut"), (2, 2, "common"), (4, 4, "waltz")]:
+        with pytest.raises(EditError):
+            structure.set_time(root, 0, beats, beat_type, symbol)
+    assert times(root) == [(0, "4", "4", None)]
+
+
+def test_numbers_after_a_sign_of_the_same_time_are_a_change_worth_showing():
+    root = blank()
+    structure.set_time(root, 0, 4, 4, "common")
+    structure.set_time(root, 2, 4, 4)
+    assert times(root) == [(0, "4", "4", "common"), (2, "4", "4", None)]
+    # And the same sign again further on says nothing new.
+    structure.set_time(root, 1, 4, 4, "common")
+    assert times(root) == [(0, "4", "4", "common"), (2, "4", "4", None)]
+    structure.set_time(root, 2, 4, 4, "common")
+    assert times(root) == [(0, "4", "4", "common")]
+
+
+def test_a_sign_stays_through_note_edits_and_reaches_an_added_instrument():
+    root = blank(beats=2, beat_type=2, symbol="cut")
+    edit.ensure_note_ids(root)
+    edit.write_note(root, root.find(".//note").get("id"), "half", 0, "C")
+    structure.insert_measure(root, 0)
+    structure.add_part(root, "violin")
+    assert times(root) == [(0, "2", "2", "cut")] and times(root, 1) == [(0, "2", "2", "cut")]
+    structure.delete_measure(root, 0)
+    assert times(root) == [(0, "2", "2", "cut")]
+    assert structure.check_measures(root) == []
+
+
+def test_a_new_score_cannot_start_in_a_sign_that_is_not_its_time():
+    with pytest.raises(EditError):
+        structure.blank_score(beats=3, beat_type=4, symbol="common")

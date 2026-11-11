@@ -80,6 +80,8 @@ INSTRUMENTS = {
 # The names a plain staff goes by where instruments are chosen, as "Music" says nothing there.
 STAFF_NAMES = {"treble": "Treble staff", "bass": "Bass staff"}
 BARLINE_ORDER = ["bar-style", "footnote", "level", "wavy-line", "segno", "coda", "fermata", "ending", "repeat"]
+# A time signature can be drawn as a sign instead of numbers: C for 4/4 and a struck-through C for 2/2.
+TIME_SYMBOLS = {"common": (4, 4), "cut": (2, 2)}
 REPEAT_SIDES = {"forward": ("left", "heavy-light"), "backward": ("right", "light-heavy")}
 MOST_TITLE_LETTERS = 200
 
@@ -390,14 +392,31 @@ def set_key(root: ET.Element, index: int, fifths: int) -> None:
             repair_ties(part, number)
 
 
-def set_time(root: ET.Element, index: int, beats: int, beat_type: int) -> None:
+def time_element(beats: int, beat_type: int, symbol: str = "") -> ET.Element:
+    """Make a time signature. Common and cut time are 4/4 and 2/2 drawn as their signs."""
+    if beat_type not in BEAT_TYPES or not 1 <= beats <= 32:
+        raise EditError("That isn't a time signature this app can use.")
+    if symbol and TIME_SYMBOLS.get(symbol) != (beats, beat_type):
+        raise EditError("Common time is 4/4 and cut time is 2/2.")
+    time = ET.Element("time", {"symbol": symbol} if symbol else {})
+    ET.SubElement(time, "beats").text = str(beats)
+    ET.SubElement(time, "beat-type").text = str(beat_type)
+    return time
+
+
+def time_symbol(time: ET.Element | None) -> str:
+    """Say which sign a time signature is drawn as, or nothing for plain numbers."""
+    found = time.get("symbol") if time is not None else None
+    return found if found in TIME_SYMBOLS else ""
+
+
+def set_time(root: ET.Element, index: int, beats: int, beat_type: int, symbol: str = "") -> None:
     """Set the time from this bar until the next time change.
 
     The notes stay in their bars. Recognition has usually read the bars correctly and only
     misread the signature, and if it's wrong the bar check will show which bars don't fit.
     """
-    if beat_type not in BEAT_TYPES or not 1 <= beats <= 32:
-        raise EditError("That isn't a time signature this app can use.")
+    wanted = time_element(beats, beat_type, symbol)
     fit_divisions(root)
     for part in root.findall("part"):
         known = list(contexts(part))
@@ -405,11 +424,13 @@ def set_time(root: ET.Element, index: int, beats: int, beat_type: int) -> None:
             raise EditError(f"No bar number {index + 1}")
         measure = known[index].measure
         drop_attribute(measure, "time")
-        if index == 0 or (known[index - 1].beats, known[index - 1].beat_type) != (beats, beat_type):
-            time = ET.Element("time")
-            ET.SubElement(time, "beats").text = str(beats)
-            ET.SubElement(time, "beat-type").text = str(beat_type)
-            set_attribute(ensure_attributes(measure), time)
+        # The sign in force before this bar: 4/4 after common time is a change that has to be shown.
+        before = ""
+        for context in known[:index]:
+            earlier = context.measure.find("attributes/time")
+            before = time_symbol(earlier) if earlier is not None else before
+        if index == 0 or (known[index - 1].beats, known[index - 1].beat_type, before) != (beats, beat_type, symbol):
+            set_attribute(ensure_attributes(measure), copy.deepcopy(wanted))
         for context in list(contexts(part))[index:]:
             if context.index > index and context.measure.find("attributes/time") is not None:
                 break
@@ -591,14 +612,12 @@ def set_title(root: ET.Element, title: str, composer: str) -> None:
         root.insert(position + (offset if title else 0), credit)
 
 
-def part_attributes(instrument: Instrument, divisions: int, fifths: int, beats: int, beat_type: int) -> ET.Element:
+def part_attributes(instrument: Instrument, divisions: int, fifths: int, beats: int, beat_type: int, symbol: str = "") -> ET.Element:
     """Make the opening of a part: what it counts in, its key and time, and its clefs."""
     attributes = ET.Element("attributes")
     ET.SubElement(attributes, "divisions").text = str(divisions)
     ET.SubElement(ET.SubElement(attributes, "key"), "fifths").text = str(fifths)
-    time = ET.SubElement(attributes, "time")
-    ET.SubElement(time, "beats").text = str(beats)
-    ET.SubElement(time, "beat-type").text = str(beat_type)
+    attributes.append(time_element(beats, beat_type, symbol))
     staves = len(instrument.clefs)
     if staves > 1:
         ET.SubElement(attributes, "staves").text = str(staves)
@@ -628,7 +647,7 @@ def score_part(part_id: str, instrument: Instrument) -> ET.Element:
     return element
 
 
-def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str = "treble", measures: int = 16) -> ET.Element:
+def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str = "treble", measures: int = 16, symbol: str = "") -> ET.Element:
     """Make an empty score to write in from scratch, for a kind of staff or an instrument."""
     if clef not in INSTRUMENTS:
         raise EditError("Choose a treble, bass or piano staff, or an instrument.")
@@ -646,7 +665,7 @@ def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str =
         measure = blank_measure(Fraction(beats * 4, beat_type), START_DIVISIONS, len(instrument.clefs))
         part.append(measure)
         if index == 0:
-            measure.insert(0, part_attributes(instrument, START_DIVISIONS, fifths, beats, beat_type))
+            measure.insert(0, part_attributes(instrument, START_DIVISIONS, fifths, beats, beat_type, symbol))
     renumber(part)
     ensure_measure_ids(root)
     return root
@@ -697,7 +716,7 @@ def add_part(root: ET.Element, name: str) -> None:
         written = context.fifths + offset
         written = written - 12 * (1 if written > 0 else -1) if abs(written) > MOST_KEY else written
         if context.index == 0:
-            measure.insert(0, part_attributes(instrument, START_DIVISIONS, written, context.beats, context.beat_type))
+            measure.insert(0, part_attributes(instrument, START_DIVISIONS, written, context.beats, context.beat_type, time_symbol(context.measure.find("attributes/time"))))
         else:
             carried = context.measure.find("attributes/key"), context.measure.find("attributes/time")
             if carried[0] is not None:

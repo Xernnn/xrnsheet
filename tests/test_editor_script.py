@@ -131,3 +131,9 @@ def test_shortcuts_are_listed_as_keys_with_their_joining_words_left_plain():
         "<kbd>Ins</kbd>, <kbd>Ctrl</kbd>+<kbd>B</kbd>",
         "<kbd>&lt;</kbd> <kbd>&gt;</kbd>",
     ]
+
+
+def test_time_signature_cells_follow_musescores_order_with_the_two_signs():
+    times = next(palette for palette in palettes() if palette["id"] == "times")
+    assert [cell["key"].removeprefix("time:") for cell in times["cells"]] == ["2/4", "3/4", "4/4", "5/4", "6/4", "3/8", "4/8", "5/8", "6/8", "7/8", "9/8", "12/8", "common", "cut", "2/2", "3/2"]
+    assert [cell["label"] for cell in times["cells"][12:14]] == ["Common time", "Cut time"]

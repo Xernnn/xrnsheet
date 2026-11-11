@@ -1132,3 +1132,17 @@ def test_double_sharps_and_flats_go_on_one_note_or_a_selection(client):
     assert [(note.findtext("pitch/alter"), note.findtext("accidental")) for note in score().iter("note")][:2] == [("-2", "flat-flat"), ("-2", "flat-flat")]
     client.post(f"/api/scores/{score_id}/undo")
     assert [note.findtext("accidental") for note in score().iter("note")][:2] == ["double-sharp", None]
+
+
+def test_a_score_starts_in_or_changes_to_common_and_cut_time(client):
+    made = client.post("/api/scores/blank", json={"measures": 4, "beats": 2, "beat_type": 2, "symbol": "cut"})
+    score_id = made.json()["id"]
+    score = lambda: ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    assert [found.get("symbol") for found in score().iter("time")] == ["cut"]
+    third = score().find("part").findall("measure")[2].find("note").get("id")
+    changed = client.post(f"/api/scores/{score_id}/bars", json={"action": "time", "note": third, "beats": 4, "beat_type": 4, "symbol": "common"})
+    assert changed.status_code == 200
+    assert [(found.findtext("beats"), found.get("symbol")) for found in score().iter("time")] == [("2", "cut"), ("4", "common")]
+    refused = client.post(f"/api/scores/{score_id}/bars", json={"action": "time", "note": third, "beats": 3, "beat_type": 4, "symbol": "common"})
+    assert refused.status_code == 422
+    assert client.post("/api/scores/blank", json={"beats": 6, "beat_type": 8, "symbol": "cut"}).status_code == 422

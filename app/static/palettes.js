@@ -113,6 +113,7 @@ function atNote(run) {
 function buildPalettes() {
   const key = fifths => ({ key: `key:${fifths}`, label: keyName(fifths), html: keyCell(fifths), run: () => barAction("key", { fifths }) });
   const time = (beats, beatType) => ({ key: `time:${beats}/${beatType}`, label: `${beats}/${beatType} time`, html: timeCell(beats, beatType), run: () => barAction("time", { beats, beat_type: beatType }) });
+  const timeSign = (symbol, label, glyph, beats, beatType) => ({ key: `time:${symbol}`, label, html: staffCell(36, glyphAt(glyph, 18, 4, "middle")), run: () => barAction("time", { beats, beat_type: beatType, symbol }) });
   const clef = (name, label, glyph, line) => ({ key: `clef:${name}`, label, html: clefCell(glyph, line), ...atNote(() => barAction("clef", { clef: name })) });
   const tempo = (words, speed) => ({ key: `tempo:${words} ${speed}`, label: `${words}, ${speed} beats a minute`, html: wordsCell(words, "bold"), ...atNote(() => markAction("tempo", { text: `${words} ${speed}` })) });
   const beat = (label, glyph, unit, dots) => ({ key: `tempo:${unit}${dots ? "." : ""}=80`, label: `${label} = 80`, html: tempoCell(glyph, 80), ...atNote(() => markAction("tempo", { text: "80", unit, dots })) });
@@ -129,7 +130,8 @@ function buildPalettes() {
       clef("alto", "Alto clef", "E05C", 2), clef("tenor", "Tenor clef", "E05C", 1), clef("bass", "Bass clef", "E062", 1),
     ] },
     { id: "keys", name: "Key signatures", usual: true, wide: 56, cells: [1, 2, 3, 4, 5, 6, 7, -7, -6, -5, -4, -3, -2, -1, 0].map(key) },
-    { id: "times", name: "Time signatures", usual: true, cells: [[2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [3, 8], [4, 8], [5, 8], [6, 8], [7, 8], [9, 8], [12, 8], [2, 2], [3, 2]].map(pair => time(...pair)) },
+    { id: "times", name: "Time signatures", usual: true, cells: [[2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [3, 8], [4, 8], [5, 8], [6, 8], [7, 8], [9, 8], [12, 8]].map(pair => time(...pair)).concat(
+      timeSign("common", "Common time", "E08A", 4, 4), timeSign("cut", "Cut time", "E08B", 2, 2), time(2, 2), time(3, 2)) },
     { id: "tempo", name: "Tempo", usual: true, textual: true, cells: [
       beat("Half note", "ECA3", "half", 0), beat("Quarter note", "ECA5", "quarter", 0), beat("Eighth note", "ECA7", "eighth", 0), beat("Dotted quarter note", "ECA5 ECB7", "quarter", 1),
       tempo("Grave", 35), tempo("Largo", 50), tempo("Lento", 52), tempo("Adagio", 71), tempo("Andante", 92), tempo("Moderato", 114),

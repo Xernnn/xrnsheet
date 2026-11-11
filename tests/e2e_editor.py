@@ -859,6 +859,45 @@ def test_musescore_keys(page, base: str, created: list[str]) -> None:
     press(page, "Escape")
 
 
+def drawn_signs(page, kind: str) -> list[str]:
+    """List the symbols drawn for one kind of thing on the pages, by their codes."""
+    return page.evaluate("""kind => [...document.querySelectorAll(`#pages g.${kind} use`)]
+        .map(use => (use.getAttribute("xlink:href") ?? use.getAttribute("href")).slice(1, 5))""", kind)
+
+
+def test_time_signs(page, base: str, shots: Path | None, created: list[str]) -> None:
+    page.goto(base)
+    new_score(page, "treble", 4, "2/2/cut")
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    press(page, "Escape")
+    times = lambda: [(index, found.findtext("beats"), found.get("symbol")) for index, measure in enumerate(saved_score(base, score_id).find("part").findall("measure")) for found in measure.findall("attributes/time")]
+    check("a new score can start in cut time", times() == [(0, "2", "cut")], times())
+    check("which is drawn as its sign and not as numbers", drawn_signs(page, "meterSig") == ["E08B"], drawn_signs(page, "meterSig"))
+    click_on(page, page.locator("#pages g.mRest").nth(2))
+    settle(page)
+    choose(page, "time:common")
+    settle(page)
+    check("the palette's common time changes the time from the selected measure", times() == [(0, "2", "cut"), (2, "4", "common")], times())
+    check("and both signs are drawn", drawn_signs(page, "meterSig") == ["E08B", "E08A"], drawn_signs(page, "meterSig"))
+    if shots:
+        page.screenshot(path=str(shots / "time-signs.png"), full_page=True)
+    press(page, "Control+z")
+    check("undo takes the change back", times() == [(0, "2", "cut")], times())
+    press(page, "Control+y")
+    check("redo makes it again", times() == [(0, "2", "cut"), (2, "4", "common")], times())
+    click_on(page, page.locator("#pages g.mRest").nth(2))
+    settle(page)
+    choose(page, "time:4/4")
+    settle(page)
+    check("numbers replace a sign of the same time", times() == [(0, "2", "cut"), (2, "4", None)] and drawn_signs(page, "meterSig") == ["E08B", "E084", "E084"], (times(), drawn_signs(page, "meterSig")))
+    click_on(page, page.locator("#pages g.mRest").first)
+    settle(page)
+    choose(page, "time:cut")
+    settle(page)
+    check("choosing the sign already there changes nothing that's written", times() == [(0, "2", "cut"), (2, "4", None)], times())
+
+
 def empty_spot(page, measure: int) -> dict:
     """Find a point on a measure's staff that's clear of its notes, with the staff's edges."""
     return page.evaluate("""index => {
@@ -1798,6 +1837,7 @@ def main() -> None:
             test_musescore_keys(page, base, created)
             test_measure_selection(page, base, arguments.shots, created)
             test_desk(page, base, created)
+            test_time_signs(page, base, arguments.shots, created)
             test_lyrics(page, base, arguments.shots, created)
             test_titles_and_repeats(page, base, arguments.shots, created)
             test_sound(page, base, created)
