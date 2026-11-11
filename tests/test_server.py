@@ -15,7 +15,7 @@ from pipeline.musicxml import to_text
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "JOB_DIR", tmp_path)
-    return TestClient(server.app)
+    return TestClient(server.app, base_url="http://127.0.0.1:8000")
 
 
 @pytest.fixture
@@ -691,3 +691,31 @@ def test_saved_files_keep_the_usual_permissions(client):
     ordinary.write_text("x", encoding="utf-8")
     for path in [*folder.glob("version_*.musicxml"), folder / "status.json"]:
         assert path.stat().st_mode & 0o777 == ordinary.stat().st_mode & 0o777
+
+
+def test_a_page_on_another_site_cannot_upload_or_change_anything(client, ready_score):
+    """A browser sends the app requests from any page that's open, and says which site the page is from."""
+    theirs = {"Origin": "https://example.com"}
+    score = to_text(parsed(note() + note("D") + note("E") + note("F"))).encode()
+    response = client.post("/api/scores", files={"file": ("score.musicxml", io.BytesIO(score))}, headers=theirs)
+    assert response.status_code == 403 and "another site" in response.json()["detail"]
+    assert [folder.name for folder in server.JOB_DIR.iterdir()] == [ready_score]
+    client.post(f"/api/scores/{ready_score}/chords/0", json={"text": "Bb7"})
+    assert client.post(f"/api/scores/{ready_score}/undo", headers=theirs).status_code == 403
+    assert client.post(f"/api/scores/{ready_score}/undo", headers={"Origin": "null"}).status_code == 403
+    assert client.get(f"/api/scores/{ready_score}").json()["chords"][0]["text"] == "Bb7"
+
+
+@pytest.mark.parametrize("address", ["127.0.0.1:8000", "localhost:8000", "LOCALHOST:8000"])
+def test_the_apps_own_page_can_change_things(client, address):
+    own = {"Host": address, "Origin": f"http://{address.lower()}"}
+    assert client.post("/api/scores/blank", json={"measures": 1}, headers=own).status_code == 200
+    assert client.post("/api/scores/blank", json={"measures": 1}, headers={"Host": address}).status_code == 200  # A script.
+
+
+@pytest.mark.parametrize("name", ["example.com:8000", "127.0.0.1.example.com", "localhost.example.com:8000", "[::1", ""])
+def test_a_site_whose_name_points_at_this_computer_is_not_served(client, ready_score, name):
+    """Its page would otherwise count as the app's own, and could read every score."""
+    assert client.get("/api/scores", headers={"Host": name}).status_code == 403
+    assert client.get(f"/api/scores/{ready_score}/score.musicxml", headers={"Host": name}).status_code == 403
+    assert client.get("/", headers={"Host": name}).status_code == 403

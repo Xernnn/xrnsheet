@@ -22,14 +22,17 @@ from fractions import Fraction
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import uvicorn
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from chords.fonts import ROOT
 from pipeline import edit, marks, structure, transpose
@@ -51,6 +54,8 @@ PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
+OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
+ONLY_READS = {"GET", "HEAD", "OPTIONS"}
 
 
 @asynccontextmanager
@@ -59,7 +64,42 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
 
 
+class OwnPagesOnly:
+    """Refuse requests that the app's own page couldn't have sent.
+
+    The app has no sign-in, because it only listens on this computer. But a browser here sends it
+    requests from whatever page is open. A page on another site could upload files to it, and a
+    site whose name is pointed at 127.0.0.1 would be served as if it were the app, and could read
+    and change every score. So a request has to be addressed to this computer by one of its own
+    names, and one that changes something can't come from another site's page. Requests from no
+    page at all, such as a script's, carry no Origin and are let through.
+    """
+
+    def __init__(self, inner: ASGIApp) -> None:
+        self.inner = inner
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            headers = Headers(scope=scope)
+            host, origin = headers.get("host", ""), headers.get("origin")
+            try:
+                named, sender = urlsplit(f"//{host}").hostname, urlsplit(origin or "").netloc
+            except ValueError:
+                named, sender = None, ""
+            if named not in OWN_NAMES:
+                refused = "Open this app at http://127.0.0.1 or http://localhost, with its port."
+            elif scope["method"] not in ONLY_READS and origin is not None and sender.lower() != host.lower():
+                refused = "That request came from another site's page."
+            else:
+                refused = None
+            if refused:
+                await JSONResponse({"detail": refused}, status_code=403)(scope, receive, send)
+                return
+        await self.inner(scope, receive, send)
+
+
 app = FastAPI(title="xrnsheet", lifespan=lifespan)
+app.add_middleware(OwnPagesOnly)
 one_at_a_time = threading.Semaphore(1)  # Recognition is memory hungry.
 # Edits read the latest version and write the next one, so two at once would lose one of them.
 edit_lock = threading.RLock()
