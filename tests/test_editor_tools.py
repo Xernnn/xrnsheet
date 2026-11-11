@@ -484,7 +484,8 @@ def test_a_huge_repeat_count_still_ends():
 def test_a_repeat_can_be_taken_away():
     root = repeat_bars("", ":|", "")
     structure.toggle_repeat(root, 1, "backward")
-    assert order(root) == [0, 1, 2] and not list(root.iter("barline"))
+    # Only the barline that ends the piece is left.
+    assert order(root) == [0, 1, 2] and [(index, found.findtext("bar-style")) for index in range(3) for found in bar(root, index).findall("barline")] == [(2, "light-heavy")]
 
 
 def test_a_first_ending_is_closed_and_a_second_is_left_open():

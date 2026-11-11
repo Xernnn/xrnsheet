@@ -255,6 +255,7 @@ class BarEdit(BaseModel):
     beats: int = 4
     beat_type: int = 4
     symbol: str = ""  # "common" or "cut", for a time signature drawn as a sign.
+    style: str = ""  # How a barline is drawn: single, double, dashed, final, heavy, heavyDouble or dotted.
     number: int = 0
     clef: str = ""
     count: int = 0
@@ -856,6 +857,10 @@ def change_bars(score_id: str, body: BarEdit) -> dict:
             structure.set_pickup(root, Fraction(body.count, SIXTEENTHS_PER_QUARTER))
         elif body.action in ("forward", "backward"):
             structure.toggle_repeat(root, index or 0, body.action)
+        elif body.action == "barline":
+            if index is None:
+                raise edit.EditError("Click a note in the measure the barline ends first.")
+            structure.set_barline(root, index, body.style)
         elif body.action == "ending":
             first = index or 0
             structure.set_ending(root, first, structure.bar_of(root, body.last) if body.last else first, body.number)

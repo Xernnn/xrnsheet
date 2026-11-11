@@ -898,6 +898,47 @@ def test_time_signs(page, base: str, shots: Path | None, created: list[str]) -> 
     check("choosing the sign already there changes nothing that's written", times() == [(0, "2", "cut"), (2, "4", None)], times())
 
 
+def test_barlines(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, bars=8, tune="cdefgabcdefgabcdefgabcdefgabc")
+    styles = lambda: [measure.findtext("barline/bar-style") for measure in saved_score(base, score_id).find("part").findall("measure")]
+    check("a new score ends with a final barline", styles() == [None] * 7 + ["light-heavy"], styles())
+    wanted = {"double": "light-light", "dashed": "dashed", "final": "light-heavy", "heavy": "heavy", "heavyDouble": "heavy-heavy", "dotted": "dotted"}
+    for measure, style in enumerate(wanted):
+        select_notes(page, measure * 4)
+        choose(page, f"barline:{style}")
+        settle(page)
+    check("each palette barline ends the selected note's measure", styles() == [*wanted.values(), None, "light-heavy"], styles())
+    if shots:
+        page.screenshot(path=str(shots / "barlines.png"), full_page=True)
+    press(page, "Control+z")
+    check("undo takes the last one off", styles()[5] is None, styles())
+    press(page, "Control+y")
+    check("redo puts it back", styles()[5] == "dotted", styles())
+    select_notes(page, 0, 6)
+    choose(page, "barline:dashed")
+    settle(page)
+    check("with a stretch selected the barline goes at its end", styles()[:2] == ["light-light", "dashed"], styles())
+    select_notes(page, 1)
+    choose(page, "barline:single")
+    settle(page)
+    check("a single barline makes it plain again", styles()[0] is None, styles())
+    select_notes(page, 4)
+    choose(page, "barline:backward")
+    settle(page)
+    root = saved_score(base, score_id)
+    check("a repeat sign takes a styled barline's place", root.find("part").findall("measure")[1].find("barline/repeat") is not None)
+    select_notes(page, 4)
+    choose(page, "barline:double")
+    settle(page)
+    second = saved_score(base, score_id).find("part").findall("measure")[1]
+    check("and a barline takes a repeat sign's", second.find("barline/repeat") is None and second.findtext("barline/bar-style") == "light-light")
+    press(page, "Escape")
+    menu(page, "Add", "Measures", "Insert one measure at end of score")
+    settle(page)
+    check("a measure added at the end takes the final barline with it", styles()[-2:] == [None, "light-heavy"] and len(styles()) == 9, styles())
+    check("nothing selected, a barline cell can't be chosen", page.is_disabled('#paletteTree [data-cell="barline:double"]'))
+
+
 def empty_spot(page, measure: int) -> dict:
     """Find a point on a measure's staff that's clear of its notes, with the staff's edges."""
     return page.evaluate("""index => {
@@ -1838,6 +1879,7 @@ def main() -> None:
             test_measure_selection(page, base, arguments.shots, created)
             test_desk(page, base, created)
             test_time_signs(page, base, arguments.shots, created)
+            test_barlines(page, base, arguments.shots, created)
             test_lyrics(page, base, arguments.shots, created)
             test_titles_and_repeats(page, base, arguments.shots, created)
             test_sound(page, base, created)

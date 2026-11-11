@@ -7,12 +7,13 @@ import zipfile
 from fractions import Fraction
 
 import pytest
+import verovio
 from helpers import note, parsed
 
 from pipeline import edit, engrave, marks, rhythm, structure, transpose
 from pipeline.midi_file import channel_of, midi_bytes, variable_length
 from pipeline.musicxml import read_score_file, to_text
-from pipeline.playback import playback
+from pipeline.playback import play_order, playback
 from pipeline.rhythm import EditError, Tuplet, contexts, read_measure
 
 
@@ -780,3 +781,99 @@ def test_a_sign_stays_through_note_edits_and_reaches_an_added_instrument():
 def test_a_new_score_cannot_start_in_a_sign_that_is_not_its_time():
     with pytest.raises(EditError):
         structure.blank_score(beats=3, beat_type=4, symbol="common")
+
+
+def bar_styles(root, part=0):
+    """Each measure's closing barline, as its style or None for a plain one."""
+    return [structure.barline_of(measure, "right").findtext("bar-style") if structure.barline_of(measure, "right") is not None else None for measure in bars(root, part)]
+
+
+def test_a_new_score_ends_with_a_final_barline_in_every_instrument():
+    root = blank(measures=3)
+    structure.add_part(root, "violin")
+    assert bar_styles(root) == [None, None, "light-heavy"] and bar_styles(root, 1) == [None, None, "light-heavy"]
+    assert play_order(bars(root)) == [0, 1, 2]  # It ends the piece and repeats nothing.
+
+
+@pytest.mark.parametrize(("style", "written", "drawn"), [
+    ("double", "light-light", "dbl"), ("dashed", "dashed", "dashed"), ("final", "light-heavy", "end"),
+    ("heavy", "heavy", "heavy"), ("heavyDouble", "heavy-heavy", "dblheavy"), ("dotted", "dotted", "dotted"),
+])
+def test_a_measure_can_end_with_each_barline_the_engraver_draws(style, written, drawn):
+    root = blank(measures=3)
+    structure.add_part(root, "violin")
+    structure.set_barline(root, 0, style)
+    assert bar_styles(root) == [written, None, "light-heavy"] and bar_styles(root, 1) == [written, None, "light-heavy"]
+    # The engraver reads it as the barline meant, and not as something it doesn't know and draws plainly.
+    toolkit = verovio.toolkit()
+    toolkit.loadData(engrave.prepare_for_drawing(to_text(root)))
+    assert f'right="{drawn}"' in toolkit.getMEI().split("<measure")[1].split(">")[0]
+    structure.set_barline(root, 0, "single")
+    assert bar_styles(root) == [None, None, "light-heavy"]
+    assert bars(root)[0].find("barline") is None
+
+
+def test_an_unknown_barline_or_measure_is_refused():
+    root = blank(measures=2)
+    with pytest.raises(EditError):
+        structure.set_barline(root, 0, "wavy")
+    with pytest.raises(EditError):
+        structure.set_barline(root, 2, "double")
+
+
+def test_a_barline_replaces_a_repeat_sign_and_keeps_an_endings_bracket():
+    root = blank(measures=4)
+    structure.toggle_repeat(root, 1, "backward")
+    structure.set_ending(root, 1, 1, 1)
+    structure.set_barline(root, 1, "double")
+    closing = structure.barline_of(bars(root)[1], "right")
+    assert [child.tag for child in closing] == ["bar-style", "ending"] and closing.findtext("bar-style") == "light-light"
+    assert closing.find("ending").get("type") == "stop"
+    assert play_order(bars(root)) == [0, 1, 2, 3]
+
+
+def test_a_repeat_put_on_a_styled_barline_takes_its_place_and_goes_again():
+    root = blank(measures=3)
+    structure.set_barline(root, 0, "dashed")
+    structure.toggle_repeat(root, 0, "backward")
+    assert bar_styles(root)[0] == "light-heavy" and bars(root)[0].find("barline/repeat") is not None
+    structure.toggle_repeat(root, 0, "backward")
+    assert bar_styles(root) == [None, None, "light-heavy"]
+
+
+def test_an_ending_put_on_and_taken_off_leaves_a_double_barline_alone():
+    root = blank(measures=4)
+    structure.set_barline(root, 1, "double")
+    structure.set_ending(root, 1, 1, 1)
+    structure.set_ending(root, 1, 1, 0)
+    assert bar_styles(root) == [None, "light-light", None, "light-heavy"]
+    assert all(found.find("ending") is None for found in root.iter("barline"))
+
+
+def test_the_final_barline_stays_at_the_end_as_measures_come_and_go():
+    root = blank(measures=2)
+    structure.insert_measure(root, 2)
+    assert bar_styles(root) == [None, None, "light-heavy"]
+    structure.insert_measure(root, 0)
+    structure.insert_measure(root, 2)
+    assert bar_styles(root) == [None, None, None, None, "light-heavy"]
+    structure.delete_measure(root, 4)
+    assert bar_styles(root) == [None, None, None, "light-heavy"]
+    # A measure that already ends its own way keeps that when it becomes the last.
+    structure.set_barline(root, 2, "double")
+    structure.delete_measure(root, 3)
+    assert bar_styles(root) == [None, None, "light-light"]
+    # And a repeat at the end is not a final barline to carry along.
+    structure.toggle_repeat(root, 2, "backward")
+    structure.insert_measure(root, 3)
+    assert bar_styles(root) == [None, None, "light-heavy", None] and bars(root)[2].find("barline/repeat") is not None
+
+
+def test_writing_past_the_end_takes_the_final_barline_along():
+    root = blank(measures=1)
+    edit.ensure_note_ids(root)
+    cursor = root.find(".//note").get("id")
+    for step in "CDEFG":
+        cursor = edit.write_note(root, cursor, "quarter", 0, step)["cursor"]
+    assert bar_styles(root) == [None, "light-heavy"]
+    assert structure.check_measures(root) == []

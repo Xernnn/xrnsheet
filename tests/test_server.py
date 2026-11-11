@@ -1146,3 +1146,17 @@ def test_a_score_starts_in_or_changes_to_common_and_cut_time(client):
     refused = client.post(f"/api/scores/{score_id}/bars", json={"action": "time", "note": third, "beats": 3, "beat_type": 4, "symbol": "common"})
     assert refused.status_code == 422
     assert client.post("/api/scores/blank", json={"beats": 6, "beat_type": 8, "symbol": "cut"}).status_code == 422
+
+
+def test_a_barline_is_chosen_for_the_measure_a_note_is_in(client):
+    score_id = client.post("/api/scores/blank", json={"measures": 3}).json()["id"]
+    score = lambda: ET.fromstring(client.get(f"/api/scores/{score_id}/score.musicxml").text)
+    styles = lambda: [measure.findtext("barline/bar-style") for measure in score().find("part").findall("measure")]
+    assert styles() == [None, None, "light-heavy"]
+    second = score().find("part").findall("measure")[1].find("note").get("id")
+    assert client.post(f"/api/scores/{score_id}/bars", json={"action": "barline", "note": second, "style": "double"}).status_code == 200
+    assert styles() == [None, "light-light", "light-heavy"]
+    client.post(f"/api/scores/{score_id}/undo")
+    assert styles() == [None, None, "light-heavy"]
+    assert client.post(f"/api/scores/{score_id}/bars", json={"action": "barline", "note": second, "style": "wavy"}).status_code == 422
+    assert client.post(f"/api/scores/{score_id}/bars", json={"action": "barline", "style": "double"}).status_code == 422

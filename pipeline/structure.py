@@ -83,6 +83,9 @@ BARLINE_ORDER = ["bar-style", "footnote", "level", "wavy-line", "segno", "coda",
 # A time signature can be drawn as a sign instead of numbers: C for 4/4 and a struck-through C for 2/2.
 TIME_SYMBOLS = {"common": (4, 4), "cut": (2, 2)}
 REPEAT_SIDES = {"forward": ("left", "heavy-light"), "backward": ("right", "light-heavy")}
+# How the barline ending a measure can be drawn, and what MusicXML calls each. A single one is the plain line.
+BAR_STYLES = {"single": None, "double": "light-light", "dashed": "dashed", "final": "light-heavy", "heavy": "heavy", "heavyDouble": "heavy-heavy", "dotted": "dotted"}
+FINAL_BARLINE = BAR_STYLES["final"]
 MOST_TITLE_LETTERS = 200
 
 
@@ -253,6 +256,7 @@ def insert_measure(root: ET.Element, index: int) -> None:
             part.insert(children.index(measures[index]), measure)
         else:
             part.append(measure)
+            move_final_barline(measures[-1], measure)
         renumber(part)
         repair_ties(part, min(index, len(measures)))
 
@@ -286,6 +290,8 @@ def delete_measure(root: ET.Element, index: int) -> None:
             kept = measures[index - 1]
             if kept.find("barline") is None:
                 kept.extend(doomed.findall("barline"))
+            else:
+                move_final_barline(doomed, kept)
         part.remove(doomed)
         renumber(part)
         repair_ties(part, max(index - 1, 0))
@@ -495,6 +501,44 @@ def tidy_barline(measure: ET.Element, barline: ET.Element, keep_style: bool) -> 
         measure.remove(barline)
 
 
+def set_barline(root: ET.Element, index: int, style: str) -> None:
+    """Draw the barline that ends a measure as a double, dashed, final, heavy or dotted one, or plainly again.
+
+    It replaces a repeat sign there, as choosing a barline does in MuseScore. An ending's bracket stays.
+    """
+    if style not in BAR_STYLES:
+        raise EditError("That isn't a barline this app can draw.")
+    for part in root.findall("part"):
+        measures = part.findall("measure")
+        if not 0 <= index < len(measures):
+            raise EditError(f"No bar number {index + 1}")
+        barline = add_barline(measures[index], "right")
+        for found in [*barline.findall("bar-style"), *barline.findall("repeat")]:
+            barline.remove(found)
+        if BAR_STYLES[style]:
+            set_barline_child(barline, element_with_text("bar-style", BAR_STYLES[style]))
+        tidy_barline(measures[index], barline, keep_style=True)
+
+
+def is_final(barline: ET.Element | None) -> bool:
+    """Say whether this is the thin and thick barline that ends a piece, and not a repeat drawn the same way."""
+    return barline is not None and barline.findtext("bar-style") == FINAL_BARLINE and barline.find("repeat") is None
+
+
+def move_final_barline(source: ET.Element, target: ET.Element) -> None:
+    """Keep the final barline at the end when the last measure changes.
+
+    The measure that's now last takes it, unless its own barline already says something else.
+    """
+    barline, existing = barline_of(source, "right"), barline_of(target, "right")
+    if not is_final(barline) or (existing is not None and (existing.find("bar-style") is not None or existing.find("repeat") is not None)):
+        return
+    style = barline.find("bar-style")
+    barline.remove(style)
+    tidy_barline(source, barline, keep_style=True)
+    set_barline_child(add_barline(target, "right"), style)
+
+
 def set_barline_child(barline: ET.Element, element: ET.Element) -> None:
     """Add a child to a barline at the position the schema requires."""
     rank = BARLINE_ORDER.index(element.tag)
@@ -532,7 +576,7 @@ def clear_endings(measure: ET.Element) -> None:
     for barline in measure.findall("barline"):
         for found in barline.findall("ending"):
             barline.remove(found)
-        tidy_barline(measure, barline, keep_style=barline.find("repeat") is not None)
+        tidy_barline(measure, barline, keep_style=True)  # The style is the barline's own, or its repeat's.
 
 
 def set_ending(root: ET.Element, first: int, last: int, number: int) -> None:
@@ -666,6 +710,8 @@ def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str =
         part.append(measure)
         if index == 0:
             measure.insert(0, part_attributes(instrument, START_DIVISIONS, fifths, beats, beat_type, symbol))
+    # A piece ends with a final barline, which is how MuseScore starts a score too.
+    set_barline_child(add_barline(measure, "right"), element_with_text("bar-style", FINAL_BARLINE))
     renumber(part)
     ensure_measure_ids(root)
     return root

@@ -87,6 +87,21 @@ function repeatCell(side) {
   return staffCell(44, `<g${flip} stroke="currentColor"><line x1="17" x2="17" y1="12" y2="32" stroke-width="2.6"/><line x1="21.5" x2="21.5" y1="12" y2="32" stroke-width="0.9"/><circle cx="25.5" cy="19.5" r="1.4" fill="currentColor"/><circle cx="25.5" cy="24.5" r="1.4" fill="currentColor"/></g>`);
 }
 
+// A barline on a short piece of staff. Thin lines are the staff's own weight and thick ones a beam's.
+const BARLINE_CELLS = {
+  single: `<line x1="22" x2="22" y1="12" y2="32" stroke-width="0.9"/>`,
+  double: `<line x1="20" x2="20" y1="12" y2="32" stroke-width="0.9"/><line x1="24" x2="24" y1="12" y2="32" stroke-width="0.9"/>`,
+  dashed: `<line x1="22" x2="22" y1="12" y2="32" stroke-width="0.9" stroke-dasharray="3 2.67"/>`,
+  final: `<line x1="19.5" x2="19.5" y1="12" y2="32" stroke-width="0.9"/><line x1="24" x2="24" y1="12" y2="32" stroke-width="2.6"/>`,
+  heavy: `<line x1="22" x2="22" y1="12" y2="32" stroke-width="2.6"/>`,
+  heavyDouble: `<line x1="19.5" x2="19.5" y1="12" y2="32" stroke-width="2.6"/><line x1="24.5" x2="24.5" y1="12" y2="32" stroke-width="2.6"/>`,
+  dotted: `<line x1="22" x2="22" y1="12.7" y2="32" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0.01 2.65"/>`,
+};
+
+function barlineCell(style) {
+  return staffCell(44, `<g stroke="currentColor">${BARLINE_CELLS[style]}</g>`);
+}
+
 function voltaCell(number) {
   const words = number ? `<text x="9" y="22" font-size="11" fill="currentColor" stroke="none" style="font-family: Edwin, C059, serif">${number}.</text>` : `<path d="M14 18l16 12M30 18L14 30" stroke-width="1.2"/>`;
   return drawnCell(`<path d="M5 30V12h34${number === 2 ? "v18" : ""}" stroke-width="1"/>${words}`);
@@ -114,6 +129,8 @@ function buildPalettes() {
   const key = fifths => ({ key: `key:${fifths}`, label: keyName(fifths), html: keyCell(fifths), run: () => barAction("key", { fifths }) });
   const time = (beats, beatType) => ({ key: `time:${beats}/${beatType}`, label: `${beats}/${beatType} time`, html: timeCell(beats, beatType), run: () => barAction("time", { beats, beat_type: beatType }) });
   const timeSign = (symbol, label, glyph, beats, beatType) => ({ key: `time:${symbol}`, label, html: staffCell(36, glyphAt(glyph, 18, 4, "middle")), run: () => barAction("time", { beats, beat_type: beatType, symbol }) });
+  // A barline goes at the end of the selected measure, or of the last one of a selected stretch.
+  const barline = (style, label) => ({ key: `barline:${style}`, label, html: barlineCell(style), ...atNote(() => barAction("barline", { style, note: range?.last ?? actionTarget() })) });
   const clef = (name, label, glyph, line) => ({ key: `clef:${name}`, label, html: clefCell(glyph, line), ...atNote(() => barAction("clef", { clef: name })) });
   const tempo = (words, speed) => ({ key: `tempo:${words} ${speed}`, label: `${words}, ${speed} beats a minute`, html: wordsCell(words, "bold"), ...atNote(() => markAction("tempo", { text: `${words} ${speed}` })) });
   const beat = (label, glyph, unit, dots) => ({ key: `tempo:${unit}${dots ? "." : ""}=80`, label: `${label} = 80`, html: tempoCell(glyph, 80), ...atNote(() => markAction("tempo", { text: "80", unit, dots })) });
@@ -167,7 +184,12 @@ function buildPalettes() {
       repeat("repeat", "forward", "Left (start) repeat sign"), repeat("repeat", "backward", "Right (end) repeat sign"),
       volta(1, "Prima volta"), volta(2, "Seconda volta"), volta(0, "Remove the volta"),
     ] },
-    { id: "barlines", name: "Barlines", usual: true, cells: [repeat("barline", "forward", "Left (start) repeat sign"), repeat("barline", "backward", "Right (end) repeat sign")] },
+    { id: "barlines", name: "Barlines", usual: true, cells: [
+      barline("single", "Single barline"), barline("double", "Double barline"),
+      repeat("barline", "forward", "Left (start) repeat sign"), repeat("barline", "backward", "Right (end) repeat sign"),
+      barline("dashed", "Dashed barline"), barline("final", "Final barline"), barline("heavy", "Heavy barline"),
+      barline("heavyDouble", "Heavy double barline"), barline("dotted", "Dotted barline"),
+    ] },
     { id: "layout", name: "Layout", usual: true, cells: [
       { key: "layout:break", label: "System break", html: drawnCell(BREAK_CELL), ...atNote(() => barAction("break")) },
     ] },
