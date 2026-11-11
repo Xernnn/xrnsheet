@@ -361,7 +361,10 @@ def recognize_page(image: Path, out_dir: Path) -> str | None:
     """
     command = [sys.executable, "-m", "pipeline.recognize", str(image), "--out", str(out_dir), "--notes", os.environ.get("XRNSHEET_NOTES", "homr")]
     if shutil.which("systemd-run"):
-        command = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={MEMORY_LIMIT}", *command]
+        # The app stops a page that takes too long, but if the app is killed outright nothing would,
+        # so the system ends it a minute after the app would have.
+        limits = ["-p", f"MemoryMax={MEMORY_LIMIT}", "-p", f"RuntimeMaxSec={PAGE_TIMEOUT_SECONDS + 60}"]
+        command = ["systemd-run", "--user", "--scope", "-q", *limits, *command]
     with reading_lock:  # So that a page can't start just as the app stops, and be missed.
         if stopping.is_set():
             return INTERRUPTED

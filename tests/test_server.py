@@ -970,3 +970,24 @@ def test_an_edit_sent_as_plain_text_is_not_read(client, ready_score):
     response = client.post(f"/api/scores/{ready_score}/chords/0", content=body, headers={"Content-Type": "text/plain"})
     assert response.status_code == 422
     assert client.get(f"/api/scores/{ready_score}").json()["chords"][0]["text"] == "Dm7"
+
+
+def test_a_page_being_read_is_stopped_by_the_system_if_the_app_is_killed_outright(client, tmp_path, monkeypatch):
+    """Killed with SIGKILL, the app can't stop the page it's reading, so the system has to, a while after the app would have."""
+    started = []
+
+    class Finished:
+        returncode = 1
+
+        def __init__(self, command, **_):
+            started.append(command)
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+    monkeypatch.setattr(server.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(server.subprocess, "Popen", Finished)
+    server.recognize_page(tmp_path / "page.png", tmp_path / "out")
+    limits = [started[0][index + 1] for index, part in enumerate(started[0]) if part == "-p"]
+    longest = [int(limit.split("=")[1]) for limit in limits if limit.startswith("RuntimeMaxSec=")]
+    assert len(longest) == 1 and server.PAGE_TIMEOUT_SECONDS < longest[0] <= 2 * server.PAGE_TIMEOUT_SECONDS
