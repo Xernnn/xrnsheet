@@ -22,14 +22,17 @@ from fractions import Fraction
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import uvicorn
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from chords.fonts import ROOT
 from pipeline import edit, marks, structure, transpose
@@ -51,16 +54,58 @@ PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
+OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
+ONLY_READS = {"GET", "HEAD", "OPTIONS"}
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     fail_interrupted_jobs()
     yield
+    stop_reading()
+
+
+class OwnPagesOnly:
+    """Refuse requests that the app's own page couldn't have sent.
+
+    The app has no sign-in, because it only listens on this computer. But a browser here sends it
+    requests from whatever page is open. A page on another site could upload files to it, and a
+    site whose name is pointed at 127.0.0.1 would be served as if it were the app, and could read
+    and change every score. So a request has to be addressed to this computer by one of its own
+    names, and one that changes something can't come from another site's page. Requests from no
+    page at all, such as a script's, carry no Origin and are let through.
+    """
+
+    def __init__(self, inner: ASGIApp) -> None:
+        self.inner = inner
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            headers = Headers(scope=scope)
+            host, origin = headers.get("host", ""), headers.get("origin")
+            try:
+                named, sender = urlsplit(f"//{host}").hostname, urlsplit(origin or "").netloc
+            except ValueError:
+                named, sender = None, ""
+            if named not in OWN_NAMES:
+                refused = "Open this app at http://127.0.0.1 or http://localhost, with its port."
+            elif scope["method"] not in ONLY_READS and origin is not None and sender.lower() != host.lower():
+                refused = "That request came from another site's page."
+            else:
+                refused = None
+            if refused:
+                await JSONResponse({"detail": refused}, status_code=403)(scope, receive, send)
+                return
+        await self.inner(scope, receive, send)
 
 
 app = FastAPI(title="xrnsheet", lifespan=lifespan)
+app.add_middleware(OwnPagesOnly)
 one_at_a_time = threading.Semaphore(1)  # Recognition is memory hungry.
+# The page being read now, and whether the app is stopping, so that the page can stop with it.
+reading: set[subprocess.Popen] = set()
+reading_lock = threading.Lock()
+stopping = threading.Event()
 # Edits read the latest version and write the next one, so two at once would lose one of them.
 edit_lock = threading.RLock()
 
@@ -274,14 +319,36 @@ def recognize_page(image: Path, out_dir: Path) -> str | None:
     command = [sys.executable, "-m", "pipeline.recognize", str(image), "--out", str(out_dir), "--notes", os.environ.get("XRNSHEET_NOTES", "homr")]
     if shutil.which("systemd-run"):
         command = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={MEMORY_LIMIT}", *command]
+    with reading_lock:  # So that a page can't start just as the app stops, and be missed.
+        if stopping.is_set():
+            return INTERRUPTED
+        process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        reading.add(process)
     try:
-        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=PAGE_TIMEOUT_SECONDS, check=False)
+        _, errors = process.communicate(timeout=PAGE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
         return "Recognition took too long."
-    if result.returncode == 0 and list(out_dir.glob("*.musicxml")):
+    finally:
+        with reading_lock:
+            reading.discard(process)
+    if process.returncode == 0 and list(out_dir.glob("*.musicxml")):
         return None
-    print(result.stderr[-2000:], file=sys.stderr)
-    return NO_STAVES if "No staffs found" in result.stderr or "No noteheads" in result.stderr else "Recognition failed."
+    print(errors[-2000:], file=sys.stderr)
+    return NO_STAVES if "No staffs found" in errors or "No noteheads" in errors else "Recognition failed."
+
+
+def stop_reading() -> None:
+    """Stop the page being read, because the app is stopping.
+
+    Its process would otherwise read on after the app had gone, holding its memory, with nothing
+    left to time it out or to take its answer.
+    """
+    with reading_lock:
+        stopping.set()
+        for process in reading:
+            process.kill()
 
 
 def combine_pages(folder: Path, numbers: list[int]) -> ET.Element:
@@ -309,6 +376,8 @@ def recognize_job(folder: Path, upload: Path) -> None:
                 if len(images) > 1:
                     write_status(folder, "processing", f"Reading page {number} of {len(images)}.")
                 reason = recognize_page(image, folder / "recognized" / f"page_{number:03d}")
+                if stopping.is_set():
+                    return  # It's left as still being read, which the next start reports as interrupted.
                 if reason is None:
                     read.append(number)
                 else:

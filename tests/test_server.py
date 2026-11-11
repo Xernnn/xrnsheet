@@ -1,5 +1,9 @@
 import io
 import json
+import os
+import signal
+import threading
+import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 
@@ -15,7 +19,8 @@ from pipeline.musicxml import to_text
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "JOB_DIR", tmp_path)
-    return TestClient(server.app)
+    monkeypatch.setattr(server, "stopping", threading.Event())  # Each test's app has yet to stop.
+    return TestClient(server.app, base_url="http://127.0.0.1:8000")
 
 
 @pytest.fixture
@@ -691,3 +696,81 @@ def test_saved_files_keep_the_usual_permissions(client):
     ordinary.write_text("x", encoding="utf-8")
     for path in [*folder.glob("version_*.musicxml"), folder / "status.json"]:
         assert path.stat().st_mode & 0o777 == ordinary.stat().st_mode & 0o777
+
+
+def test_a_page_on_another_site_cannot_upload_or_change_anything(client, ready_score):
+    """A browser sends the app requests from any page that's open, and says which site the page is from."""
+    theirs = {"Origin": "https://example.com"}
+    score = to_text(parsed(note() + note("D") + note("E") + note("F"))).encode()
+    response = client.post("/api/scores", files={"file": ("score.musicxml", io.BytesIO(score))}, headers=theirs)
+    assert response.status_code == 403 and "another site" in response.json()["detail"]
+    assert [folder.name for folder in server.JOB_DIR.iterdir()] == [ready_score]
+    client.post(f"/api/scores/{ready_score}/chords/0", json={"text": "Bb7"})
+    assert client.post(f"/api/scores/{ready_score}/undo", headers=theirs).status_code == 403
+    assert client.post(f"/api/scores/{ready_score}/undo", headers={"Origin": "null"}).status_code == 403
+    assert client.get(f"/api/scores/{ready_score}").json()["chords"][0]["text"] == "Bb7"
+
+
+@pytest.mark.parametrize("address", ["127.0.0.1:8000", "localhost:8000", "LOCALHOST:8000"])
+def test_the_apps_own_page_can_change_things(client, address):
+    own = {"Host": address, "Origin": f"http://{address.lower()}"}
+    assert client.post("/api/scores/blank", json={"measures": 1}, headers=own).status_code == 200
+    assert client.post("/api/scores/blank", json={"measures": 1}, headers={"Host": address}).status_code == 200  # A script.
+
+
+@pytest.mark.parametrize("name", ["example.com:8000", "127.0.0.1.example.com", "localhost.example.com:8000", "[::1", ""])
+def test_a_site_whose_name_points_at_this_computer_is_not_served(client, ready_score, name):
+    """Its page would otherwise count as the app's own, and could read every score."""
+    assert client.get("/api/scores", headers={"Host": name}).status_code == 403
+    assert client.get(f"/api/scores/{ready_score}/score.musicxml", headers={"Host": name}).status_code == 403
+    assert client.get("/", headers={"Host": name}).status_code == 403
+
+
+def test_a_page_being_read_stops_when_the_app_does(client, tmp_path, monkeypatch):
+    """Left running it would read on with nothing to time it out, and nothing to take its answer."""
+    stand_in = tmp_path / "stand_in"
+    (stand_in / "pipeline").mkdir(parents=True)
+    (stand_in / "pipeline" / "__init__.py").write_text("", encoding="utf-8")
+    lines = ["import os, pathlib, time", "pathlib.Path('started').write_text(str(os.getpid()))", "time.sleep(60)"]
+    (stand_in / "pipeline" / "recognize.py").write_text("\n".join(lines), encoding="utf-8")
+    monkeypatch.setattr(server, "ROOT", stand_in)  # The page is read by whatever pipeline.recognize is there.
+    monkeypatch.setattr(server.shutil, "which", lambda name: None)
+    reader = threading.Thread(target=server.recognize_page, args=(tmp_path / "page.png", tmp_path / "out"), daemon=True)
+    reader.start()
+    started = stand_in / "started"
+    for _ in range(200):
+        if started.exists() and started.read_text():
+            break
+        time.sleep(0.05)
+    process = int(started.read_text())
+    try:
+        with TestClient(server.app):  # Starting the app, then stopping it.
+            pass
+        reader.join(5)
+        assert not reader.is_alive()
+        with pytest.raises(ProcessLookupError):
+            os.kill(process, 0)
+        assert server.recognize_page(tmp_path / "page.png", tmp_path / "out") == server.INTERRUPTED  # And no other starts.
+    finally:
+        try:
+            os.kill(process, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        reader.join(5)
+
+
+def test_a_sheet_whose_reading_was_stopped_is_left_for_the_next_start_to_report(client, monkeypatch):
+    """Its later pages mustn't be tried, and the pages read so far mustn't pass for the whole sheet."""
+    tried = []
+
+    def stopped_during_page_two(image, out_dir):
+        tried.append(out_dir.name)
+        if len(tried) == 2:
+            server.stopping.set()
+            return "Recognition failed."
+        return fake_recognizer()(image, out_dir)
+
+    monkeypatch.setattr(server, "recognize_page", stopped_during_page_two)
+    folder, upload = job_for_pdf(3)
+    server.recognize_job(folder, upload)
+    assert tried == ["page_001", "page_002"] and server.read_status(folder)["status"] == "processing"

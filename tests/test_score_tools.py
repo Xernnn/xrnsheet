@@ -1,11 +1,13 @@
 """Instruments, tuplets, verses, line breaks, MIDI files, opening files and copying marks."""
 
 import io
+import signal
 import xml.etree.ElementTree as ET
 import zipfile
 from fractions import Fraction
 
 import pytest
+from helpers import note, parsed
 
 from pipeline import edit, engrave, marks, rhythm, structure, transpose
 from pipeline.midi_file import channel_of, midi_bytes, variable_length
@@ -366,6 +368,62 @@ def test_notes_a_midi_file_cannot_hold_are_left_out_of_it():
     assert [event.pitch for event in found.tracks[1].events if event.isNoteOn()] == [60]
 
 
+def before_giving_up(action, seconds=2):
+    """Run something that once never finished, so it fails its own test and doesn't hold up the rest."""
+
+    def give_up(*_):
+        raise TimeoutError("This was still running.")
+
+    signal.signal(signal.SIGALRM, give_up)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        return action()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, signal.SIG_DFL)
+
+
+@pytest.mark.parametrize("opening", [
+    "<backup><duration>2</duration></backup>",
+    '<direction><direction-type><words>Slow</words></direction-type><offset>-1</offset><sound tempo="90"/></direction>',
+])
+def test_music_a_file_puts_before_its_own_start_still_gives_a_midi_file(opening):
+    """A file from another program can step back past the start of its first bar, or hang a tempo there."""
+    root = parsed(opening + note() + note("D"))
+    found = midi_notes(before_giving_up(lambda: midi_bytes(playback(root))))
+    assert [event.pitch for event in found.tracks[1].events if event.isNoteOn()] == [60, 62]
+
+
+def events_named(track, name):
+    return [event for event in track.events if event.type == name or getattr(event.type, "name", "") == name]
+
+
+def test_a_tempo_slower_than_a_midi_file_can_hold_is_written_as_its_slowest():
+    """An eighth note at 10 is 5 quarter notes a minute, and a fermata holds its note at half of that."""
+    root = blank()
+    ids, _ = melody(root, "C", "D")
+    marks.set_tempo(root, ids[0], "10", "eighth")
+    marks.toggle_mark(root, [ids[0]], "fermata")
+    found = midi_notes(midi_bytes(playback(root)))
+    assert [int.from_bytes(event.data, "big") for event in events_named(found.tracks[0], "SET_TEMPO")] == [0xFFFFFF, 12_000_000]
+
+
+def test_a_tempo_of_nothing_is_left_out_of_a_midi_file():
+    tempos = [{"start": 0.0, "bpm": 0.0}, {"start": 1.0, "bpm": 120.0}]
+    found = midi_notes(midi_bytes({"tempos": tempos, "programs": [1], "chords": [], "notes": []}))
+    assert [int.from_bytes(event.data, "big") for event in events_named(found.tracks[0], "SET_TEMPO")] == [500000]
+
+
+@pytest.mark.parametrize("program", [0, 129, 300])
+def test_a_sound_a_midi_file_has_no_number_for_plays_as_the_usual_one(program):
+    """Sounds are numbered 1 to 128. Some programs write them from 0, and a wrong one mustn't spoil the file."""
+    root = parsed(note() + note("D"))
+    root.find("part-list/score-part").append(ET.fromstring(f"<midi-instrument id='i'><midi-program>{program}</midi-program></midi-instrument>"))
+    found = midi_notes(midi_bytes(playback(root)))
+    assert [event.data for event in events_named(found.tracks[1], "PROGRAM_CHANGE")] == [0]
+    assert [event.pitch for event in found.tracks[1].events if event.isNoteOn()] == [60, 62]
+
+
 def test_drums_channel_is_skipped():
     assert 9 not in [channel_of(part) for part in range(30)]
     assert all(0 <= channel_of(part) <= 15 for part in range(30))
@@ -412,6 +470,31 @@ def test_a_compressed_file_that_unpacks_too_large_is_refused(monkeypatch):
     monkeypatch.setattr("pipeline.musicxml.MOST_UNPACKED_BYTES", 10)
     with pytest.raises(ValueError):
         read_score_file(packed(to_text(blank()).encode()), ".mxl")
+
+
+def test_a_compressed_file_whose_list_of_contents_unpacks_too_large_is_refused(monkeypatch):
+    """The list is read before the score it names, so it can be the huge file."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("META-INF/container.xml", f'<container><rootfiles><rootfile full-path="score.xml"/></rootfiles><!--{" " * 5000}--></container>')
+        archive.writestr("score.xml", "<score-partwise><part/></score-partwise>")
+    monkeypatch.setattr("pipeline.musicxml.MOST_UNPACKED_BYTES", 1000)
+    with pytest.raises(ValueError):
+        read_score_file(buffer.getvalue(), ".mxl")
+
+
+def test_a_compressed_file_is_measured_by_what_unpacks_not_by_what_it_claims(monkeypatch):
+    stated = len(b"<score-partwise><part/></score-partwise>")
+    honest = packed(b"<score-partwise><part/></score-partwise>" + b" " * 5000)
+    lying = honest.replace((stated + 5000).to_bytes(4, "little"), stated.to_bytes(4, "little"))
+    assert lying != honest
+    read = []
+    original = zipfile.ZipExtFile.read
+    monkeypatch.setattr(zipfile.ZipExtFile, "read", lambda self, n=-1: read.append(n) or original(self, n))
+    monkeypatch.setattr("pipeline.musicxml.MOST_UNPACKED_BYTES", 1000)
+    with pytest.raises(ValueError):
+        read_score_file(lying, ".mxl")
+    assert read and all(0 < n <= 1001 for n in read)  # Never asked to unpack more than the limit.
 
 
 def test_a_real_chorale_comes_through_note_for_note():

@@ -9,6 +9,8 @@ CHORD_VELOCITY = 50
 MOST_CHANNELS = 16
 DRUM_CHANNEL = 9  # General MIDI keeps this channel for drums, so it's skipped.
 HIGHEST_NOTE = 127  # A note number has seven bits, because a set top bit starts the next event.
+MOST_SOUNDS = 128  # General MIDI's sounds, counted from 1 in a score and from 0 in the file.
+LONGEST_BEAT = 0xFFFFFF  # A tempo is the microseconds a quarter note lasts, in three bytes: 3.6 a minute at the slowest.
 
 
 def variable_length(value: int) -> bytes:
@@ -22,7 +24,12 @@ def variable_length(value: int) -> bytes:
 
 
 def ticks(position: float) -> int:
-    return round(position * TICKS_PER_QUARTER)
+    """Return a moment as a count from the start of the file, which is the earliest there is.
+
+    A score from another program can put a note or a tempo before its own start. A wait can't be
+    less than nothing, and writing one never ended.
+    """
+    return max(round(position * TICKS_PER_QUARTER), 0)
 
 
 def track(events: list[tuple[int, int, bytes]]) -> bytes:
@@ -58,12 +65,16 @@ def midi_bytes(data: dict) -> bytes:
     """Turn what playback returns into the bytes of a MIDI file."""
     tempo_events = []
     for change in data["tempos"]:
-        microseconds = round(60_000_000 / change["bpm"])
+        if not change["bpm"] > 0:
+            continue  # No speed at all, which only a file from elsewhere can ask for.
+        microseconds = min(max(round(60_000_000 / change["bpm"]), 1), LONGEST_BEAT)
         tempo_events.append((ticks(change["start"]), 0, b"\xff\x51\x03" + microseconds.to_bytes(3, "big")))
     tracks = [track(tempo_events)]
     programs = data.get("programs") or [1]
     for part, program in enumerate(programs):
         channel = channel_of(part)
+        if not 1 <= program <= MOST_SOUNDS:
+            program = 1  # The usual sound, as when a part doesn't say.
         events = [(0, -1, bytes([0xC0 | channel, program - 1]))]
         events += note_events([note for note in data["notes"] if note.get("part", 0) == part], channel)
         tracks.append(track(events))
