@@ -934,3 +934,31 @@ def test_a_score_file_that_cannot_be_drawn_says_so(client, monkeypatch):
     monkeypatch.setattr("verovio.toolkit.loadData", lambda self, data: False)  # As it does with a file it can't follow.
     response = client.post("/api/scores", files={"file": ("song.musicxml", to_text(parsed(note())).encode())})
     assert response.status_code == 415 and response.json()["detail"] == "Could not read this MusicXML"
+
+
+@pytest.mark.parametrize("read", [
+    lambda score_id: server.get_score(score_id),
+    lambda score_id: server.find_range(score_id, server.Stretch(first="note0", last="note1")),
+    lambda score_id: server.copy_notes(score_id, server.Stretch(first="note0", last="note1")),
+    lambda score_id: server.get_playback(score_id),
+    lambda score_id: server.download_musicxml(score_id),
+    lambda score_id: server.download_midi(score_id),
+], ids=["score", "range", "copy", "playback", "musicxml", "midi"])
+def test_a_score_read_as_an_edit_is_undone_reads_one_version_whole(client, ready_score, monkeypatch, read):
+    folder = server.JOB_DIR / ready_score
+    assert client.post(f"/api/scores/{ready_score}/notes/note0", json={"action": "up"}).status_code == 200
+    listed = server.versions
+    undoing = []
+
+    def listed_then_undone(place):
+        found = listed(place)
+        if not undoing:  # The read has just found the latest version, and an undo comes in.
+            undoing.append(threading.Thread(target=server.undo, args=(ready_score,)))
+            undoing[0].start()
+            undoing[0].join(timeout=0.3)
+        return found
+
+    monkeypatch.setattr(server, "versions", listed_then_undone)
+    read(ready_score)
+    undoing[0].join()
+    assert len(listed(folder)) == 1  # The undo still happened, once the read was done.

@@ -321,7 +321,8 @@ def versions(folder: Path) -> list[Path]:
 
 
 def current_root(folder: Path) -> ET.Element:
-    return ET.parse(versions(folder)[-1]).getroot()
+    with edit_lock:  # An undo moves the latest version away, so it can't land between finding it and reading it.
+        return ET.parse(versions(folder)[-1]).getroot()
 
 
 def undone(folder: Path) -> list[Path]:
