@@ -39,7 +39,7 @@ from pipeline import edit, marks, structure, transpose
 from pipeline.engrave import export_pdf, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
-from pipeline.musicxml import read_score_file, to_text
+from pipeline.musicxml import UnreadableScore, read_score_file, to_text
 from pipeline.playback import playback
 from pipeline.rhythm import fit_divisions, indexed
 
@@ -473,7 +473,7 @@ def open_score_file(data: bytes, suffix: str) -> dict:
         playback(root)
         render_pages(to_text(root))
     except (ValueError, TypeError, AttributeError, ZeroDivisionError) as error:
-        message = str(error) if isinstance(error, ValueError) and "MusicXML" in str(error) else "That score couldn't be opened."
+        message = str(error) if isinstance(error, UnreadableScore) else "That score couldn't be opened."
         raise HTTPException(415, message) from error
     score_id = uuid.uuid4().hex
     folder = JOB_DIR / score_id

@@ -6,6 +6,7 @@ import signal
 import threading
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -910,3 +911,26 @@ def test_a_pdf_page_too_large_to_read_in_full_detail_is_read_at_a_size_that_fits
     document.save(tmp_path / "upload.pdf")
     images, _ = server.pdf_to_images(tmp_path / "upload.pdf")
     assert [Image.open(image).size for image in images] == [(5000, 2500), (2066, 2924)]
+
+
+@pytest.mark.parametrize(("name", "data", "reason"), [
+    ("big.mxl", "unpacks too large", "That file is too large."),
+    ("page.xml", b"<html/>", "Only MusicXML scores written part by part can be opened."),
+    ("broken.musicxml", b"<nonsense", "That file couldn't be read as MusicXML."),
+], ids=["too-large", "not-part-by-part", "not-musicxml"])
+def test_a_score_file_that_cannot_be_opened_says_why(client, monkeypatch, name, data, reason):
+    if data == "unpacks too large":
+        monkeypatch.setattr("pipeline.musicxml.MOST_UNPACKED_BYTES", 1000)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("META-INF/container.xml", '<container><rootfiles><rootfile full-path="score.xml"/></rootfiles></container>')
+            archive.writestr("score.xml", "<score-partwise><part/></score-partwise>" + " " * 5000)
+        data = buffer.getvalue()
+    response = client.post("/api/scores", files={"file": (name, io.BytesIO(data))})
+    assert response.status_code == 415 and response.json()["detail"] == reason
+
+
+def test_a_score_file_that_cannot_be_drawn_says_so(client, monkeypatch):
+    monkeypatch.setattr("verovio.toolkit.loadData", lambda self, data: False)  # As it does with a file it can't follow.
+    response = client.post("/api/scores", files={"file": ("song.musicxml", to_text(parsed(note())).encode())})
+    assert response.status_code == 415 and response.json()["detail"] == "Could not read this MusicXML"

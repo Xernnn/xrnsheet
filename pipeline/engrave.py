@@ -9,6 +9,7 @@ from pathlib import Path
 
 import verovio
 
+from pipeline.musicxml import UnreadableScore
 from pipeline.structure import BREAK_PREFIX, bars_per_line
 
 # Verovio keeps its font location per thread, so a web server's worker threads must set it.
@@ -185,7 +186,7 @@ def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970)
             "lyricWordSpace": LYRIC_WORD_SPACE,
         })
         if not toolkit.loadData(prepared):
-            raise ValueError("Could not read this MusicXML")
+            raise UnreadableScore("Could not read this MusicXML")
         return [enlarge_title(replace_private_glyphs(toolkit.renderToSVG(page))) for page in range(1, toolkit.getPageCount() + 1)]
 
 
