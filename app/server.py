@@ -36,7 +36,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
 from pipeline import edit, marks, structure, transpose
-from pipeline.engrave import MUSIC_FONT, RESOURCE_PATH, export_pdf, render_pages
+from pipeline.engrave import export_pdf, glyph_script, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import UnreadableScore, read_score_file, to_text
@@ -203,7 +203,9 @@ class VoiceEdit(BaseModel):
 class PartEdit(BaseModel):
     action: str
     name: str = ""
+    names: list[str] = []  # Several to add at once, as one edit.
     note: str | None = None
+    index: int | None = None  # Which instrument to remove, counted from the top.
 
 
 class Stretch(BaseModel):
@@ -529,6 +531,7 @@ def describe(folder: Path, status: dict) -> dict:
         "barChecks": structure.check_measures(root),
         "marks": marks.list_marks(root),
         "parts": structure.part_names(root),
+        "partStaves": structure.part_staves(root),
         "barsPerLine": structure.bars_per_line(root),
     } | structure.title_of(root)
 
@@ -765,11 +768,15 @@ def change_voice(score_id: str, body: VoiceEdit) -> dict:
 def change_parts(score_id: str, body: PartEdit) -> dict:
     def change(root: ET.Element) -> None:
         if body.action == "add":
-            structure.add_part(root, body.name)
+            names = ([body.name] if body.name else []) + body.names
+            if not names:
+                raise edit.EditError("Choose an instrument to add.")
+            for name in names:
+                structure.add_part(root, name)
         elif body.action == "remove":
-            if not body.note:
-                raise edit.EditError("Click a note in the instrument to remove first.")
-            structure.remove_part(root, structure.part_of(root, body.note))
+            if body.index is None and not body.note:
+                raise edit.EditError("Choose the instrument to remove first.")
+            structure.remove_part(root, body.index if body.index is not None else structure.part_of(root, body.note))
         else:
             raise HTTPException(422, "Unknown instrument action")
 
@@ -931,10 +938,10 @@ def get_thumbnail(score_id: str) -> FileResponse:
     return FileResponse(path, media_type="image/svg+xml")
 
 
-@app.get("/music-font.css")
-def music_font() -> FileResponse:
-    """Serve the music font the pages are drawn in, so the toolbar and palettes show the same symbols."""
-    return FileResponse(Path(RESOURCE_PATH) / f"{MUSIC_FONT}.css", media_type="text/css", headers={"Cache-Control": "max-age=86400"})
+@app.get("/glyphs.js")
+def music_glyphs() -> Response:
+    """Serve the shapes the pages are engraved with, so the toolbar and palettes show the same symbols."""
+    return Response(glyph_script(), media_type="text/javascript", headers={"Cache-Control": "max-age=86400"})
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

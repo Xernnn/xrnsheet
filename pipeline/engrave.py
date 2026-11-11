@@ -1,5 +1,7 @@
 """Turn MusicXML back into pages, as SVG for the screen and PDF for printing."""
 
+import functools
+import json
 import re
 import subprocess
 import tempfile
@@ -206,6 +208,30 @@ def prepare_for_drawing(musicxml: str) -> str:
     add_beams(root)
     set_line_breaks(root)
     return drop_spelled_degrees(ET.tostring(root, encoding="unicode"))
+
+
+@functools.lru_cache(maxsize=1)
+def glyph_outlines() -> dict[str, list]:
+    """Return each symbol of the music font as its outline, its box and how far it moves the pen.
+
+    The toolbar and palettes draw their symbols from these, so they show the very shapes a page is
+    engraved with. They come with Verovio. Distances are in thousandths of four staff spaces, with
+    y going up.
+    """
+    folder = Path(RESOURCE_PATH)
+    found = {}
+    for box in ET.parse(folder / f"{MUSIC_FONT}.xml").getroot().findall("g"):
+        code = box.get("c")
+        path = folder / MUSIC_FONT / f"{code}.xml"
+        outline = " ".join(piece.get("d") for piece in ET.parse(path).getroot().iter("path")) if path.exists() else ""
+        if outline:
+            found[code] = [outline, *(round(float(box.get(name))) for name in ("x", "y", "w", "h", "h-a-x"))]
+    return found
+
+
+def glyph_script() -> str:
+    """The outlines as a script the page loads before its own."""
+    return f"const GLYPHS = {json.dumps(glyph_outlines(), separators=(',', ':'))};\n"
 
 
 def set_text_font(svg: str) -> str:

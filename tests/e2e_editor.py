@@ -70,13 +70,75 @@ def click_on(page, locator) -> None:
     page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
 
 
+def new_score(page, instrument: str = "treble", bars: int | None = None, time: str | None = None) -> None:
+    """Start a score through the New score dialog: its instrument first, then the rest."""
+    page.click("#blankOpen")
+    page.fill("#newChooser input", instrument.split("-")[0])
+    page.click(f'#newChooser [data-instrument="{instrument}"] button')
+    page.click("#blankNext")
+    if time:
+        page.select_option("#blankTime", time)
+    if bars:
+        page.fill("#blankBars", str(bars))
+    page.click("#blankDone")
+    page.wait_for_selector("#pages svg")
+
+
+def choose(page, cell: str) -> None:
+    """Click a palette cell, opening or adding its palette first if need be, as a person would."""
+    if page.is_hidden("#palettesPanel"):
+        page.click('#sideTabs [data-panel="palettes"]')
+    found = page.locator(f'#paletteTree [data-cell="{cell}"]')
+    if not found.count():
+        palette, name = page.evaluate("cell => { const found = palettes.find(palette => palette.cells.some(item => item.key === cell)); return [found.id, found.name]; }", cell)
+        if not page.locator(f'.palette[data-palette="{palette}"]').count():
+            page.click("#addPalettes")
+            page.click(f'.menu button:has(span:text-is("{name}"))')
+        if not found.count():
+            page.click(f'.palette[data-palette="{palette}"] .name')
+    found.click()
+
+
+def menu(page, *path: str) -> None:
+    """Choose from the menu bar, such as menu(page, "Add", "Text", "Chord symbol")."""
+    page.click(f'#menuBar [data-menu="{path[0]}"]')
+    for label in path[1:]:
+        page.locator(".menu").last.locator(f'button:has(span:text-is("{label}"))').click()
+
+
+def menu_offers(page, *path: str) -> bool:
+    """Say whether a menu item can be chosen just now, then close the menu again."""
+    page.click(f'#menuBar [data-menu="{path[0]}"]')
+    for label in path[1:-1]:
+        page.locator(".menu").last.locator(f'button:has(span:text-is("{label}"))').click()
+    offered = page.locator(".menu").last.locator(f'button:has(span:text-is("{path[-1]}"))').is_enabled()
+    page.keyboard.press("Escape")
+    return offered
+
+
+def system_breaks(page, every: int) -> None:
+    """Keep this many measures on each system, or fit them to the page if it's 0."""
+    menu(page, "Format", "Add/remove system breaks…")
+    if every:
+        page.fill("#breaksCount", str(every))
+    else:
+        page.check('input[name="breaksMode"][value="fit"]')
+    page.click("#breaksDialog button[type=submit]")
+
+
+def transpose(page, key: int | None = None, interval: str = "", direction: str = "up") -> None:
+    menu(page, "Tools", "Transpose…")
+    if key is not None:
+        page.select_option("#transposeKey", str(key))
+    else:
+        page.select_option("#transposeInterval", interval)
+        page.select_option("#transposeDirection", direction)
+    page.click("#transposeDialog button[type=submit]")
+
+
 def test_writing(page, base: str, shots: Path | None, created: list[str]) -> None:
     page.goto(base)
-    page.click("#blankOpen")
-    page.select_option("#blankTime", "4/4")
-    page.fill("#blankBars", "8")
-    page.click("#blankForm button[type=submit]")
-    page.wait_for_selector("#pages svg")
+    new_score(page, bars=8, time="4/4")
     score_id = page.evaluate("() => scoreId")
     created.append(score_id)
     check("blank score opens ready to type", page.get_attribute("#inputToggle", "aria-pressed") == "true")
@@ -148,24 +210,23 @@ def test_writing(page, base: str, shots: Path | None, created: list[str]) -> Non
     page.keyboard.press("Escape")
 
     bars = lambda: len({note[0] for note in read_notes(base, score_id)})
-    page.click("#addBar")
+    menu(page, "Add", "Measures", "Insert one measure at end of score")
     settle(page)
     check("add bar adds one at the end", bars() == 9)
     click_on(page, page.locator("#pages g.note").first)
-    page.click("#deleteBar")
+    menu(page, "Edit", "Delete selected measure")
     settle(page)
     check("delete bar removes it", bars() == 8)
     check("the deleted bar's signature moved on", ET.fromstring(fetch_text(base, f"/api/scores/{score_id}/score.musicxml")).find("part").find("measure").findtext("attributes/divisions") is not None)
 
     click_on(page, page.locator("#pages g.note").first)
-    page.select_option("#keyChoice", "-2")
+    choose(page, "key:-2")
     settle(page)
     xml = fetch_text(base, f"/api/scores/{score_id}/score.musicxml")
     check("key change is saved", "<fifths>-2</fifths>" in xml)
-    check("the key picker resets", page.input_value("#keyChoice") == "")
 
     page.keyboard.press("Escape")
-    page.select_option("#timeChoice", "3/4")
+    choose(page, "time:3/4")
     settle(page)
     chips = page.locator("#barChecks .chip")
     check("bars that no longer fit are listed", chips.count() >= 1, chips.count() and chips.first.inner_text())
@@ -179,12 +240,12 @@ def test_writing(page, base: str, shots: Path | None, created: list[str]) -> Non
     page.keyboard.press("Escape")
 
     page.keyboard.press(" ")
-    page.wait_for_function("() => document.querySelector('#play').textContent === 'Stop'")
+    page.wait_for_function("() => document.querySelector('#play').getAttribute('aria-label') === 'Stop'")
     check("space starts playback", int(page.get_attribute("#play", "data-notes")) >= 5)
     page.wait_for_selector("#pages g.playing", timeout=4000)
     check("the playing note lights up", True)
     page.keyboard.press(" ")
-    check("space stops playback", page.inner_text("#play") == "Play" and page.locator("#pages g.playing").count() == 0)
+    check("space stops playback", page.get_attribute("#play", "aria-label") == "Play" and page.locator("#pages g.playing").count() == 0)
 
     pdf = urllib.request.urlopen(f"{base}/api/scores/{score_id}/score.pdf").read()
     check("the PDF downloads", pdf[:4] == b"%PDF", len(pdf))
@@ -193,18 +254,14 @@ def test_writing(page, base: str, shots: Path | None, created: list[str]) -> Non
     page.reload()
     page.wait_for_selector("#pages svg")
     check("a reload keeps the score", read_notes(base, score_id) == kept)
-    page.click("#again")
+    page.click("#homeTab")
     page.wait_for_selector("#historyList a")
     check("it's listed as written from scratch", "written from scratch" in page.inner_text("#historyList"))
 
 
 def open_blank(page, base: str, created: list[str], bars: int = 4, staff: str = "treble") -> str:
     page.goto(base)
-    page.click("#blankOpen")
-    page.select_option("#blankClef", staff)
-    page.fill("#blankBars", str(bars))
-    page.click("#blankForm button[type=submit]")
-    page.wait_for_selector("#pages svg")
+    new_score(page, staff, bars)
     created.append(page.evaluate("() => scoreId"))
     return created[-1]
 
@@ -413,7 +470,7 @@ def test_selection(page, base: str, shots: Path | None, created: list[str]) -> N
     check("one undo reverses the whole stretch", pitched(read_notes(base, score_id))[:4] == ["C5", "D5", "E5", "F5"] and version)
     page.keyboard.press("Control+c")
     settle(page)
-    check("copying enables paste", page.is_enabled("#paste"))
+    check("copying enables paste", menu_offers(page, "Edit", "Paste"))
     rest_in_bar_three = page.evaluate("""() => {
         const measures = [...document.querySelectorAll("#pages g.measure")];
         return measures[2].querySelector("g.rest, g.mRest").id;
@@ -436,7 +493,7 @@ def test_selection(page, base: str, shots: Path | None, created: list[str]) -> N
     other = open_blank(page, base, created)
     page.keyboard.press("Escape")
     click_on(page, page.locator("#pages g.rest, #pages g.mRest").first)
-    check("the clip survives opening another score", page.is_enabled("#paste"))
+    check("the clip survives opening another score", menu_offers(page, "Edit", "Paste"))
     page.keyboard.press("Control+v")
     settle(page)
     check("the last thing cut is what gets pasted", pitched(read_notes(base, other)) == ["D5"], pitched(read_notes(base, other)))
@@ -528,35 +585,37 @@ def test_lyrics(page, base: str, shots: Path | None, created: list[str]) -> None
 def test_titles_and_repeats(page, base: str, shots: Path | None, created: list[str]) -> None:
     score_id = open_blank(page, base, created, bars=4)
     page.keyboard.press("Escape")
+    menu(page, "File", "Project properties…")
     page.fill("#titleInput", "Test Song")
     page.fill("#composerInput", "A. Writer")
     page.keyboard.press("Enter")
     settle(page)
-    page.locator("#composerInput").blur()
-    settle(page)
+    check("the dialog closes once its fields are saved", page.is_hidden("#projectDialog"))
     root = saved_score(base, score_id)
     check("the title is saved", root.findtext("work/work-title") == "Test Song", root.findtext("work/work-title"))
     printed = page.evaluate("""() => document.querySelector("#pages .pgHead")?.textContent ?? "" """)
     check("title and composer are printed", "Test Song" in printed and "A. Writer" in printed, printed.split())
     page.reload()
     page.wait_for_selector("#pages svg")
-    check("the title is shown again after reloading", page.input_value("#titleInput") == "Test Song")
+    check("the title names the score's tab after reloading", page.inner_text("#scoreName") == "Test Song")
+    menu(page, "File", "Project properties…")
+    check("the title is shown again where it's changed", page.input_value("#titleInput") == "Test Song" and page.input_value("#composerInput") == "A. Writer")
+    page.keyboard.press("Escape")
 
     rests = page.locator("#pages g.mRest, #pages g.rest")
     click_on(page, rests.nth(1))
-    page.select_option("#repeatChoice", "backward")
+    choose(page, "repeat:backward")
     settle(page)
     click_on(page, page.locator("#pages g.mRest, #pages g.rest").nth(1))
-    page.select_option("#repeatChoice", "1")
+    choose(page, "ending:1")
     settle(page)
     click_on(page, page.locator("#pages g.mRest, #pages g.rest").nth(2))
-    page.select_option("#repeatChoice", "2")
+    choose(page, "ending:2")
     settle(page)
     played = json.loads(fetch_text(base, f"/api/scores/{score_id}/playback"))["total"]
     root = saved_score(base, score_id)
     check("repeats are saved", len(list(root.iter("repeat"))) == 1 and len(list(root.iter("ending"))) >= 2)
     check("the repeat plays bars 1, 2, 1, 3, 4", played == 20, played)
-    check("the menu goes back to its label", page.input_value("#repeatChoice") == "")
     page.keyboard.press("Control+z")
     page.keyboard.press("Control+z")
     settle(page)
@@ -566,7 +625,7 @@ def test_titles_and_repeats(page, base: str, shots: Path | None, created: list[s
     page.mouse.click(bar_three["x"] + bar_three["width"] / 2, bar_three["y"] + bar_three["height"] / 2)
     page.keyboard.up("Shift")
     settle(page)
-    page.select_option("#repeatChoice", "1")
+    choose(page, "ending:1")
     settle(page)
     measures = saved_score(base, score_id).find("part").findall("measure")
     starts = [len(measure.findall("barline[@location='left']/ending")) for measure in measures]
@@ -668,7 +727,7 @@ def slur_spot(page, piece: int = 0) -> dict:
 
 def test_marks_over_a_line_break(page, base: str, created: list[str]) -> None:
     score_id = written_melody(page, base, created, tune="cdefgabcdefgabcd", bars=8)
-    page.select_option("#layoutChoice", "2")
+    system_breaks(page, 2)
     settle(page)
     select_notes(page, 5, 10)
     page.keyboard.press("s")
@@ -700,16 +759,15 @@ def test_note_marks(page, base: str, shots: Path | None, created: list[str]) -> 
     check("undo brings a mark back", len(notes_with(saved_score(base, score_id), "notations/articulations/staccato")) == 1)
 
     select_notes(page, 1, 3)
-    page.select_option("#markChoice", "accent")
+    choose(page, "mark:accent")
     settle(page)
     check("a mark goes on a whole selection", len(notes_with(saved_score(base, score_id), "notations/articulations/accent")) == 3)
-    check("the menu goes back to its label", page.input_value("#markChoice") == "")
     select_notes(page, 4)
-    page.select_option("#markChoice", "fermata")
+    choose(page, "mark:fermata")
     settle(page)
     check("a fermata is drawn", page.locator("#pages g.fermata").count() == 1)
     select_notes(page, 5)
-    page.select_option("#markChoice", "trill")
+    choose(page, "mark:trill")
     settle(page)
     check("a trill is drawn", page.locator("#pages g.trill").count() == 1)
 
@@ -756,7 +814,7 @@ def test_note_marks(page, base: str, shots: Path | None, created: list[str]) -> 
     settle(page)
     check("the same again takes it away", page.locator("#pages g.hairpin").count() == 0)
     select_notes(page, 2, 5)
-    page.click("#dimButton")
+    choose(page, "hairpin:diminuendo")
     settle(page)
     root = saved_score(base, score_id)
     check("the button draws a diminuendo", [wedge.get("type") for wedge in root.iter("wedge")] == ["diminuendo", "stop"])
@@ -786,7 +844,7 @@ def test_note_marks(page, base: str, shots: Path | None, created: list[str]) -> 
 def test_placed_marks(page, base: str, shots: Path | None, created: list[str]) -> None:
     score_id = written_melody(page, base, created)
     select_notes(page, 0)
-    page.select_option("#dynamicChoice", "p")
+    choose(page, "dynamic:p")
     settle(page)
     check("a dynamic is drawn", page.locator("#pages g.dynam").count() == 1)
     check("a drawn dynamic knows what it is", page.get_attribute("#pages g.dynam", "data-mark") is not None)
@@ -809,20 +867,20 @@ def test_placed_marks(page, base: str, shots: Path | None, created: list[str]) -
     check("a dynamic can be removed by clicking it", saved_score(base, score_id).find(".//dynamics") is None)
 
     select_notes(page, 0)
-    page.select_option("#tempoChoice", "Allegro 132")
+    choose(page, "tempo:Allegro 144")
     settle(page)
     root = saved_score(base, score_id)
-    check("a tempo from the menu is saved", root.find(".//metronome/per-minute").text == "132")
+    check("a tempo from the palette is saved", root.find(".//metronome/per-minute").text == "144")
     check("the tempo is drawn", page.locator("#pages g.tempo").count() == 1)
     select_notes(page, 4)
-    page.select_option("#tempoChoice", "type")
+    menu(page, "Add", "Text", "Tempo marking")
     page.fill("#chordInput", "Adagio 66")
     page.keyboard.press("Enter")
     settle(page)
-    check("a typed tempo is saved", [found.text for found in saved_score(base, score_id).iter("per-minute")] == ["132", "66"])
+    check("a typed tempo is saved", [found.text for found in saved_score(base, score_id).iter("per-minute")] == ["144", "66"])
 
     select_notes(page, 1)
-    page.select_option("#textChoice", "staff")
+    choose(page, "text:staff")
     page.fill("#chordInput", "solo")
     page.keyboard.press("Enter")
     settle(page)
@@ -834,12 +892,12 @@ def test_placed_marks(page, base: str, shots: Path | None, created: list[str]) -
     settle(page)
     check("text can be changed where it's drawn", "tutti" in page.inner_text("#pages") and "solo" not in page.inner_text("#pages"))
     select_notes(page, 2)
-    page.select_option("#textChoice", "rehearsal")
+    choose(page, "text:rehearsal")
     settle(page)
     check("a rehearsal letter is drawn", page.locator("#pages g.reh").count() == 1)
 
     select_notes(page, 0)
-    page.select_option("#jumpChoice", "segno")
+    choose(page, "jump:segno")
     settle(page)
     check("a segno is drawn", page.locator("#pages g.repeatMark").count() == 1)
     click_mark(page, "#pages g.repeatMark")
@@ -848,12 +906,12 @@ def test_placed_marks(page, base: str, shots: Path | None, created: list[str]) -
     settle(page)
     check("a sign can be removed by clicking it", page.locator("#pages g.repeatMark").count() == 0)
     select_notes(page, 7)
-    page.select_option("#jumpChoice", "dc")
+    choose(page, "jump:dc")
     settle(page)
     check("a jump is drawn", "D.C." in page.inner_text("#pages"))
 
     select_notes(page, 3)
-    page.select_option("#clefChoice", "bass")
+    choose(page, "clef:bass")
     settle(page)
     root = saved_score(base, score_id)
     check("a clef change is saved in that bar", root.find("part").findall("measure")[0].find("attributes/clef/sign").text == "F")
@@ -927,13 +985,13 @@ def test_voices(page, base: str, shots: Path | None, created: list[str]) -> None
 def test_transposing(page, base: str, created: list[str]) -> None:
     score_id = written_melody(page, base, created, tune="cdef")
     select_notes(page, 0)
-    page.click("#addChord")
+    menu(page, "Add", "Text", "Chord symbol")
     page.fill("#chordInput", "Cmaj7")
     page.keyboard.press("Enter")
     settle(page)
     page.keyboard.press("Escape")
     settle(page)
-    page.select_option("#transposeChoice", "key:2")
+    transpose(page, key=2)
     settle(page)
     root = saved_score(base, score_id)
     check("the whole score moves to D", root.find(".//fifths").text == "2")
@@ -943,7 +1001,7 @@ def test_transposing(page, base: str, created: list[str]) -> None:
     settle(page)
     check("one undo takes it all back", saved_score(base, score_id).find(".//fifths").text == "0")
     select_notes(page, 1, 2)
-    page.select_option("#transposeChoice", "M2:up")
+    transpose(page, interval="M2", direction="up")
     settle(page)
     root = saved_score(base, score_id)
     check("a selection moves alone", [note.findtext("pitch/step") for note in root.iter("note") if note.find("pitch") is not None][:4] == list("CEFF"))
@@ -952,14 +1010,25 @@ def test_transposing(page, base: str, created: list[str]) -> None:
 
 def test_instruments_and_layout(page, base: str, shots: Path | None, created: list[str]) -> None:
     score_id = written_melody(page, base, created, bars=12, tune="cdef")
-    page.select_option("#partChoice", "trumpet")
+    page.click('#sideTabs [data-panel="instruments"]')
+    page.click("#partAdd")
+    page.click('#partChooser li:text-is("Brass")')
+    page.dblclick('#partChooser [data-instrument="trumpet"]')
+    page.click("#partOk")
     settle(page)
+    check("the panel lists both instruments", page.locator("#partList li").all_inner_texts() == ["Music", "Trumpet in B♭"], page.locator("#partList li").all_inner_texts())
     root = saved_score(base, score_id)
     check("an instrument adds a part", len(root.findall("part")) == 2)
     check("its bars match", len(root.findall("part")[1].findall("measure")) == 12)
     check("a B flat trumpet reads two sharps more", root.findall("part")[1].find(".//fifths").text == "2")
     check("both staves are drawn", page.locator("#pages g.measure").first.locator("g.staff").count() == 2)
-    check("a part can be printed", page.is_visible("#partPdf"))
+    page.click("#partsButton")
+    check("each part is offered for printing", page.locator("#partsList li").count() == 2)
+    page.evaluate("() => { window.asked = []; window.open = address => { window.asked.push(address); }; }")
+    page.dblclick("#partsList li >> nth=1")
+    asked = page.evaluate("() => window.asked")
+    check("a part opens as its own PDF", len(asked) == 1 and asked[0].endswith("score.pdf?part=1"), asked)
+    check("and the list of parts closes", page.is_hidden("#partsDialog"))
     lower = page.evaluate("""() => document.querySelector("#pages g.measure").querySelectorAll("g.staff")[1].querySelector("g.mRest, g.rest").id""")
     click_on(page, page.locator(f"[id='{lower}']"))
     settle(page)
@@ -978,15 +1047,16 @@ def test_instruments_and_layout(page, base: str, shots: Path | None, created: li
         check("a MIDI file downloads", response.read(4) == b"MThd")
     click_on(page, page.locator("#pages g.measure").first.locator("g.staff").nth(1).locator("g.note").first)
     settle(page)
-    page.select_option("#partChoice", "remove")
+    check("selecting a note selects its instrument in the panel", page.get_attribute("#partList li >> nth=1", "aria-selected") == "true")
+    page.click("#partRemove")
     settle(page)
     check("an instrument can be removed", len(saved_score(base, score_id).findall("part")) == 1)
 
     bars_in_lines = """() => [...document.querySelectorAll("#pages g.system")].map(system => system.querySelectorAll("g.measure").length)"""
-    page.select_option("#layoutChoice", "4")
+    system_breaks(page, 4)
     settle(page)
     check("bars can be set to 4 a line", page.evaluate(bars_in_lines) == [4, 4, 4], page.evaluate(bars_in_lines))
-    page.select_option("#layoutChoice", "0")
+    system_breaks(page, 0)
     settle(page)
     check("and given back to the page", page.evaluate(bars_in_lines) != [4, 4, 4], page.evaluate(bars_in_lines))
     click_on(page, page.locator("#pages g.measure").nth(1).locator("g.rest, g.mRest").first)
@@ -1123,7 +1193,8 @@ def test_instrument_sounds(page, base: str, created: list[str]) -> None:
 
 def test_pickup(page, base: str, created: list[str]) -> None:
     score_id = open_blank(page, base, created, bars=2)
-    page.select_option("#timeChoice", "pickup:4")
+    page.click('#sideTabs [data-panel="properties"]')
+    page.select_option("#pickupChoice", "4")
     settle(page)
     check("the menu makes a pickup with nothing selected", saved_score(base, score_id).find("part").find("measure").get("implicit") == "yes")
     page.keyboard.press("5")
@@ -1140,7 +1211,7 @@ def test_pickup(page, base: str, created: list[str]) -> None:
 def test_audio_file(page, base: str, created: list[str]) -> None:
     written_melody(page, base, created, bars=2, tune="cdef")
     with page.expect_download() as download:
-        page.click("#audio")
+        menu(page, "File", "Export", "Audio (WAV)")
     check("the audio file has a sensible name", download.value.suggested_filename == "score.wav")
     with wave.open(str(download.value.path())) as sound:
         rate, channels, width, length = sound.getframerate(), sound.getnchannels(), sound.getsampwidth(), sound.getnframes()
@@ -1195,7 +1266,7 @@ def test_midi_keyboard(context, base: str, created: list[str]) -> None:
 def test_opening_a_file(page, base: str, shots: Path | None, created: list[str]) -> None:
     source = written_melody(page, base, created, tune="cdef")
     select_notes(page, 0)
-    page.select_option("#dynamicChoice", "mf")
+    choose(page, "dynamic:mf")
     settle(page)
     text = fetch_text(base, f"/api/scores/{source}/score.musicxml")
     page.goto(base)
@@ -1214,18 +1285,18 @@ def test_opening_a_file(page, base: str, shots: Path | None, created: list[str])
 def test_sound_of_marks(page, base: str, created: list[str]) -> None:
     written_melody(page, base, created, tune="cdefcdef")
     select_notes(page, 0)
-    page.select_option("#tempoChoice", "type")
+    menu(page, "Add", "Text", "Tempo marking")
     page.fill("#chordInput", "60")
     page.keyboard.press("Enter")
     settle(page)
     select_notes(page, 0)
-    page.select_option("#dynamicChoice", "pp")
+    choose(page, "dynamic:pp")
     settle(page)
     select_notes(page, 4)
-    page.select_option("#dynamicChoice", "ff")
+    choose(page, "dynamic:ff")
     settle(page)
     select_notes(page, 2)
-    page.select_option("#tempoChoice", "type")
+    menu(page, "Add", "Text", "Tempo marking")
     page.fill("#chordInput", "120")
     page.keyboard.press("Enter")
     settle(page)
@@ -1278,7 +1349,7 @@ def test_sound(page, base: str, created: list[str]) -> None:
     settle(page)
     bar_two = page.evaluate("""() => document.querySelectorAll("#pages g.measure")[1].querySelector("g.note").id""")
     click_on(page, page.locator(f"[id='{bar_two}']"))
-    page.select_option("#repeatChoice", "backward")
+    choose(page, "repeat:backward")
     settle(page)
     first = page.evaluate(HEAR)
     heard = first["heard"]
@@ -1304,10 +1375,7 @@ def test_phone(context, base: str, shots: Path | None, created: list[str]) -> No
     page = context.new_page()
     page.set_viewport_size({"width": 390, "height": 800})
     page.goto(base)
-    page.click("#blankOpen")
-    page.fill("#blankBars", "4")
-    page.click("#blankForm button[type=submit]")
-    page.wait_for_selector("#pages svg")
+    new_score(page, bars=4)
     score_id = page.evaluate("() => scoreId")
     created.append(score_id)
     page.locator("#pitches button").first.click()
@@ -1333,7 +1401,7 @@ def test_recognized(page, base: str, shots: Path | None, created: list[str]) -> 
     chords = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]
     check("a recognized sheet shows its chord boxes", boxes == len(chords) and boxes > 0, boxes)
     click_on(page, page.locator("#pages g.note").first)
-    page.click("#addBar")
+    menu(page, "Add", "Measures", "Insert one measure before selection")
     settle(page)
     after = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]
     check("adding a bar keeps every chord linked to its box", sum(chord["box"] is not None for chord in after) == len(chords))

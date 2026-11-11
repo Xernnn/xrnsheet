@@ -733,6 +733,11 @@ def part_names(root: ET.Element) -> list[str]:
     return [entry.findtext("part-name") or "" for entry in root.findall("part-list/score-part")]
 
 
+def part_staves(root: ET.Element) -> list[int]:
+    """Return how many staves each instrument has, so a staff on the page can be traced to its instrument."""
+    return [int(part.findtext("measure/attributes/staves") or 1) for part in root.findall("part")]
+
+
 def part_of(root: ET.Element, note_id: str) -> int:
     for index, part in enumerate(root.findall("part")):
         if any(note.get("id") == note_id for note in part.iter("note")):

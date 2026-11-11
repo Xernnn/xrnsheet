@@ -2,12 +2,14 @@ import asyncio
 import io
 import json
 import os
+import re
 import signal
 import threading
 import time
 import xml.etree.ElementTree as ET
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1012,10 +1014,22 @@ def test_a_sheet_still_being_read_has_no_thumbnail(client):
     assert client.get(f"/api/scores/{'f' * 32}/thumbnail.svg").status_code == 404
 
 
-def test_the_pages_music_font_is_served_for_the_toolbar(client):
-    response = client.get("/music-font.css")
-    assert response.status_code == 200 and response.headers["content-type"].startswith("text/css")
-    assert "font-family: 'Leland'" in response.text and "format('woff2')" in response.text
+STATIC = Path(server.__file__).parent / "static"
+
+
+def test_every_symbol_the_window_draws_is_one_the_engraver_has(client):
+    """The toolbar and palettes ask for music symbols by their code. One that's missing would draw as nothing."""
+    response = client.get("/glyphs.js")
+    assert response.status_code == 200 and response.headers["content-type"].startswith("text/javascript")
+    assert response.text.startswith("const GLYPHS = {")
+    known = json.loads(response.text.removeprefix("const GLYPHS = ").rstrip().removesuffix(";"))
+    outline, left, bottom, width, height, advance = known["E050"]
+    assert outline.startswith("M") and width > 0 and height > 1000 and bottom < 0 and advance > 0
+    asked = set()
+    for path in [*STATIC.glob("*.js"), *STATIC.glob("*.html")]:
+        for found in re.findall(r"""["'`]((?:[EF][0-9A-F]{3})(?: [EF][0-9A-F]{3})*)["'`]""", path.read_text(encoding="utf-8")):
+            asked.update(found.split())
+    assert len(asked) > 40 and asked - set(known) == set()
 
 
 def test_a_new_score_can_start_with_several_instruments_and_its_first_page_written(client):
@@ -1043,3 +1057,14 @@ def test_instruments_are_listed_by_family_for_the_chooser(client):
     assert {"id": "violin", "label": "Violin", "family": "Strings - Bowed"} in found
     assert {"id": "treble", "label": "Treble staff", "family": "Plain staves"} in found
     assert len({item["id"] for item in found}) == len(found)
+
+
+def test_instruments_are_added_together_and_removed_by_their_place(client):
+    score_id = client.post("/api/scores/blank", json={"clef": "voice", "measures": 2}).json()["id"]
+    data = client.post(f"/api/scores/{score_id}/parts", json={"action": "add", "names": ["piano", "cello"]}).json()
+    assert data["parts"] == ["Voice", "Piano", "Cello"] and data["partStaves"] == [1, 2, 1]
+    assert client.post(f"/api/scores/{score_id}/undo").json()["parts"] == ["Voice"]
+    client.post(f"/api/scores/{score_id}/redo")
+    assert client.post(f"/api/scores/{score_id}/parts", json={"action": "remove", "index": 1}).json()["parts"] == ["Voice", "Cello"]
+    assert client.post(f"/api/scores/{score_id}/parts", json={"action": "remove", "index": 7}).status_code == 422
+    assert client.post(f"/api/scores/{score_id}/parts", json={"action": "add"}).status_code == 422

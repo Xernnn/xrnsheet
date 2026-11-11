@@ -1,12 +1,13 @@
-// Note entry, selection, the toolbar and playback. This loads after the main script and starts the page.
+// Note entry, selection, the note toolbar and playback. This loads last and starts the page.
+// In the order the toolbar shows them, which is MuseScore's: shortest first.
 const LENGTHS = [
-  { key: "7", type: "whole", label: "Whole note" },
-  { key: "6", type: "half", label: "Half note" },
-  { key: "5", type: "quarter", label: "Quarter note" },
-  { key: "4", type: "eighth", label: "Eighth note" },
-  { key: "3", type: "16th", label: "Sixteenth note" },
-  { key: "2", type: "32nd", label: "32nd note" },
-  { key: "1", type: "64th", label: "64th note" },
+  { key: "1", type: "64th", label: "64th note", glyph: "E1DD" },
+  { key: "2", type: "32nd", label: "32nd note", glyph: "E1DB" },
+  { key: "3", type: "16th", label: "16th note", glyph: "E1D9" },
+  { key: "4", type: "eighth", label: "Eighth note", glyph: "E1D7" },
+  { key: "5", type: "quarter", label: "Quarter note", glyph: "E1D5" },
+  { key: "6", type: "half", label: "Half note", glyph: "E1D3" },
+  { key: "7", type: "whole", label: "Whole note", glyph: "E1D2" },
 ];
 const AFTER = "after:"; // A cursor past the last note of the score.
 const GROUP_ACTIONS = new Set(["up", "down", "octaveUp", "octaveDown", "sharp", "flat", "natural", "delete", "clear", "respell", "flip"]);
@@ -43,16 +44,6 @@ let dragged = false;
 let drag = null;
 let lastMidiKey = 0;
 let midiAsked = false;
-
-function noteIcon(type) {
-  const open = type === "whole" || type === "half";
-  const flags = { eighth: 1, "16th": 2, "32nd": 3, "64th": 4 }[type] || 0;
-  const head = `<ellipse cx="5.5" cy="16" rx="4" ry="2.9" transform="rotate(-20 5.5 16)" fill="${open ? "none" : "currentColor"}" stroke="currentColor" stroke-width="1.4"/>`;
-  const stem = type === "whole" ? "" : `<path d="M9.2 15V2" stroke="currentColor" stroke-width="1.3"/>`;
-  let marks = "";
-  for (let flag = 0; flag < flags; flag++) marks += `<path d="M9.2 ${2 + flag * 2.6}c1 2.4 4.2 2.8 3.3 6.2" fill="none" stroke="currentColor" stroke-width="1.3"/>`;
-  return `<svg viewBox="0 0 15 20" width="13" height="18" aria-hidden="true">${head}${stem}${marks}</svg>`;
-}
 
 function plainId(id) {
   return id?.startsWith(AFTER) ? id.slice(AFTER.length) : id;
@@ -113,25 +104,28 @@ function receive(data) {
   draw();
 }
 
+// Switch off what needs a note while there's none to act on. Palettes call this when they're redrawn.
+function enableTools() {
+  const target = score ? actionTarget() : null;
+  document.querySelectorAll("[data-needs]").forEach(control => { control.disabled = !target; });
+  document.querySelectorAll("#voices button").forEach(button => { button.disabled = !editor.on && !target; });
+}
+
 function updateTools() {
-  const target = actionTarget();
-  document.querySelectorAll("#tools [data-needs]").forEach(control => { control.disabled = !target; });
+  enableTools();
   document.querySelectorAll("#lengths button").forEach(button => {
     button.setAttribute("aria-pressed", String(editor.on && button.dataset.type === editor.type));
   });
   $("dotButton").setAttribute("aria-pressed", String(editor.on && editor.dots > 0));
   document.querySelectorAll("#voices button").forEach(button => {
     button.setAttribute("aria-pressed", String(editor.on && Number(button.dataset.voice) === editor.voice));
-    button.disabled = !editor.on && !target;
   });
-  for (const id of ["markChoice", "dynamicChoice", "tempoChoice", "textChoice", "jumpChoice", "clefChoice"]) $(id).disabled = !target;
   $("inputToggle").setAttribute("aria-pressed", String(editor.on));
-  $("inputToggle").textContent = editor.on ? "Stop entering" : "Enter notes";
-  $("pitches").hidden = !editor.on;
-  $("paste").disabled = !clipboard || !(editor.on ? editor.cursor : selected);
-  const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : selected ? "Selected. Choose a length or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
-  $("toolLabel").textContent = hint || (editor.on ? "Entering notes. Press A to G, 0 for a rest, or click the staff." : selection);
+  $("caret").dataset.voice = editor.voice;
+  const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
+  $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : selection);
   hint = "";
+  drawProperties();
 }
 
 function staffLines(staff) {
@@ -167,7 +161,7 @@ function drawRange() {
   if (!range) return;
   range.ids = range.ids.filter(id => document.getElementById(id));
   if (!document.getElementById(range.first) || !document.getElementById(range.last)) { range = null; return; }
-  range.ids.forEach(id => document.getElementById(id).classList.add("selected"));
+  range.ids.forEach(id => markSelected(document.getElementById(id)));
 }
 
 function drawBarChecks() {
@@ -187,9 +181,8 @@ function drawBarChecks() {
 }
 
 function drawTitle() {
-  for (const [id, value] of [["titleInput", score.title], ["composerInput", score.composer]]) {
-    if (document.activeElement !== $(id)) $(id).value = value ?? "";
-  }
+  $("scoreName").textContent = score.title || "Untitled score";
+  document.title = score.title ? `${score.title} - xrnsheet` : "xrnsheet";
 }
 
 function moveCursor(id) {
@@ -457,6 +450,7 @@ function closeLyric() {
   const input = $("lyricInput");
   lyricNote = null;
   lyricSoFar = input.placeholder = "";
+  input.blur();
   input.hidden = true;
   input.value = "";
 }
@@ -603,14 +597,6 @@ function markAt(event) {
   return event.target.closest("g[data-mark], g.slur, g.hairpin")
     ?? slurNear(event.clientX, event.clientY)
     ?? nearest("#pages g[data-mark], #pages g.hairpin", event.clientX, event.clientY, 4);
-}
-
-function drawParts() {
-  const names = score.parts ?? [];
-  const choice = $("partPdf");
-  choice.hidden = names.length < 2;
-  if (choice.hidden) return;
-  choice.replaceChildren(new Option("Print a part…", ""), ...names.map((name, index) => new Option(name || `Instrument ${index + 1}`, index)));
 }
 
 function startDrag(event) {
@@ -786,7 +772,14 @@ function stopPlaying() {
   player.audio.close();
   player = null;
   clearPlaying();
-  $("play").textContent = "Play";
+  showPlaying(false);
+}
+
+function showPlaying(on) {
+  const button = $("play");
+  button.setAttribute("aria-label", on ? "Stop" : "Play");
+  button.setAttribute("aria-pressed", String(on));
+  button.innerHTML = icon(on ? "stop" : "play");
 }
 
 async function startPlaying() {
@@ -802,11 +795,11 @@ async function startPlaying() {
     clearPlaying();
     const element = document.getElementById(note.id);
     element?.classList.add("playing");
-    element?.scrollIntoView({ block: "nearest" });
+    element?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, (at(note.start) - started + 0.1) * 1000));
   timers.push(setTimeout(stopPlaying, (at(data.total) - started + 0.3) * 1000));
   player = { audio, timers };
-  $("play").textContent = "Stop";
+  showPlaying(true);
   $("play").dataset.notes = notes.length;
   $("play").dataset.chords = chords.length;
 }
@@ -816,12 +809,16 @@ function togglePlaying() {
 }
 
 function setUpToolbar() {
-  $("lengths").replaceChildren(...LENGTHS.map(({ key, type, label }) => {
+  // One frame for them all, so the notes stand on one line as they do in MuseScore's toolbar.
+  const boxes = LENGTHS.map(({ glyph }) => setGlyphs(glyph));
+  const frame = { top: Math.max(...boxes.map(box => box.top)), bottom: Math.min(...boxes.map(box => box.bottom)) };
+  $("lengths").replaceChildren(...LENGTHS.map(({ key, type, label, glyph }) => {
     const button = document.createElement("button");
+    button.className = "flat";
     button.dataset.type = type;
     button.title = `${label} (${key})`;
     button.setAttribute("aria-label", label);
-    button.innerHTML = noteIcon(type);
+    button.innerHTML = glyphIcon(glyph, 5.5, frame);
     button.addEventListener("click", () => chooseLength(type));
     return button;
   }));
@@ -831,52 +828,21 @@ function setUpToolbar() {
     button.addEventListener("click", () => writeAt(step));
     return button;
   }), Object.assign(document.createElement("button"), { textContent: "Rest", onclick: () => writeAt(null) }));
-  const names = ["C♭", "G♭", "D♭", "A♭", "E♭", "B♭", "F", "C", "G", "D", "A", "E", "B", "F♯", "C♯"];
-  const minors = ["a♭", "e♭", "b♭", "f", "c", "g", "d", "a", "e", "b", "f♯", "c♯", "g♯", "d♯", "a♯"];
-  const options = names.map((name, index) => new Option(`${name} major / ${minors[index]} minor`, index - 7));
-  $("keyChoice").append(...options);
-  $("blankKey").append(...options.map(option => new Option(option.text, option.value)));
-  $("blankKey").value = "0";
   $("voices").replaceChildren(...Array.from({ length: VOICES }, (_, index) => {
     const button = document.createElement("button");
+    button.className = "flat";
     button.dataset.voice = index + 1;
-    button.textContent = `V${index + 1}`;
-    button.title = `Write in voice ${index + 1}, or move the selection to it (Ctrl+Alt+${index + 1})`;
+    button.innerHTML = `${glyphIcon("E1D5", 4.4)}<sup>${index + 1}</sup>`;
+    button.setAttribute("aria-label", `Voice ${index + 1}`);
+    button.title = `Voice ${index + 1} (Ctrl+Alt+${index + 1})`;
     button.addEventListener("click", () => chooseVoice(index + 1));
     return button;
   }));
-  $("transposeKeys").append(...names.map((name, index) => new Option(`To ${name} major`, `key:${index - 7}`)));
-  const whenChosen = (id, act) => $(id).addEventListener("change", event => {
-    if (event.target.value) act(event.target.value);
-    event.target.value = "";
-    event.target.blur();
+  document.querySelectorAll("#noteBar button[data-mark]").forEach(button => {
+    button.addEventListener("click", () => markAction("toggle", { name: button.dataset.mark }));
   });
-  whenChosen("markChoice", name => markAction("toggle", { name }));
-  whenChosen("dynamicChoice", name => markAction("dynamic", { name }));
-  whenChosen("tempoChoice", choice => {
-    if (choice === "type") askForText("Tempo, e.g. Allegro 132", { action: "tempo" });
-    else if (choice === "swing" || choice === "straight") markAction("swing", { on: choice === "swing" });
-    else markAction("tempo", { text: choice });
-  });
-  whenChosen("textChoice", choice => {
-    if (choice === "rehearsal") markAction("rehearsal");
-    else askForText(EXPRESSIONS[choice], { action: "text", name: choice });
-  });
-  whenChosen("jumpChoice", name => markAction("jump", { name }));
-  whenChosen("clefChoice", clef => barAction("clef", { clef }));
-  whenChosen("transposeChoice", transposeBy);
-  whenChosen("partChoice", name => enqueue(() => send("parts", name === "remove" ? { action: "remove", note: actionTarget() } : { action: "add", name })));
-  whenChosen("layoutChoice", choice => (choice === "break" ? barAction("break") : barAction("barsPerLine", { count: Number(choice) })));
-  $("partPdf").addEventListener("change", event => {
-    if (event.target.value !== "") window.open(`/api/scores/${scoreId}/score.pdf?part=${event.target.value}`);
-    event.target.value = "";
-  });
+  $("restButton").addEventListener("click", () => (editor.on ? writeAt(null) : noteAction("delete")));
   $("slurButton").addEventListener("click", () => markAction("slur"));
-  $("crescButton").addEventListener("click", () => markAction("hairpin", { name: "crescendo" }));
-  $("dimButton").addEventListener("click", () => markAction("hairpin", { name: "diminuendo" }));
-  $("graceButton").addEventListener("click", addGrace);
-  const instruments = [...$("partChoice").querySelectorAll("optgroup option")];
-  $("blankClef").append(...instruments.filter(option => option.value !== "piano").map(option => new Option(option.text, option.value)));
   $("pages").addEventListener("pointerdown", startDrag);
   window.addEventListener("pointermove", moveDrag);
   window.addEventListener("pointerup", endDrag);
@@ -886,46 +852,14 @@ function setUpToolbar() {
   $("inputToggle").addEventListener("click", toggleInput);
   $("addBar").addEventListener("click", () => barAction("insert"));
   $("deleteBar").addEventListener("click", () => barAction("delete"));
-  $("copy").addEventListener("click", copySelection);
-  $("paste").addEventListener("click", pasteHere);
   $("lyricButton").addEventListener("click", startLyrics);
-  $("keyChoice").addEventListener("change", event => {
-    if (event.target.value !== "") barAction("key", { fifths: Number(event.target.value) });
-    event.target.value = "";
-    event.target.blur();
-  });
-  $("timeChoice").addEventListener("change", event => {
-    const choice = event.target.value;
-    if (choice.startsWith("pickup:")) barAction("pickup", { count: Number(choice.slice("pickup:".length)) });
-    else if (choice) {
-      const [beats, beat_type] = choice.split("/").map(Number);
-      barAction("time", { beats, beat_type });
-    }
-    event.target.value = "";
-    event.target.blur();
-  });
-  $("repeatChoice").addEventListener("change", event => {
-    const choice = event.target.value;
-    if (choice === "forward" || choice === "backward") barAction(choice);
-    else if (choice) barAction("ending", { number: Number(choice), last: range?.last ?? null });
-    event.target.value = "";
-    event.target.blur();
-  });
   // A clicked button keeps the focus, and Space would press it again instead of playing.
-  $("tools").addEventListener("click", event => event.target.closest("button")?.blur());
-  $("play").addEventListener("click", event => { event.currentTarget.blur(); togglePlaying(); });
+  for (const id of ["noteBar", "side", "mainBar", "statusBar", "pitches"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
+  $("play").addEventListener("click", togglePlaying);
   $("redo").addEventListener("click", redoEdit);
   window.addEventListener("resize", drawCursor);
   $("pages").addEventListener("mousemove", event => drawGhost(event.clientX, event.clientY));
   $("pages").addEventListener("mouseleave", () => { $("ghost").hidden = true; });
-  for (const id of ["titleInput", "composerInput"]) {
-    // Read now, because a reply arriving first redraws these fields with what the server knew.
-    $(id).addEventListener("change", () => {
-      const body = { title: $("titleInput").value, composer: $("composerInput").value };
-      enqueue(() => send("title", body));
-    });
-    $(id).addEventListener("keydown", event => { if (event.key === "Enter") event.target.blur(); });
-  }
   $("lyricInput").addEventListener("keydown", event => {
     if (event.key === " ") { event.preventDefault(); saveLyric(false, true, " "); }
     else if (event.key === "-") { event.preventDefault(); saveLyric(true, true, "-"); }
@@ -936,25 +870,6 @@ function setUpToolbar() {
   });
 }
 
-function setUpBlankForm() {
-  $("blankOpen").addEventListener("click", () => { $("blankForm").hidden = false; $("blankOpen").hidden = true; });
-  $("blankForm").addEventListener("submit", async event => {
-    event.preventDefault();
-    const [beats, beat_type] = $("blankTime").value.split("/").map(Number);
-    const response = await fetch("/api/scores/blank", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fifths: Number($("blankKey").value), beats, beat_type, clef: $("blankClef").value, measures: Number($("blankBars").value) }),
-    });
-    const data = await response.json();
-    if (!response.ok) { message(typeof data.detail === "string" ? data.detail : "Those settings didn't work."); return; }
-    scoreId = data.id;
-    location.hash = scoreId;
-    await poll();
-    setInput(true);
-  });
-}
-
 const PITCH_KEYS = { "#": "sharp", "+": "sharp", "-": "flat", "=": "natural" };
 const MARK_KEYS = { S: "staccato", V: "accent", N: "tenuto", O: "marcato" };
 
@@ -962,6 +877,16 @@ function handleControlKey(event) {
   const key = event.key.toLowerCase();
   if (event.altKey && /^[1-4]$/.test(key)) { event.preventDefault(); chooseVoice(Number(key)); return; }
   const actions = {
+    "=": () => stepZoom(1),
+    "+": () => stepZoom(1),
+    "-": () => stepZoom(-1),
+    0: () => setZoom(100),
+    f9: () => { showSide("palettes"); searchPalettes(true); },
+    b: appendBar,
+    k: addChordHere,
+    t: () => askForText(EXPRESSIONS.staff, { action: "text", name: "staff" }),
+    e: () => askForText(EXPRESSIONS.expression, { action: "text", name: "expression" }),
+    m: () => markAction("rehearsal"),
     z: () => (event.shiftKey ? redoEdit() : undoEdit()),
     y: redoEdit,
     c: copySelection,
@@ -981,11 +906,21 @@ function handleControlKey(event) {
   if (actions[key]) { event.preventDefault(); actions[key](); }
 }
 
+const PANEL_KEYS = { F9: "palettes", F7: "instruments", F8: "properties" };
+
 document.addEventListener("keydown", event => {
-  if (["INPUT", "SELECT"].includes(event.target.tagName) || $("workspace").hidden) return;
   const key = event.key;
+  if (key === "Escape" && openMenus.length) { closeMenus(); return; }
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName) || $("workspace").hidden || publishing || document.querySelector("dialog[open]")) return;
   if (event.ctrlKey || event.metaKey) { handleControlKey(event); return; }
   const handled = () => event.preventDefault();
+  // A button someone has tabbed to is pressed by Space, so it mustn't also start playing.
+  if (key === " " && event.target.tagName === "BUTTON") return;
+  if (PANEL_KEYS[key]) { handled(); toggleSide(PANEL_KEYS[key]); return; }
+  if (key === "Insert") { handled(); barAction("insert"); return; }
+  if (event.altKey && event.shiftKey && key.toLowerCase() === "t") { handled(); askForTempo(); return; }
+  if (event.altKey) return;
+  if (key === "i" || key === "I") { handled(); showSide("instruments"); openAddPart(); return; }
 
   if (key === "Escape") {
     closeEditor();
@@ -1025,7 +960,8 @@ document.addEventListener("keydown", event => {
   if (key === "b") { handled(); noteAction("flat"); }
 });
 
+setUpPage();
+setUpShell();
 setUpToolbar();
-setUpBlankForm();
 updateTools();
 if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); } else drawHistory();

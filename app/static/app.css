@@ -1,0 +1,276 @@
+/* The window is laid out the way MuseScore Studio lays out its own: a menu bar, the Home, Score and
+   Publish tabs with playback beside them, the note toolbar, a panel of palettes on the left, the
+   pages on a grey desk, and a status bar. The colours are the ones its light and dark themes use. */
+:root {
+  --bg: #f5f5f6; --bg2: #e6e9ed; --popup: #f5f5f6; --field: #ffffff; --accent: #70afea;
+  --stroke: #ced1d4; --button: #cfd5dd; --ink: #111132; --link: #0b69bf;
+  --desk: #bcc1cc; --paper: #f9f9f9; --notes: #000000; --shadow: rgba(0, 0, 0, .25);
+  --voice1: #0065bf; --voice2: #007f00; --voice3: #c53f00; --voice4: #c31989;
+  --tool1: var(--voice1); --tool2: var(--voice2); --tool3: var(--voice3); --tool4: var(--voice4);
+  --warn: #c2570c; --warn-soft: #fff1e6; --warn-ink: #7a3606; --good: #2e9e6b;
+  --zoom: 1;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #2d2d30; --bg2: #363638; --popup: #39393c; --field: #242427; --accent: #2093fe;
+    --stroke: #1e1e1e; --button: #595959; --ink: #ebebeb; --link: #8ec9ff;
+    --desk: #27272b; --shadow: rgba(0, 0, 0, .6);
+    --tool1: #5aa9f5; --tool2: #4cc24c; --tool3: #ff8a4c; --tool4: #f06ac0;
+    --warn-soft: #4a2c12; --warn-ink: #ffd9b8;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #2d2d30; --bg2: #363638; --popup: #39393c; --field: #242427; --accent: #2093fe;
+  --stroke: #1e1e1e; --button: #595959; --ink: #ebebeb; --link: #8ec9ff;
+  --desk: #27272b; --shadow: rgba(0, 0, 0, .6);
+  --tool1: #5aa9f5; --tool2: #4cc24c; --tool3: #ff8a4c; --tool4: #f06ac0;
+  --warn-soft: #4a2c12; --warn-ink: #ffd9b8;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.35 system-ui, "Segoe UI", sans-serif; display: flex; flex-direction: column; overflow: hidden; }
+[hidden] { display: none !important; }
+svg.glyphs { fill: currentColor; flex: none; overflow: visible; }
+svg.icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* Buttons. A plain one is MuseScore's grey; a flat one only shows when pointed at or switched on. */
+button, .button, select, input { font: inherit; color: inherit; }
+button, .button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 4px 14px; border: 0; border-radius: 3px; background: color-mix(in srgb, var(--button) 70%, transparent); cursor: pointer; text-decoration: none; }
+button:hover:not(:disabled), .button:hover { background: color-mix(in srgb, var(--button) 50%, transparent); }
+button:active:not(:disabled), .button:active { background: var(--button); }
+button:disabled { opacity: .3; cursor: default; }
+button:focus-visible, .button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--link); outline-offset: -1px; }
+button.primary, .button.primary { background: color-mix(in srgb, var(--accent) 70%, transparent); }
+button.primary:hover:not(:disabled), .button.primary:hover { background: color-mix(in srgb, var(--accent) 50%, transparent); }
+button.flat { background: transparent; padding: 4px; min-width: 30px; }
+button.flat:hover:not(:disabled) { background: color-mix(in srgb, var(--button) 50%, transparent); }
+button.flat:active:not(:disabled) { background: var(--button); }
+button.flat[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 70%, transparent); }
+input[type="text"], input[type="number"], input[type="search"], input:not([type]), select { min-height: 30px; padding: 4px 8px; border: 1px solid var(--stroke); border-radius: 3px; background: var(--field); }
+
+/* The menu bar and its menus. */
+#menuBar { display: flex; flex: none; padding: 0 4px; background: var(--bg); border-bottom: 1px solid var(--stroke); }
+#menuBar > button { background: transparent; min-height: 26px; padding: 2px 9px; border-radius: 3px; }
+#menuBar > button:hover, #menuBar > button[aria-expanded="true"] { background: color-mix(in srgb, var(--button) 60%, transparent); }
+.menu { position: fixed; z-index: 40; min-width: 220px; max-height: calc(100vh - 40px); overflow-y: auto; padding: 4px; background: var(--popup); border: 1px solid var(--stroke); border-radius: 4px; box-shadow: 0 4px 16px var(--shadow); }
+.menu button { display: flex; width: 100%; justify-content: flex-start; gap: 24px; min-height: 28px; padding: 3px 10px 3px 26px; background: transparent; text-align: left; position: relative; white-space: nowrap; }
+.menu button:hover:not(:disabled), .menu button[aria-expanded="true"] { background: color-mix(in srgb, var(--accent) 50%, transparent); }
+.menu button .keys { margin-left: auto; opacity: .7; }
+.menu button .more { margin-left: auto; }
+.menu button[aria-checked="true"]::before { content: "✓"; position: absolute; left: 8px; }
+.menu hr { border: 0; border-top: 1px solid var(--stroke); margin: 4px 0; }
+
+/* The main bar: tabs on the left, then what goes with a score. */
+#mainBar { display: flex; flex: none; align-items: center; gap: 4px; min-height: 40px; padding: 0 8px 0 0; background: var(--bg); border-bottom: 1px solid var(--stroke); }
+#tabs { display: flex; align-self: stretch; }
+#tabs button { background: transparent; border-radius: 0; padding: 0 14px; font-size: 14px; border-bottom: 2px solid transparent; border-top: 2px solid transparent; }
+#tabs button:hover:not(:disabled) { background: color-mix(in srgb, var(--button) 40%, transparent); }
+#tabs button[aria-selected="true"] { font-weight: 700; border-bottom-color: var(--accent); background: var(--bg2); }
+#centreTools { display: flex; gap: 2px; margin: 0 auto; }
+#centreTools button { background: transparent; padding: 4px 10px; }
+#centreTools button:hover:not(:disabled) { background: color-mix(in srgb, var(--button) 50%, transparent); }
+#playTools, #undoTools { display: flex; align-items: center; gap: 2px; }
+#playTools .readout { padding: 0 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#playTools .divider, #noteBar .divider { width: 1px; align-self: stretch; margin: 8px 6px; background: var(--stroke); }
+#play[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 70%, transparent); }
+body:not(.hasScore) .scoreOnly, body.atHome .scoreOnly { visibility: hidden; }
+.popup { position: fixed; z-index: 40; padding: 12px; background: var(--popup); border: 1px solid var(--stroke); border-radius: 4px; box-shadow: 0 4px 16px var(--shadow); display: grid; gap: 8px; }
+.popup label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* Home. */
+#start { flex: 1; display: flex; min-height: 0; background: var(--bg2); }
+#homeSide { width: 240px; flex: none; padding: 20px 0; background: var(--bg); }
+#homeSide button { width: 100%; justify-content: flex-start; gap: 12px; min-height: 44px; padding: 0 24px; border-radius: 0; background: transparent; font-size: 15px; }
+#homeSide button[aria-current="page"] { background: color-mix(in srgb, var(--accent) 35%, transparent); font-weight: 700; box-shadow: inset 3px 0 var(--accent); }
+#homeMain { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 28px 40px 0; }
+#homeHead { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+#homeHead h2 { font-size: 30px; font-weight: 700; margin: 0 auto 0 0; }
+#homeSearch { width: 220px; }
+#homeSub { margin: 22px 0 14px; font-size: 15px; font-weight: 700; border-bottom: 1px solid var(--stroke); padding-bottom: 8px; }
+#homeSub span { border-bottom: 2px solid var(--accent); padding-bottom: 8px; }
+#homeScroll { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 20px; }
+#historyList { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 172px)); gap: 26px 22px; }
+.tile { display: grid; width: 100%; gap: 6px; color: inherit; text-decoration: none; background: none; padding: 0; border-radius: 3px; text-align: left; align-content: start; justify-items: stretch; cursor: pointer; }
+.tile:hover { background: none !important; }
+.tile .sheet { aspect-ratio: 210 / 297; background: var(--paper); border: 1px solid var(--stroke); border-radius: 3px; overflow: hidden; display: grid; place-items: center; }
+.tile:hover .sheet { outline: 2px solid var(--accent); }
+.tile .sheet img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+.tile .sheet svg.icon { width: 44px; height: 44px; color: #555; }
+.tile .name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .state { opacity: .75; font-size: 12px; }
+#homeFoot { display: flex; align-items: center; gap: 10px; padding: 14px 0 18px; border-top: 1px solid var(--stroke); flex-wrap: wrap; }
+#homeFoot .hint { margin-right: auto; opacity: .8; }
+#homeFoot button, #homeFoot .button { min-width: 132px; }
+#start.over #homeMain { outline: 2px dashed var(--accent); outline-offset: -8px; }
+#busy { flex: 1; display: grid; place-content: center; text-align: center; background: var(--bg2); }
+.spinner { width: 28px; height: 28px; margin: 0 auto 14px; border: 3px solid var(--stroke); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+#message { flex: none; padding: 7px 14px; background: var(--warn-soft); color: var(--warn-ink); border-bottom: 1px solid var(--stroke); }
+
+/* The score view. */
+#workspace { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+#noteBar, #publishBar { display: flex; flex: none; align-items: center; gap: 1px; min-height: 40px; padding: 2px 8px; background: var(--bg); border-bottom: 1px solid var(--stroke); overflow-x: auto; scrollbar-width: none; }
+#noteBar button.flat { width: 32px; height: 34px; padding: 0; flex: none; }
+#lengths { display: flex; gap: 1px; }
+#voices { display: flex; gap: 1px; }
+#voices button { font-weight: 700; gap: 1px; }
+#voices button sup { font-size: 11px; line-height: 1; align-self: flex-start; margin-top: 6px; }
+#voices button[data-voice="1"] { color: var(--tool1); }
+#voices button[data-voice="2"] { color: var(--tool2); }
+#voices button[data-voice="3"] { color: var(--tool3); }
+#voices button[data-voice="4"] { color: var(--tool4); }
+#pitches { display: none; flex: none; gap: 4px; padding: 4px 8px; background: var(--bg); border-bottom: 1px solid var(--stroke); overflow-x: auto; }
+#pitches button { min-width: 38px; min-height: 36px; padding: 4px 8px; }
+body.publishing #noteBar, body.publishing #side, body.publishing #pitches, body:not(.publishing) #publishBar { display: none; }
+#publishBar { gap: 8px; }
+#scoreBody { flex: 1; display: flex; min-height: 0; }
+#side { width: 300px; flex: none; display: flex; flex-direction: column; background: var(--bg); border-right: 1px solid var(--stroke); min-height: 0; }
+#sideTabs { display: flex; flex: none; background: var(--bg2); border-bottom: 1px solid var(--stroke); }
+#sideTabs button { background: transparent; border-radius: 0; min-height: 32px; padding: 0 12px; border-right: 1px solid var(--stroke); }
+#sideTabs button[aria-selected="true"] { background: var(--bg); font-weight: 700; margin-bottom: -1px; }
+.sidePanel { flex: 1; overflow-y: auto; min-height: 0; padding: 12px 0; }
+.sidePanel .top { display: flex; gap: 8px; padding: 0 12px 10px; }
+.sidePanel .top > :first-child { flex: 1; min-width: 0; }
+.sidePanel h3 { display: flex; align-items: center; gap: 8px; margin: 0; padding: 7px 12px; font-size: 13px; font-weight: 700; cursor: default; }
+.sidePanel section { border-bottom: 1px solid var(--stroke); padding: 6px 0 12px; }
+.sidePanel section > .fields { display: grid; gap: 8px; padding: 2px 12px 0; }
+.sidePanel .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.sidePanel label.field { display: grid; gap: 3px; }
+.sidePanel .note { padding: 8px 12px; opacity: .75; }
+
+/* Palettes: a tree of names, each opening to a grid of cells. */
+.palette > button.name { width: 100%; justify-content: flex-start; gap: 10px; min-height: 30px; padding: 0 12px 0 16px; background: transparent; border-radius: 0; font-weight: 700; }
+.palette > button.name:hover { background: color-mix(in srgb, var(--button) 40%, transparent); }
+.palette > button.name::before { content: ""; border: 4px solid transparent; border-left: 6px solid currentColor; border-right: 0; transition: transform .1s; }
+.palette > button.name[aria-expanded="true"]::before { transform: rotate(90deg); }
+.palette .cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--cell, 44px), 1fr)); margin: 2px 12px 10px; padding: 1px 0 0 1px; }
+.palette .cells button { min-height: var(--cellHeight, 46px); padding: 2px; border-radius: 0; background: var(--field); overflow: hidden; outline: 1px solid var(--stroke); margin: 0 1px 1px 0; }
+.palette .cells button:focus-visible { outline: 2px solid var(--link); z-index: 1; }
+.palette .cells button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 30%, var(--field)); }
+.palette .cells button:active:not(:disabled) { background: color-mix(in srgb, var(--accent) 60%, var(--field)); }
+.palette .cells button:disabled { opacity: 1; }
+.palette .cells button:disabled > * { opacity: .45; }
+.palette .cells .words { font: italic 13px/1.1 Edwin, C059, "Century Schoolbook", serif; text-align: center; white-space: normal; }
+.palette .cells .words.plain { font-style: normal; }
+.palette .cells .words.bold { font-style: normal; font-weight: 700; }
+.palette .cells svg.cell { width: 100%; height: 44px; }
+.palette .cells .words svg.glyphs { vertical-align: -1px; }
+.palette.textual { --cell: 86px; --cellHeight: 34px; }
+#paletteSearch { width: 100%; }
+
+/* Instruments. */
+#partList { list-style: none; margin: 0; padding: 0; }
+#partList li { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 12px; border-bottom: 1px solid var(--stroke); cursor: default; }
+#partList li[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+#partList li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The pages on their desk. */
+#stage { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#scoreTabs { display: flex; flex: none; background: var(--bg2); border-bottom: 1px solid var(--stroke); min-height: 30px; }
+#scoreTabs .tab { display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; background: var(--bg); border-right: 1px solid var(--stroke); max-width: 320px; }
+#scoreTabs .tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#scoreTabs .tab button { min-height: 22px; min-width: 22px; padding: 0; }
+#barChecks { display: flex; flex: none; flex-wrap: wrap; gap: 6px; padding: 6px 12px; background: var(--bg); border-bottom: 1px solid var(--stroke); }
+.chip { min-height: 24px; padding: 2px 10px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: var(--warn-soft); color: var(--warn-ink); }
+.chip:hover:not(:disabled) { background: color-mix(in srgb, var(--warn) 25%, var(--warn-soft)); }
+#desk { flex: 1; overflow: auto; background: var(--desk); min-height: 0; }
+#pagesFrame { position: relative; width: max-content; min-width: 100%; padding: 24px; }
+#pages { display: flex; gap: 24px; align-items: flex-start; }
+#pages .page { flex: none; width: calc(210mm * var(--zoom)); background: var(--paper); color: var(--notes); }
+#pages svg { display: block; width: 100%; height: auto; }
+#pages g.note, #pages g.rest, #pages g.mRest, #pages g.harm { cursor: pointer; }
+#pages g[data-mark], #pages g.slur, #pages g.hairpin { cursor: pointer; }
+#pages g.note:hover, #pages g.rest:hover, #pages g.mRest:hover { fill: var(--voice1); stroke: var(--voice1); }
+#pages g.selected, #pages g.selected * { fill: var(--voice1); stroke: var(--voice1); }
+#pages g.selected.voice2, #pages g.selected.voice2 * { fill: var(--voice2); stroke: var(--voice2); }
+#pages g.selected.voice3, #pages g.selected.voice3 * { fill: var(--voice3); stroke: var(--voice3); }
+#pages g.selected.voice4, #pages g.selected.voice4 * { fill: var(--voice4); stroke: var(--voice4); }
+#pages g.playing, #pages g.playing * { fill: var(--good); stroke: var(--good); }
+#pages g.harm:hover text, #pages g.harm.active text { fill: var(--voice1); }
+#pages g[data-mark]:hover text, #pages g[data-mark]:hover tspan { fill: var(--voice1); }
+#pages g.harm.unsure text { fill: var(--warn); }
+body.inputting #pages { cursor: crosshair; }
+#caret { position: absolute; background: color-mix(in srgb, var(--voice1) 22%, transparent); border-left: 2px solid var(--voice1); pointer-events: none; }
+#caret[data-voice="2"] { background: color-mix(in srgb, var(--voice2) 22%, transparent); border-left-color: var(--voice2); }
+#caret[data-voice="3"] { background: color-mix(in srgb, var(--voice3) 22%, transparent); border-left-color: var(--voice3); }
+#caret[data-voice="4"] { background: color-mix(in srgb, var(--voice4) 22%, transparent); border-left-color: var(--voice4); }
+#ghost { position: absolute; border-radius: 50%; background: var(--voice1); opacity: .45; pointer-events: none; transform: rotate(-20deg); }
+#lyricInput { position: absolute; z-index: 2; width: 110px; min-height: 0; padding: 2px 6px; border: 1px solid var(--voice1); background: #fff; color: #000; }
+
+/* What xrnsheet has and MuseScore doesn't: the sheet a score was read from, beside it. */
+#original { width: min(34%, 460px); flex: none; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--stroke); min-height: 0; }
+#original header { display: flex; align-items: center; gap: 8px; flex: none; min-height: 32px; padding: 0 6px 0 12px; background: var(--bg2); border-bottom: 1px solid var(--stroke); font-weight: 700; }
+#original header span { margin-right: auto; }
+#original header button { min-height: 24px; padding: 2px 10px; font-weight: 400; }
+#checked.done { background: color-mix(in srgb, var(--good) 35%, transparent); }
+#images { flex: 1; overflow-y: auto; min-height: 0; padding: 10px; }
+.imageBox { position: relative; line-height: 0; }
+.imageBox + .imageBox { margin-top: 10px; }
+.imageBox img { width: 100%; height: auto; }
+.box { position: absolute; border: 1.5px solid var(--good); border-radius: 2px; pointer-events: none; }
+.box.unsure { border-color: var(--warn); background: rgba(194, 87, 12, .13); }
+.box.active { border-color: var(--voice1); background: rgba(0, 101, 191, .16); }
+#checks { display: flex; flex: none; flex-wrap: wrap; gap: 6px; padding: 8px 10px; align-items: center; border-top: 1px solid var(--stroke); }
+
+/* The status bar. */
+#statusBar { display: flex; flex: none; align-items: center; gap: 6px; min-height: 28px; padding: 0 8px 0 12px; background: var(--bg); border-top: 1px solid var(--stroke); }
+body.publishing #toolLabel { visibility: hidden; }
+#toolLabel { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+#statusBar button.flat { min-height: 24px; min-width: 26px; }
+#statusBar select { min-height: 24px; padding: 1px 6px; }
+#zoomChoice { width: 84px; }
+
+/* Small things that float: the box for a chord or a mark's words, and dialogs. */
+#editor { position: absolute; z-index: 30; display: flex; gap: 6px; padding: 8px; background: var(--popup); border: 1px solid var(--stroke); border-radius: 4px; box-shadow: 0 4px 16px var(--shadow); }
+#editor input { width: 130px; }
+#editorError { position: absolute; left: 8px; top: 100%; margin-top: 4px; width: max-content; max-width: 280px; padding: 5px 9px; background: #7a1f1f; color: #fff; border-radius: 4px; }
+dialog { padding: 0; border: 1px solid var(--stroke); border-radius: 6px; background: var(--popup); color: var(--ink); box-shadow: 0 10px 40px var(--shadow); max-width: min(940px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
+dialog::backdrop { background: rgba(0, 0, 0, .35); }
+dialog form { display: flex; flex-direction: column; max-height: calc(100vh - 26px); }
+dialog h2 { margin: 0; padding: 10px 16px; font-size: 14px; text-align: center; background: var(--bg2); border-bottom: 1px solid var(--stroke); }
+dialog .content { padding: 16px; overflow-y: auto; display: grid; gap: 12px; min-width: min(380px, calc(100vw - 60px)); }
+dialog .content label.field { display: grid; gap: 4px; }
+dialog .content .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+dialog .content fieldset { border: 1px solid var(--stroke); border-radius: 4px; margin: 0; padding: 10px 12px; display: grid; gap: 8px; }
+dialog .content fieldset label { display: flex; align-items: center; gap: 8px; }
+dialog .content fieldset label select { flex: 1; min-width: 0; }
+dialog .buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--stroke); }
+dialog .buttons button { min-width: 110px; }
+dialog .error { color: #b3261e; }
+.columns { display: grid; grid-template-columns: 170px minmax(180px, 1fr) minmax(200px, 1fr); gap: 0; min-height: 330px; }
+.columns > div { display: flex; flex-direction: column; min-height: 0; padding: 0 12px; border-right: 1px solid var(--stroke); }
+.columns > div:last-child { border-right: 0; }
+.columns h3 { margin: 0 0 8px; font-size: 13px; }
+.pickList { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; max-height: 300px; }
+.pickList li { user-select: none; padding: 6px 10px; border-radius: 3px; cursor: default; display: flex; align-items: center; gap: 8px; }
+.pickList li span { flex: 1; }
+.pickList li:hover { background: color-mix(in srgb, var(--button) 40%, transparent); }
+.pickList li[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 70%, transparent); }
+.pickList li button { min-height: 22px; min-width: 22px; padding: 0; }
+#keysTable { border-collapse: collapse; }
+#keysTable td { padding: 3px 16px 3px 0; vertical-align: top; }
+kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--stroke); border-radius: 3px; padding: 1px 5px; background: var(--field); }
+
+/* A phone has no room for the panels, so they open over the pages, and note buttons show for thumbs. */
+@media (max-width: 860px) {
+  #menuBar { overflow-x: auto; scrollbar-width: none; }
+  #mainBar { flex-wrap: wrap; padding-right: 4px; }
+  #centreTools { margin: 0 0 0 auto; }
+  #centreTools button span, #playTools .readout, #playTools .divider, #playSettings, #rewind { display: none; }
+  #side { position: absolute; z-index: 20; top: 0; bottom: 0; left: 0; width: min(300px, 86vw); box-shadow: 4px 0 16px var(--shadow); }
+  #scoreBody { position: relative; }
+  body:not(.sideOpen) #side { display: none; }
+  #original { position: absolute; z-index: 20; top: 0; bottom: 0; right: 0; width: min(420px, 92vw); box-shadow: -4px 0 16px var(--shadow); }
+  body.inputting #pitches { display: flex; }
+  #homeSide { display: none; }
+  #homeMain { padding: 16px 16px 0; }
+  #historyList { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 16px; }
+  .columns { grid-template-columns: 1fr; }
+  .columns > div { border-right: 0; padding: 0 0 12px; }
+  .pickList { max-height: 150px; }
+  #toolLabel { font-size: 12px; }
+}
