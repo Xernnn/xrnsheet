@@ -16,7 +16,8 @@ def tied_note(step: str, alter: int, duration: int, note_type: str, ties: tuple[
     written = f"<alter>{alter}</alter>" if alter else ""
     tie = "".join(f'<tie type="{kind}"/>' for kind in ties)
     printed = f"<accidental>{accidental}</accidental>" if accidental else ""
-    notations = f"<notations>{''.join(f'<tied type="{kind}"/>' for kind in ties)}</notations>" if ties else ""
+    tied = "".join(f'<tied type="{kind}"/>' for kind in ties)
+    notations = f"<notations>{tied}</notations>" if ties else ""
     return f"<note><pitch><step>{step}</step>{written}<octave>4</octave></pitch><duration>{duration}</duration>{tie}<type>{note_type}</type>{printed}{notations}</note>"
 
 

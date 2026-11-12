@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only: CI checks code and needs to change nothing on the repository.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          # The README's minimum, so nothing newer slips in unnoticed.
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # export_pdf() turns the engraved pages into a PDF with rsvg-convert.
+      - name: Install rsvg-convert
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends librsvg2-bin
+
+      # Everything in requirements.txt but the recognition stack: torch (gigabytes with CUDA from
+      # PyPI), and homr and rapidocr, which only pipeline.recognize imports, inside its functions.
+      - name: Install dependencies
+        run: |
+          grep -vE '^(torch|homr|rapidocr)\b' requirements.txt > "$RUNNER_TEMP/requirements.txt"
+          pip install -r "$RUNNER_TEMP/requirements.txt"
+
+      # Left out: the tests that import torch, directly or through pipeline.recognize.
+      # test_chord_images also needs the fonts `python -m chords.fonts` downloads.
+      - name: Tests
+        run: >-
+          python -m pytest tests
+          --ignore=tests/test_chord_images.py
+          --ignore=tests/test_corrections.py
+          --ignore=tests/test_notes.py
+          --ignore=tests/test_repair.py
