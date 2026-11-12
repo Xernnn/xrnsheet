@@ -807,8 +807,14 @@ def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
     """Copy a stretch of a voice with its marks. A slur only comes if both its ends do.
 
     Notes are copied as they're written, with how far their part sounds from that, so pasted
-    into another instrument they sound the same, as they do in MuseScore.
+    into another instrument they sound the same, as they do in MuseScore. A player's techniques
+    come too: each note's fingering, pluck, string number, bend, harmonic and dead note, a guitar
+    note's string on the tablature, and the hammer-ons, pull-offs, slides, glissandos and vibratos
+    between copied notes. A violin's artificial harmonic is copied as its stopped note, and the
+    paste adds the diamond back.
     """
+    from pipeline import fretted, technique  # They build on this module.
+
     with indexed(root):
         copied = copy_range(root, first_id, last_id)
         start = locate(root, first_id)
@@ -816,15 +822,34 @@ def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
         for item in copied["events"]:
             item["transposition"] = [moved.steps, moved.semitones]
         ends: dict[str, int] = {}
+        joined: dict[tuple[str, str], int] = {}
+        board = fretted.boards(root)[root.findall("part").index(start.part)]
         for number, item in enumerate(copied["events"]):
             source = item.pop("source")
-            item.update(marks=[], dynamic=None, slur=[])
+            item.update(marks=[], dynamic=None, slur=[], techniques=[], strings=[], joins=[])
             if source is None:
                 continue
             note = find_note(root, source)
             spot = locate(root, source)
             item["marks"] = mark_names(note)
             item["dynamic"] = dynamic_at(spot.context, spot.event.onset)
+            touching = [index for index, member in enumerate(spot.event.notes) if technique.harmonic_kind(member)[1] == "touching-pitch"]
+            item["pitches"] = [pitch for index, pitch in enumerate(item["pitches"]) if index not in touching]
+            members = [member for index, member in enumerate(spot.event.notes) if index not in touching]
+            item["techniques"] = [technique.techniques_of(member) for member in members]
+            if board is not None and board.linked:
+                carriers = [fretted.copy_of(root, start.part, board, member) for member in members]
+                item["strings"] = [fretted.string_of(carrier) if carrier is not None else None for carrier in carriers]
+            # A join that stops here ends one from before, or, starting here too, is a vibrato over this note alone.
+            starts = technique.started_here(note)
+            for kind in technique.stopped_here(note):
+                if kind in joined:
+                    copied["events"][joined.pop(kind)]["joins"].append([number, kind[0]])
+                elif kind in starts:
+                    item["joins"].append([number, kind[0]])
+                    starts.remove(kind)
+            for kind in starts:
+                joined[kind] = number
             for slur in note.findall("notations/slur"):
                 if slur.get("type") == "stop" and slur.get("number", "1") in ends:
                     copied["events"][ends.pop(slur.get("number", "1"))]["slur"].append(number)
@@ -862,13 +887,28 @@ def for_instrument(items: list[dict], spot: Spot) -> list[dict]:
 
 
 def paste_stretch(root: ET.Element, at_id: str, items: list[dict]) -> dict:
-    """Paste copied music, then put its marks back on the notes it became."""
+    """Paste copied music, then put its marks back on the notes it became.
+
+    A guitar note's string comes back once the tablature has the new notes, so the strings are
+    handed on as `onStrings`, each a note and its string, for the edit to finish with (see
+    pipeline.fretted.choose_string).
+    """
+    from pipeline import technique  # It builds on this module.
+    from pipeline.edit import ensure_note_ids
+
     items = for_instrument(items, locate(root, at_id.removeprefix(AFTER)))
     done = paste(root, at_id, items)
     placed = done.pop("placed")
+    ensure_note_ids(root)
+    strings = []
     for number, item in enumerate(items):
         head = placed[number]
         spot = locate(root, head)
+        if not spot.event.is_rest:
+            members = list(spot.event.notes)
+            for member, found in zip(members, item.get("techniques") or []):
+                technique.give_techniques(root, member.get("id"), found)
+            strings.extend([member.get("id"), string] for member, string in zip(members, item.get("strings") or []) if string)
         for name in item.get("marks") or []:
             if name in NOTE_MARKS and (name == "fermata" or not spot.event.is_rest):
                 add_mark(spot.event.notes[0], name)
@@ -879,4 +919,10 @@ def paste_stretch(root: ET.Element, at_id: str, items: list[dict]) -> dict:
         for last in item.get("slur") or []:
             if 0 <= last < len(items) and last > number:
                 toggle_slur(root, head, placed[last])
+    for number, item in enumerate(items):
+        for last, name in item.get("joins") or []:
+            if 0 <= last < len(items) and last >= number and not locate(root, placed[number]).event.is_rest:
+                technique.join(root, placed[number], placed[last], name)
+    if strings:
+        done["onStrings"] = strings
     return done

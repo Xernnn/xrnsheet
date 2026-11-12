@@ -119,6 +119,8 @@ A score read from a photo or PDF also has the original sheet beside it, in every
 
 **A pianist's note** has the pedal, octave lines and arpeggio, then fingers 1 to 5, which go above the right hand's staff and below the left hand's, R.H. and L.H. over the note, the other hand's words taking their place, and a note drawn on the staff above or below, for the other hand to play. That note stays in its own staff's voice, so its bar still adds up, the inspector says which hand plays it, and Practice's "one hand" hears it with that hand. Ctrl+Shift+↑ and ↓ do the same, as in MuseScore.
 
+**Tablature, chord diagrams and the rest** are MusicXML's own notation, so a score with them opens in MuseScore and other programs, and [docs/instrument-api.md](docs/instrument-api.md) lists the server's side of them. A guitar or bass with tablature is one part with a TAB staff under its standard staff, as in MuseScore. Each of its notes is played on a string and fret chosen as a player would, with open strings low on the neck, near where the hand already is and a chord on strings of its own, until one is chosen for it, and a new tuning or capo keeps the notes' sound and moves their frets. A capo is named over the music, as "Capo 2". Chord diagrams go over every chord symbol: the open and barre shapes guitarists learn, worked out for other chords and tunings, and fingered from the capo, and a MusicXML file carries them as `<frame>`s. The techniques show on the tablature too, as H and P, bend arrows, X for a dead note and `<12>` for a harmonic.
+
 A pressed button is what the note has already, and pressing it again takes it away. Ctrl+F opens a box to type fingers for the selection, one for every note or one each in turn, as `013`, then Enter.
 
 F8 shows or hides the inspector on the selection, F7 on the score. On a narrow window it opens over the score.
@@ -136,7 +138,7 @@ F8 shows or hides the inspector on the selection, F7 on the score. On a narrow w
 
 **Entering notes.** Press `N`, pick a duration, and type the letters, click the staff, or play the instrument below. A new measure appears when you write past the last one. A longer note overwrites what comes after it and a shorter one leaves a rest, so every measure stays full. A note too long for its measure carries into the next one, tied. A letter takes the octave nearest the note before, and a guitar's or bass's first letter starts from the middle of its staff, as its clef has it, and stays within the three octaves up from its lowest string. A MIDI keyboard works while entering notes, and keys pressed together make a chord. On a phone, buttons for C to B and a rest show while entering notes.
 
-**Selecting.** Click a note or rest. Shift-click another to select the stretch between them, which gets a blue box. Click an empty part of a measure to select the whole measure. A stretch moves, deletes or copies as one undo step, within one voice. Click a dynamic, tempo, text, sign, slur, hairpin, octave line or pedal to select it: Delete removes it, and a double-click or `F2` changes its text. A player's marks are selected the same way: a fingering, a pluck, a string number or a bend, which can be retyped (a guitar's string number retyped moves its tablature too), a hammer-on or pull-off, which Delete takes away with both its ends, and the words of a line such as P.M., let ring or sul G, or of pizz., arco, a position or R.H., which can be retyped too. Slides, glissandos, vibratos, harmonics, dead notes and bowings belong to their note: its button in the inspector, pressed, takes one away, and Clear marks takes them all. A right-click opens a menu for whatever is under the pointer.
+**Selecting.** Click a note or rest. Shift-click another to select the stretch between them, which gets a blue box. Click an empty part of a measure to select the whole measure. A stretch moves, deletes or copies as one undo step, within one voice. A copy takes the notes' marks with it: articulations, slurs and dynamics, and a player's fingers, plucks, string numbers, bends, harmonics, dead notes, hammer-ons, slides and vibratos, and on a guitar the string each note was played on. What the instrument it's pasted into can't have, such as a finger 0 on a piano, is left off. Click a dynamic, tempo, text, sign, slur, hairpin, octave line or pedal to select it: Delete removes it, and a double-click or `F2` changes its text. A player's marks are selected the same way: a fingering, a pluck, a string number or a bend, which can be retyped (a guitar's string number retyped moves its tablature too), a hammer-on or pull-off, which Delete takes away with both its ends, and the words of a line such as P.M., let ring or sul G, or of pizz., arco, a position or R.H., which can be retyped too. Slides, glissandos, vibratos, harmonics, dead notes and bowings belong to their note: its button in the inspector, pressed, takes one away, and Clear marks takes them all. A right-click opens a menu for whatever is under the pointer.
 
 **Instruments and parts.** The inspector's Score tab adds and removes instruments, and a transposing instrument gets its own key: the key chosen for a new score is the one it sounds in, so a B♭ trumpet in concert C reads D major. "Parts" opens one instrument alone as a PDF.
 
@@ -205,7 +207,7 @@ The keys are MuseScore's where MuseScore has one. A browser keeps a few for itse
 
 Measures that don't add up to the time signature are listed above the score in Write, which is usually how a misread rhythm shows itself, and so are a guitar's notes that no string can play, which its tablature leaves out, with the reason. Click one to go there, then fix it with Remove beat or Insert beat in the inspector. A new time signature doesn't move notes between measures: the ones that no longer fit are listed for you to fix.
 
-Play sounds the notes and the chord symbols. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, articulations and ornaments, and the sustain pedal.
+Play sounds the notes and the chord symbols. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, articulations and ornaments, and the sustain pedal, and a player's techniques: hammer-ons and pull-offs legato, slides and glissandos through the notes between, bends reaching their pitch, palm mute short and let ring ringing, dead notes as a click, harmonics where they ring, and pizzicato plucked until arco. A tablature staff isn't heard twice: only the staff above it plays.
 
 An 8va line keeps the notes under it at the pitch they sound, which is how MusicXML and MuseScore store them, and draws them an octave lower. A note clicked onto the staff under one is the note an octave above where it's drawn.
 
@@ -227,39 +229,13 @@ Click a chord symbol to change or remove it. Doubtful chords are coloured and li
 
 **Speed.** Only the pages an edit changes are drawn again, the server keeps its last few drawings, so going back to a score, undoing and redoing are quick, and the window is sent only the music symbols it draws. `bench/editor_speed.py` measures how long a score takes to open and an edit to show, and what the window loads.
 
-What MuseScore has and this editor doesn't yet: unpitched percussion such as a drum kit, the rest of MuseScore's Style dialog beyond the page's spacing, and, in the one-line view, instrument names and clefs that stay in sight as it scrolls. Guitar tablature, fingering, string numbers and bowing are coming, and the inspector and the fretboard have their places ready.
+What MuseScore has and this editor doesn't yet: unpitched percussion such as a drum kit, the rest of MuseScore's Style dialog beyond the page's spacing, in the one-line view instrument names and clefs that stay in sight as it scrolls, a tablature staff on its own without the staff above it, and frets typed straight onto the tablature. Slides, vibratos, harmonics, dead notes and bowings are taken off with their note's button, not by clicking them, and a copy doesn't take a passage's words and lines with it, such as P.M., sul G, pizz. or a position.
 
 To recognize a sheet without the app:
 
 ```sh
 .venv/bin/python -m pipeline.recognize photo.jpg --out results/photo
 ```
-
-## Guitar, violin and piano notation
-
-What a score can hold for these players, all of it stored as MusicXML, so it opens in MuseScore and
-other programs. [docs/instrument-api.md](docs/instrument-api.md) lists the server's endpoints.
-
-- **Guitar and bass tablature.** "Guitar + tablature" and the acoustic, electric and bass versions
-  have a TAB staff under the standard staff, as in MuseScore. Every note on the TAB staff is
-  played by a string and fret, chosen as a player would (open strings low on the neck, near where
-  the hand already is, a chord on strings of its own) or set per note. Tunings: standard, drop D,
-  DADGAD, open G, open D, half a step down, or any other, and a capo from the 1st to the 12th
-  fret. A new tuning or capo keeps the notes' sound and moves their frets. Notes no string can play
-  are listed, and left off the tablature.
-- **Chord diagrams** over the chord symbols, which a score shows or doesn't: the open and barre
-  shapes guitarists learn, worked out for other chords and tunings, and fingered from the capo.
-  MusicXML files carry them as `<frame>`s.
-- **Guitar techniques:** hammer-ons and pull-offs with their H and P, slides and glissandos, bends
-  of ½, full or 1½ tones, vibrato, palm mute and let ring lines, natural and artificial harmonics,
-  dead notes, right-hand p-i-m-a, left-hand fingers 0 to 4 and string numbers in circles. They show
-  on the tablature too, and playback plays them.
-- **Violin:** up- and down-bows, strings as Roman numerals or "sul G", fingers 0 to 4, positions
-  ("III pos."), "pizz." and "arco", which playback follows, harmonics and open strings.
-- **Piano:** fingers 1 to 5, above the right hand and below the left, typed one note after another,
-  R.H. and L.H., and notes drawn on the other staff for the other hand, which stay in their own
-  staff's voice and are saved as MusicXML has them.
-- **Playback** says which part and staff each note is on, so one hand of a piano can be heard alone.
 
 ## Train the chord reader
 

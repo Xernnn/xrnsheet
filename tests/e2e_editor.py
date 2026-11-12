@@ -3287,6 +3287,50 @@ def test_techniques_at_concert_pitch(page, base: str, shots: Path | None, create
     settle(page)
 
 
+def test_techniques_copied_and_the_capo(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """Copied guitar notes keep their techniques and strings, and a capo is named over the music."""
+    score_id = open_blank(page, base, created, bars=3, staff="guitar-tab")
+    page.keyboard.press("5")
+    page.keyboard.type("egab", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    ids = [note.get("id") for note in own_notes(saved_score(base, score_id))]
+    for body in [{"action": "fingering", "notes": ids[:2], "text": "12"}, {"action": "bend", "notes": ids[3:], "name": "full"},
+                 {"action": "join", "notes": ids[:2], "name": "hammerOn"}, {"action": "line", "notes": ids[2:4], "name": "palmMute"}]:
+        marks_api(base, score_id, body)
+    page.evaluate("id => enqueue(() => send(`notes/${id}`, { action: 'string', string: 3 }))", ids[2])
+    settle(page)
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    page.click('#modeSwitch [data-mode="write"]')
+    select_notes(page, 0, 3)
+    page.keyboard.press("Control+c")
+    settle(page)
+    rest = page.evaluate("() => document.querySelectorAll('#pages g.measure')[1].querySelector('g.staff g.mRest, g.staff g.rest').id")
+    click_on(page, page.locator(f"[id='{rest}']"))
+    settle(page)
+    page.keyboard.press("Control+v")
+    settle(page)
+    root = saved_score(base, score_id)
+    pasted = own_notes(root)[4:8]
+    check("pasted notes keep their fingers, bend and hammer-on", [note.findtext("notations/technical/fingering") for note in pasted] == ["1", "2", None, None] and pasted[3].find("notations/technical/bend") is not None and pasted[0].find("notations/technical/hammer-on") is not None)
+    check("and the string a note was played on", string_and_fret(root, pasted[2].get("id")) == ("3", "14"), string_and_fret(root, pasted[2].get("id")))
+    check("and the page draws them", page.locator("#pages g.xrn-bend").count() == 2 and page.locator("#pages g.xrn-joined").count() == 2)
+    press(page, "Control+z")
+    check("and one undo takes the paste away", len(own_notes(saved_score(base, score_id))) == 4)
+    score_pane(page)
+    page.select_option("#capoChoice", "2")
+    settle(page)
+    check("a capo is named over the music", page.locator("#pages g.xrn-capo").count() == 1 and "Capo 2" in page.locator("#pages g.xrn-capo").text_content())
+    page.click('#inspectorTabs [data-pane="selection"]')
+    click_drawn(page, page.locator("#pages g.dir", has_text="P.M.").first)
+    check("and the marks in its first bar can still be selected", page.inner_text("#propMarkKind") == "Palm mute", page.inner_text("#toolLabel"))
+    if shots:
+        page.screenshot(path=str(shots / "guitar-capo-words.png"))
+    page.keyboard.press("Escape")
+
+
 def test_practice(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()
     page.add_init_script("""
@@ -3515,6 +3559,7 @@ def main() -> None:
             test_piano_notation(page, base, arguments.shots, created)
             test_every_technique_mark(page, base, arguments.shots, created)
             test_techniques_at_concert_pitch(page, base, arguments.shots, created)
+            test_techniques_copied_and_the_capo(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)

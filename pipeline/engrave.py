@@ -316,6 +316,7 @@ def prepare_for_drawing(musicxml: str | ET.Element) -> str:
     Verovio's drawing.
     """
     root = ET.fromstring(musicxml) if isinstance(musicxml, str) else musicxml
+    decorate.say_capo(root)  # First, while the tablature still says where its capo is.
     prepare_tablature(root)
     decorate.prepare(root)
     add_beams(root)

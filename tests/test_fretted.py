@@ -723,3 +723,19 @@ def test_the_page_is_told_how_each_note_is_played(client):
     assert shown["notes"][notes[0]][5] == {"string": 1, "fret": 0, "pluck": "i", "harmonic": "natural"}
     assert shown["notes"][notes[1]][5] == {"string": 1, "fret": 3, "bend": "full"}
     assert len(shown["notes"][f"{notes[0]}{TAB_COPY}"]) == 5, "a fret number's copy says nothing of its own"
+
+
+def test_a_guitar_with_a_capo_says_so_over_its_music():
+    root = guitar(measures=8)
+    write(root, 64, 67)
+    assert "Capo" not in "".join(render_pages(to_text(root)))
+    fretted.set_strings(root, 0, capo=3)
+    synced(root)
+    pages = render_pages(to_text(root))
+    assert pages[0].count('class="xrn-capo"') == 1 and "Capo 3" in pages[0]
+    words = re.search(r'class="xrn-capo">.*?<text x="(\d+)" y="(\d+)"', pages[0], re.S)
+    top = re.search(r'class="staff">\s*<path d="M(\d+) (\d+) L', pages[0])
+    assert 0 < int(words.group(2)) < int(top.group(2)), "over its staff, and on the page"
+    assert 'class="dir"' not in pages[0], "and not taken for one of the score's marks"
+    assert all("Capo" not in page for page in pages[1:])
+    assert "Capo" not in to_text(root), "the score itself is left as it was"

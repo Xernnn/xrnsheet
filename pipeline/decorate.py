@@ -7,7 +7,9 @@ bends, dead notes and harmonics on a tablature staff, and an artificial harmonic
 - Before it draws (prepare), a pluck and a string number become fingerings, which it places as it
   places any fingering, a hammer-on or pull-off becomes a slur from one note to the next, on the
   standard staff and on the tablature, and the tablature's fret numbers are joined by the slides
-  and glissandos of the notes they copy. This is only for the drawing; the score keeps its marks.
+  and glissandos of the notes they copy, and a guitar with a capo has "Capo 2" over its start (its
+  drawing is then named as the app's, not one of the score's marks). This is only for the drawing;
+  the score keeps its marks.
 - After it draws (decorate), a string number's fingering is put in a circle on a guitar, a pluck is
   set in italics, an H or P goes over each hammer-on's or pull-off's slur on the tablature, or on
   the staff when there's no tablature, a bend gets its arrow
@@ -272,10 +274,35 @@ def harmonic_text(note: ET.Element, copy: ET.Element) -> str | None:
     return f"<{fret}>" if kind == "natural" else f"{fret}<{int(fret) + 12}>"
 
 
+CAPO_WORDS = "Capo {}"
+DRAWN_DIRECTION = re.compile(r'<g id="[^"]+" class="dir">(?:(?!</g>).)*?>(Capo \d+)</', re.S)
+
+
+def say_capo(root: ET.Element) -> None:
+    """Put "Capo 2" over the start of a guitar with a capo, as words Verovio leaves room for."""
+    for part, board in zip(root.findall("part"), boards(root)):
+        measure = part.find("measure")
+        if board is None or not board.capo or measure is None:
+            continue
+        direction = ET.Element("direction", placement="above")
+        ET.SubElement(ET.SubElement(direction, "direction-type"), "words").text = CAPO_WORDS.format(board.capo)
+        if board.staves > 1:
+            ET.SubElement(direction, "staff").text = board.source or "1"
+        first = next((index for index, child in enumerate(measure) if child.tag == "note"), len(measure))
+        measure.insert(first, direction)
+
+
+def name_capo(svg: str, root: ET.Element) -> str:
+    """Name each "Capo 2" as the app's own words, so the page doesn't take it for one of the score's marks."""
+    wanted = {CAPO_WORDS.format(board.capo) for board in boards(root) if board is not None and board.capo}
+    return DRAWN_DIRECTION.sub(lambda found: found.group(0).replace('class="dir"', 'class="xrn-capo"', 1) if found.group(1) in wanted else found.group(0), svg, count=len(wanted))
+
+
 def decorate(svg: str, root: ET.Element, space: float) -> str:
     """Draw a page's guitar and string marks that Verovio left out. `space` is a staff space in the drawing's units."""
     if "<g" not in svg:
         return svg
+    svg = name_capo(svg, root)
     svg, texts = tag_fingerings(svg, root)
     places = drawn_notes(svg)
     pieces: list[str] = []

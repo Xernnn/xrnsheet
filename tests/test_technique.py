@@ -692,6 +692,64 @@ def test_a_hammer_ons_letter_goes_on_the_tablature_or_else_the_staff():
     assert svg.count(">H</text>") == 1 and 'class="slur" data-mark=' in svg
 
 
+def test_copying_a_guitars_notes_carries_their_techniques_and_strings(client):
+    url, ids = written_through(client, "guitar-tab", 64, 67, 69, 71)
+    for request in [
+        {"action": "fingering", "notes": ids[:2], "text": "13"},
+        {"action": "pluck", "notes": ids[2:3], "text": "m"},
+        {"action": "bend", "notes": ids[3:], "name": "full"},
+        {"action": "harmonic", "notes": ids[:1], "name": "natural"},
+        {"action": "deadNote", "notes": ids[1:2]},
+        {"action": "join", "notes": ids[:2], "name": "hammerOn"},
+        {"action": "join", "notes": ids[2:4], "name": "slide"},
+        {"action": "vibrato", "notes": ids[3:]},
+    ]:
+        assert client.post(f"{url}/marks", json=request).status_code == 200, request
+    client.post(f"{url}/notes/{ids[2]}", json={"action": "string", "string": 3})
+    copied = client.post(f"{url}/copy", json={"first": ids[0], "last": ids[3]}).json()["events"]
+    rest = next(found.get("id") for found in saved(client, url).findall("part/measure")[1].iter("note") if (found.findtext("staff") or "1") == "1")
+    done = client.post(f"{url}/paste", json={"at": rest, "events": copied})
+    assert done.status_code == 200, done.json()
+    assert "onStrings" not in done.json() and done.json()["strings"] == [["E2", "A2", "D3", "G3", "B3", "E4"]], "the strings are kept, not sent to the page"
+    root = saved(client, url)
+    pasted = [found for found in root.findall("part/measure")[1].iter("note") if (found.findtext("staff") or "1") == "1" and found.find("pitch") is not None]
+    assert [found.findtext("notations/technical/fingering") for found in pasted] == ["1", "3", None, None]
+    assert pasted[2].findtext("notations/technical/pluck") == "m"
+    assert pasted[3].findtext("notations/technical/bend/bend-alter") == "2"
+    assert pasted[0].find("notations/technical/harmonic") is not None and pasted[1].findtext("notehead") == "x"
+    assert pasted[0].find("notations/technical/hammer-on") is not None and pasted[1].find("notations/technical/hammer-on") is not None
+    assert pasted[2].find("notations/slide") is not None and pasted[3].find("notations/ornaments/wavy-line") is not None
+    assert note(root, pasted[2].get("id") + TAB_COPY).findtext("notations/technical/string") == "3", "the string it was played on comes with it"
+    client.post(f"{url}/undo")
+    assert len(saved(client, url).findall(".//bend")) == 1, "a paste and its techniques are one edit"
+
+
+def test_a_pasted_violin_harmonic_gets_its_diamond_once(client):
+    url, ids = written_through(client, "violin", 67, 69)
+    client.post(f"{url}/marks", json={"action": "harmonic", "notes": ids[:1], "name": "artificial"})
+    copied = client.post(f"{url}/copy", json={"first": ids[0], "last": ids[1]}).json()["events"]
+    assert copied[0]["pitches"] == [["G", 0, 4]], "the diamond is left for the paste to add"
+    rest = next(found.get("id") for found in saved(client, url).findall("part/measure")[1].iter("note"))
+    assert client.post(f"{url}/paste", json={"at": rest, "events": copied}).status_code == 200
+    pasted = [found for found in saved(client, url).findall("part/measure")[1].iter("note") if found.find("pitch") is not None]
+    assert [f"{found.findtext('pitch/step')}{found.findtext('pitch/octave')}" for found in pasted] == ["G4", "C5", "A4"]
+    assert pasted[1].findtext("notehead") == "diamond"
+
+
+def test_techniques_an_instrument_hasnt_got_are_left_off_a_paste(client):
+    url, ids = written_through(client, "guitar-tab", 64, 67)
+    client.post(f"{url}/marks", json={"action": "fingering", "notes": ids, "text": "0"})
+    client.post(f"{url}/marks", json={"action": "pluck", "notes": ids, "text": "p"})
+    copied = client.post(f"{url}/copy", json={"first": ids[0], "last": ids[1]}).json()["events"]
+    piano, _ = written_through(client, "piano")
+    at = next(found.get("id") for found in saved(client, piano).iter("note"))
+    done = client.post(f"{piano}/paste", json={"at": at, "events": copied})
+    assert done.status_code == 200, done.json()
+    pasted = [found for found in saved(client, piano).iter("note") if found.find("pitch") is not None]
+    assert len(pasted) == 2 and not any(found.find("notations/technical/fingering") is not None for found in pasted), "a pianist has no finger 0"
+    assert all(found.findtext("notations/technical/pluck") == "p" for found in pasted)
+
+
 def test_a_guitars_string_number_retyped_moves_its_tablature(client):
     url, ids = written_through(client, "guitar-tab", 55)
     data = client.post(f"{url}/marks", json={"action": "stringNumber", "notes": ids, "number": 3}).json()

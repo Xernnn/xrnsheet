@@ -234,6 +234,9 @@ class CopiedEvent(BaseModel):
     dynamic: str | None = None
     slur: list[int] = []
     transposition: tuple[int, int] | None = None  # How far the copied part sounds from how it's written.
+    techniques: list[dict] = []  # Each note's fingering, pluck, string number, bend, harmonic and dead note.
+    strings: list[int | None] = []  # Each note's string on a guitar's tablature.
+    joins: list[tuple[int, str]] = []  # Hammer-ons and the like to a later copied note: its place and the join.
 
 
 class Paste(BaseModel):
@@ -1060,7 +1063,16 @@ def copy_notes(score_id: str, body: Stretch) -> dict:
 
 @app.post("/api/scores/{score_id}/paste")
 def paste_notes(score_id: str, body: Paste) -> dict:
-    return apply_edit(score_id, lambda root: marks.paste_stretch(root, body.at, [item.model_dump() for item in body.events]))
+    """Paste copied music. Guitar notes go back on their strings once the tablature has them."""
+
+    def on_strings(root: ET.Element, extra: dict) -> None:
+        for note_id, string in extra.pop("onStrings", []):
+            try:
+                fretted.choose_string(root, note_id, string)
+            except edit.EditError:
+                pass  # Pasted into an instrument whose strings can't play it so: its string is chosen for it.
+
+    return apply_edit(score_id, lambda root: marks.paste_stretch(root, body.at, [item.model_dump() for item in body.events]), on_strings)
 
 
 @app.post("/api/scores/{score_id}/lyrics/{note_id}")

@@ -666,3 +666,69 @@ def how_played(root: ET.Element) -> dict[str, dict]:
                         if details:
                             found[note.get("id")] = details
     return found
+
+
+def techniques_of(note: ET.Element) -> dict:
+    """Say what a note carries of a player's techniques, for a copy to give the note it's pasted as."""
+    found: dict = {}
+    for tag in ("fingering", "pluck", "string"):
+        if marks_of(note, tag):
+            found[tag] = marks_of(note, tag)[0]
+    bend = (note.findtext("notations/technical/bend/bend-alter") or "").strip()
+    if bend in BEND_KINDS:
+        found["bend"] = BEND_KINDS[bend]
+    kind, which = harmonic_kind(note)
+    if kind and which != "touching-pitch":
+        found["harmonic"] = kind
+    if note.findtext("notehead") == "x":
+        found["dead"] = True
+    return found
+
+
+def started_here(note: ET.Element) -> list[tuple[str, str]]:
+    """Name each join that starts at a note, with its number: a hammer-on, pull-off, slide or glissando, or a vibrato."""
+    found = []
+    for name, (group, tag, _) in PAIRS.items():
+        path = f"notations/{group}/{tag}" if group else f"notations/{tag}"
+        found.extend((name, element.get("number", "1")) for element in note.iterfind(path) if element.get("type") == "start")
+    found.extend(("vibrato", element.get("number", "1")) for element in vibrato_ends(note, "start"))
+    return found
+
+
+def stopped_here(note: ET.Element) -> list[tuple[str, str]]:
+    found = []
+    for name, (group, tag, _) in PAIRS.items():
+        path = f"notations/{group}/{tag}" if group else f"notations/{tag}"
+        found.extend((name, element.get("number", "1")) for element in note.iterfind(path) if element.get("type") == "stop")
+    found.extend(("vibrato", element.get("number", "1")) for element in vibrato_ends(note, "stop"))
+    return found
+
+
+def give_techniques(root: ET.Element, note_id: str, found: dict) -> None:
+    """Give a pasted note what its copy carried, as far as its instrument allows: a guitar's pluck has no place on a piano."""
+    setters = {
+        "fingering": lambda value: set_fingering(root, [note_id], value),
+        "pluck": lambda value: set_pluck(root, [note_id], value),
+        "string": lambda value: set_string_number(root, [note_id], int(value)),
+        "bend": lambda value: toggle_bend(root, [note_id], value),
+        "harmonic": lambda value: toggle_harmonic(root, [note_id], value),
+        "dead": lambda value: toggle_dead_note(root, [note_id]),
+    }
+    for name, value in found.items():
+        if name not in setters:
+            continue
+        try:
+            setters[name](value)
+        except (EditError, ValueError):
+            pass  # Out of the instrument's range, or not its kind of mark: the note is pasted without it.
+
+
+def join(root: ET.Element, first_id: str, last_id: str, name: str) -> None:
+    """Join two pasted notes as their copies were, unless they're joined already."""
+    try:
+        if name == "vibrato":
+            toggle_vibrato(root, first_id, last_id)
+        else:
+            toggle_pair(root, first_id, last_id, name)
+    except EditError:
+        pass
