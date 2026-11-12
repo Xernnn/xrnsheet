@@ -2,9 +2,9 @@
 
     .venv/bin/python -m app.server
 
-Then open http://127.0.0.1:8000. Each score lives in its own folder in data/jobs/, with
-every saved version kept so edits can be undone. Add --notes own to read notes with our
-own reader instead of homr.
+Then open http://127.0.0.1:8000. Each score lives in its own folder in data/jobs/, or in the
+folder given with --jobs, with every saved version kept so edits can be undone. Add --notes own
+to read notes with our own reader instead of homr.
 """
 
 import argparse
@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -976,10 +977,36 @@ def music_glyphs() -> Response:
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
-if __name__ == "__main__":
+def stop_when_stdin_closes() -> None:
+    """Stop the app once the program that started it has gone.
+
+    The desktop app starts this server and keeps a pipe to it. If the desktop app is killed outright
+    it can't stop the server, which would stay on, holding its port and any page being read. The
+    pipe closes however the desktop app ends, so the server then stops itself as it would on Ctrl+C.
+    """
+    if sys.stdin is not None:
+        while sys.stdin.buffer.read(65536):
+            pass
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def main(argv: list[str] | None = None) -> None:
+    global JOB_DIR
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--notes", choices=["homr", "own"], default="homr")
     parser.add_argument("--port", type=int, default=8000)
-    arguments = parser.parse_args()
+    parser.add_argument("--jobs", type=Path, default=JOB_DIR, help="the folder the scores are kept in (default: data/jobs here)")
+    parser.add_argument("--stop-when-stdin-closes", action="store_true", help="stop when the program that started this one ends")
+    arguments = parser.parse_args(argv)
     os.environ["XRNSHEET_NOTES"] = arguments.notes
-    uvicorn.run(app, host="127.0.0.1", port=arguments.port)
+    JOB_DIR = arguments.jobs.expanduser().resolve()
+    JOB_DIR.mkdir(parents=True, exist_ok=True)
+    if arguments.stop_when_stdin_closes:
+        threading.Thread(target=stop_when_stdin_closes, daemon=True).start()
+    # A request still being answered holds up stopping for at most this long, so closing the
+    # desktop app can't hang on one.
+    uvicorn.run(app, host="127.0.0.1", port=arguments.port, timeout_graceful_shutdown=10)
+
+
+if __name__ == "__main__":
+    main()
