@@ -2669,7 +2669,7 @@ def test_fingerboard_and_switcher(page, base: str, shots: Path | None, created: 
     check("and offers each one by its kind", offered[:2] == ["Piano · keyboard", "Violin · fingerboard"], offered)
     page.locator('.menu button:has(span:text-is("Violin · fingerboard"))').click()
     check("choosing the violin brings its fingerboard", page.is_visible("#fingerboardPanel") and page.is_hidden("#pianoPanel") and page.inner_text("#partName") == "Violin")
-    check("four strings tuned in fifths, with the positions marked", page.locator("#fingerboard .stringName").all_inner_texts() == list("EADG") and page.locator("#fingerboard .number").all_inner_texts() == ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th"])
+    check("four strings tuned in fifths, with the positions marked", page.locator("#fingerboard .stringName").all_inner_texts() == list("EADG") and page.locator("#fingerboard .number").all_inner_texts() == ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th", "11th", "12th"])
     violin = page.evaluate("() => document.querySelector('#pages g.measure').querySelectorAll(':scope > g.staff')[2].querySelector('g.mRest, g.rest').id")
     click_on(page, page.locator(f"[id='{violin}']"))
     settle(page)
@@ -2697,6 +2697,33 @@ def test_fingerboard_and_switcher(page, base: str, shots: Path | None, created: 
     settle(page)
     check("selecting the piano's music switches back to its keyboard", page.inner_text("#partName") == "Piano" and page.is_visible("#pianoPanel"))
     page.keyboard.press("Escape")
+
+
+def test_cello_and_double_bass_fingerboards(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """A cello and a double bass get fingerboards of their own, with their strings, positions and fingers."""
+    for instrument, strings, stop, finger, player, positions in [
+        ("cello", list("ADGC"), 4, "3", "cellist", {"3": "2nd", "5": "3rd", "7": "4th", "8": "5th"}),
+        ("double-bass", list("GDAE"), 4, "4", "double bassist", {"3": "2nd", "5": "3rd", "7": "4th", "8": "5th"}),
+    ]:
+        score_id = open_blank(page, base, created, bars=1, staff=instrument)
+        show_instrument(page)
+        check(f"a {instrument.replace('-', ' ')} has a fingerboard of its strings", page.is_visible("#fingerboardPanel") and page.locator("#fingerboard .stringName").all_inner_texts() == strings, page.locator("#fingerboard .stringName").all_inner_texts())
+        marked = page.evaluate("() => Object.fromEntries([...document.querySelectorAll('#fingerboard .number')].map(number => [getComputedStyle(number).gridColumnStart - 2, number.textContent]))")
+        check("with its own positions marked", all(marked.get(at) == name for at, name in positions.items()), marked)
+        page.locator(f'#fingerboard .spot[data-string="1"][data-stop="{stop}"]').click()
+        settle(page)
+        page.keyboard.press("Escape")
+        settle(page)
+        note = own_notes(saved_score(base, score_id))[0].get("id")
+        page.wait_for_function("id => playState.data?.events?.[id]", arg=note)
+        click_on(page, page.locator(f"[id='{note}']"))
+        settle(page)
+        lit = page.evaluate("() => [...document.querySelectorAll('#fingerboard .spot.chosen')].map(spot => [spot.dataset.string, spot.dataset.stop, spot.dataset.show])")
+        check(f"its note is lit where it was played, with the {player}'s finger", lit == [["1", str(stop), finger]], lit)
+        check(f"and the inspector is for the {player}", page.inner_text("#propInstrumentName").strip() == f"For the {player}", page.inner_text("#propInstrumentName"))
+        if shots and instrument == "cello":
+            page.screenshot(path=str(shots / "cello-fingerboard.png"))
+        page.keyboard.press("Escape")
 
 
 def score_data(base: str, score_id: str) -> dict:
@@ -3766,6 +3793,7 @@ def main() -> None:
             test_command_palette(page, base, created)
             test_fretboard(page, base, arguments.shots, created)
             test_fingerboard_and_switcher(page, base, arguments.shots, created)
+            test_cello_and_double_bass_fingerboards(page, base, arguments.shots, created)
             test_new_scores_for_players(page, base, arguments.shots, created)
             test_guitar_notation(page, base, arguments.shots, created)
             test_violin_notation(page, base, arguments.shots, created)

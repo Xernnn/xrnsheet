@@ -14,11 +14,22 @@ const NARROWEST_KEY = 10, WIDEST_KEY = 44; // A white key's width in pixels, whi
 const PREVIEW_SECONDS = 0.4;
 // Strings from the highest, as tablature draws them: a guitar in standard tuning, a violin in fifths.
 const GUITAR = { strings: [64, 59, 55, 50, 45, 40], names: ["E", "B", "G", "D", "A", "E"], stops: 19, inlays: [3, 5, 7, 9, 15, 17, 19], double: [12] };
-// A violin's first to seventh positions, the fourth finger in seventh reaching an eleventh above each
-// open string. A position is named where its first finger goes.
-const VIOLIN = { strings: [76, 69, 62, 55], names: ["E", "A", "D", "G"], stops: 17, positions: { 2: "1st", 4: "2nd", 5: "3rd", 7: "4th", 9: "5th", 10: "6th", 12: "7th" }, tapes: [2, 4, 5, 7] };
-// The stop a violinist's first finger is at in each position, from half position to XII.
-const FIRST_FINGER = [1, 2, 4, 5, 7, 9, 10, 12, 14, 16, 17, 19, 21];
+// A bowed instrument's hand: the stop its first finger is at in each position, from half position to
+// XII, how far the hand reaches above it, the finger for each stop above it, and where first
+// position's finger tapes go. A violinist's hand spans a fourth, a cellist's a minor third, and a
+// double bassist's a whole tone, fingered 1, 2 and 4, as Simandl teaches it.
+const HANDS = {
+  violin: { first: [1, 2, 4, 5, 7, 9, 10, 12, 14, 16, 17, 19, 21], reach: 5, fingers: [[0, "1"], [2, "2"], [4, "3"], [6, "4"]], tapes: [2, 4, 5, 7] },
+  cello: { first: [1, 2, 3, 5, 7, 8, 10, 12, 14, 15, 17, 19, 20], reach: 3, fingers: [[0, "1"], [1, "2"], [2, "3"], [4, "4"]], tapes: [2, 3, 4, 5] },
+  bass: { first: [1, 2, 3, 5, 7, 8, 10, 12, 14, 15, 17, 19, 20], reach: 2, fingers: [[0, "1"], [1, "2"], [3, "4"]], tapes: [2, 3, 4] },
+};
+const ORDINALS = ["", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th", "11th", "12th"];
+// A fingerboard: its strings from the highest, to the fourth finger in twelfth position, each position
+// named where its first finger goes.
+function bowedNeck(hand, strings, names) {
+  return { strings, names, hand, stops: hand.first.at(-1) + hand.reach, positions: Object.fromEntries(hand.first.slice(1).map((stop, number) => [stop, ORDINALS[number + 1]])), tapes: hand.tapes };
+}
+const VIOLIN = bowedNeck(HANDS.violin, [76, 69, 62, 55], ["E", "A", "D", "G"]);
 const SHARP_NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"];
 // A key's width is whatever fills the panel, until Ctrl and the wheel choose one.
 // The notes sounding and awaited are kept by pitch for the keys, and with their ids for a neck.
@@ -35,13 +46,13 @@ function noteName(midi) {
 function kindOfPart(index) {
   const name = (score?.parts?.[index] ?? "").toLowerCase();
   if (score?.fretted?.[index]) return "guitar";
+  if (/violin|viola|fiddle|cello|double bass|contrabass/.test(name)) return "violin";
   if (/bass/.test(name)) return /piano|keyboard/.test(name) ? "piano" : "other";
   if (/guitar/.test(name)) return "guitar";
-  if (/violin|viola|fiddle/.test(name)) return "violin";
   if (/piano|keyboard|harpsichord|organ|celesta|clavi|accordion|marimba/.test(name)) return "piano";
   const program = playState.data?.programs?.[index];
   if (program >= 25 && program <= 32) return "guitar";
-  if (program === 41) return "violin";
+  if (program >= 41 && program <= 44) return "violin";
   if ((program >= 1 && program <= 8 && program !== 1) || (score?.partStaves?.[index] ?? 1) > 1) return "piano";
   return "other";
 }
@@ -50,6 +61,9 @@ function kindOfPart(index) {
 function playerOf(index) {
   const name = (score?.parts?.[index] ?? "").toLowerCase();
   if (/bass/.test(name) && kindOfPart(index) === "guitar") return "bassist";
+  if (/double bass|contrabass/.test(name)) return "double bassist";
+  if (/cello/.test(name)) return "cellist";
+  if (/viola/.test(name)) return "violist";
   if (/ukulele|banjo|mandolin/.test(name)) return `${name.match(/ukulele|banjo|mandolin/)[0]} player`;
   return KINDS[kindOfPart(index)].player;
 }
@@ -111,12 +125,22 @@ function instrumentShown() {
 }
 
 // A part's neck: a fretted part's strings as the score tunes them, with its frets and capo.
+// Which hand plays a bowed part: a cello's, a double bass's, or a violin's and a viola's.
+function handOf(part) {
+  const name = (score?.parts?.[part] ?? "").toLowerCase();
+  const program = playState.data?.programs?.[part];
+  if (/double bass|contrabass/.test(name) || program === 44) return HANDS.bass;
+  if (/cello/.test(name) || program === 43) return HANDS.cello;
+  return HANDS.violin;
+}
+
 function neckOf(part, kind) {
   if (kind !== "guitar") {
     const strings = bowedStrings(part);
-    if (!strings || strings.join() === "G3,D4,A4,E5") return VIOLIN;
-    const highFirst = [...strings].reverse();
-    return { ...VIOLIN, strings: highFirst.map(midiOfName), names: highFirst.map(letterOf) };
+    const hand = handOf(part);
+    if ((!strings || strings.join() === "G3,D4,A4,E5") && hand === HANDS.violin) return VIOLIN;
+    const highFirst = [...(strings ?? ["G3", "D4", "A4", "E5"])].reverse();
+    return bowedNeck(hand, highFirst.map(midiOfName), highFirst.map(letterOf));
   }
   const board = score?.fretted?.[part];
   if (!board) return GUITAR;
@@ -309,12 +333,13 @@ function storedSpot(neck, kind, note) {
 // Where a note falls under the hand in a position: on the string where it's between a low first
 // finger and a stretched fourth, nearest the middle of the hand, or on an open string.
 function inPosition(neck, midi, position) {
-  const first = FIRST_FINGER[position] ?? FIRST_FINGER.at(-1);
+  const hand = neck.hand ?? HANDS.violin;
+  const first = hand.first[position] ?? hand.first.at(-1);
   let best = null;
   neck.strings.forEach((open, index) => {
     const stop = midi - open;
-    if (stop < first - 1 || stop > first + 6 || stop > neck.stops) return;
-    const away = Math.abs(stop - first - 2.5);
+    if (stop < first - 1 || stop > first + hand.reach + 1 || stop > neck.stops) return;
+    const away = Math.abs(stop - first - hand.reach / 2);
     if (!best || away < best.away) best = { string: index + 1, stop, midi, away };
   });
   if (best) return best;
@@ -322,12 +347,12 @@ function inPosition(neck, midi, position) {
   return open >= 0 ? { string: open + 1, stop: 0, midi } : null;
 }
 
-// The finger a violinist uses at a stop in a position: 1 from a half step below where the first
-// finger goes, to 4 a fourth above it.
-function fingerInPosition(position, stop) {
+// The finger a string player uses at a stop in a position: 1 from a half step below where the first
+// finger goes, up to 4 at the top of the hand, a fourth above it on a violin.
+function fingerInPosition(position, stop, hand = HANDS.violin) {
   if (stop === 0) return "0";
-  const above = stop - (FIRST_FINGER[position] ?? 2);
-  return above <= 0 ? "1" : above <= 2 ? "2" : above <= 4 ? "3" : above <= 6 ? "4" : "";
+  const above = stop - (hand.first[position] ?? hand.first[1]);
+  return hand.fingers.find(([most]) => above <= most)?.[1] ?? "";
 }
 
 // Place notes on a neck: those the score places where it says, the rest as fingering() finds best,
@@ -352,7 +377,10 @@ function spotLabel(kind, spot, element) {
   if (kind !== "violin") return name;
   const played = spot.id ? playedAs(spot.id) : {};
   const stop = Number(element.dataset.stop);
-  return played.finger || (played.position !== undefined ? fingerInPosition(played.position, stop) : violinFinger(stop)) || name;
+  const hand = handOf(activePart());
+  // Unmarked, a note is in first position, or half position below it.
+  const finger = played.position !== undefined ? fingerInPosition(played.position, stop, hand) : hand === HANDS.violin ? violinFinger(stop) : fingerInPosition(stop < hand.first[1] ? 0 : 1, stop, hand);
+  return played.finger || finger || name;
 }
 
 // Light the selected notes, the notes sounding and the notes playback is waiting for.
