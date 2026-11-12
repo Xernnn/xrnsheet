@@ -1,6 +1,7 @@
 """How guitarists, string players and pianists are told to play: the marks, their drawing and their sound."""
 
 import copy
+import io
 import re
 import xml.etree.ElementTree as ET
 
@@ -537,3 +538,124 @@ def test_techniques_at_concert_pitch_are_kept_as_written(client):
     assert note(root, ids[1]).findtext("pitch/octave") == "2", "the note is still written an octave above how it sounds"
     copied = note(root, ids[1] + TAB_COPY)
     assert (copied.findtext("notations/technical/string"), copied.findtext("notations/technical/fret")) == ("4", "5")
+
+
+def piano(*midis):
+    root = finished(structure.blank_score(clef="piano", measures=2))
+    cursor = root.find("part/measure/note").get("id")
+    written = []
+    for midi in midis:
+        done = edit.write_note(root, cursor, "quarter", 0, None, midi=midi)
+        written.append(done["written"])
+        cursor = done["cursor"]
+    return finished(root), written
+
+
+def staff_tops(svg):
+    return sorted({int(found) for found in re.findall(r'class="staff">\s*<path d="M\d+ (\d+)', svg)})
+
+
+def test_a_hand_is_marked_over_its_notes():
+    root, ids = piano(60, 62)
+    technique.toggle_hand(root, ids[:1], "LH")
+    assert [marks.direction_label(found) for found in root.iter("direction")] == ["L.H."]
+    technique.toggle_hand(root, ids[:1], "RH")
+    assert [marks.direction_label(found) for found in root.iter("direction")] == ["R.H."]
+    technique.toggle_hand(root, ids[:1], "RH")
+    assert not list(root.iter("direction"))
+    with pytest.raises(EditError):
+        technique.toggle_hand(root, ids, "feet")
+
+
+def test_a_note_can_be_drawn_on_the_other_staff_and_stay_in_its_voice():
+    root, ids = piano(60, 55, 52, 60)
+    technique.cross_staff(root, ids[1], 1)
+    technique.cross_staff(root, ids[2], 1)
+    finished(root)
+    assert note(root, ids[1]).get(technique.CROSS_STAFF) == "2" and note(root, ids[1]).find("staff") is None
+    assert structure.check_measures(root) == []
+    svg = svg_of(root)
+    top, lower = staff_tops(svg)[:2]
+    heads = {found.group(1): int(found.group(2)) for found in re.finditer(r'<g id="(note\d+)" class="note">\s*<g class="notehead">\s*<use [^>]*translate\(\d+, (\d+)\)', svg)}
+    assert heads[ids[0]] < lower <= heads[ids[1]], "drawn on the lower staff"
+    played = {entry["id"]: entry["staff"] for entry in heard(root)}
+    assert (played[ids[0]], played[ids[1]], played[ids[2]]) == (1, 2, 2), "played by the left hand"
+    technique.cross_staff(root, ids[1], -1)
+    assert note(root, ids[1]).get(technique.CROSS_STAFF) is None
+    with pytest.raises(EditError, match="no staff"):
+        technique.cross_staff(root, ids[0], -1)
+
+
+def test_a_note_on_the_other_staff_is_saved_as_musicxml_has_it_and_opened_again():
+    root, ids = piano(60, 55, 52, 60)
+    technique.cross_staff(root, ids[1], 1)
+    finished(root)
+    written = technique.drawn_on_other_staves(copy.deepcopy(root))
+    moved = next(found for found in written.iter("note") if found.get("id") == ids[1])
+    assert moved.findtext("staff") == "2" and moved.get(technique.CROSS_STAFF) is None and moved.findtext("voice") == "1"
+    technique.keep_cross_staff(written)
+    for found in written.iter("note"):
+        if found.get("id") == ids[1]:
+            found.remove(found.find("staff"))  # A staff 1 note says nothing of its staff.
+    assert to_text(written) == to_text(root)
+
+
+def test_a_rest_and_a_one_staff_instrument_stay_where_they_are():
+    root, ids = score("violin", 1, 64)
+    with pytest.raises(EditError):
+        technique.cross_staff(root, ids[0], 1)
+    root, ids = piano(60)
+    rest = edit.locate(root, ids[0]).event
+    with pytest.raises(EditError):
+        technique.cross_staff(root, next(found.get("id") for found in root.iter("note") if found.find("rest") is not None), 1)
+
+
+def test_piano_hands_through_the_server(client):
+    url, ids = written_through(client, "piano", 60, 55, 52, 60)
+    assert client.post(f"{url}/notes/{ids[1]}", json={"action": "crossDown"}).status_code == 200
+    assert client.post(f"{url}/group", json={"action": "crossDown", "notes": ids[2:4]}).status_code == 200
+    assert client.post(f"{url}/marks", json={"action": "hand", "notes": ids[3:], "name": "LH"}).status_code == 200
+    assert client.post(f"{url}/marks", json={"action": "fingering", "notes": ids, "text": "1 2 3 1"}).status_code == 200
+    staves = [found.findtext("staff") for found in saved(client, url).iter("note") if found.get("id") in ids]
+    assert staves == [None, "2", "2", "2"], "a downloaded file has them on the staff they're drawn on"
+    played = client.get(f"{url}/playback").json()["notes"]
+    assert [entry["staff"] for entry in played] == [1, 2, 2, 2]
+    reopened = client.post("/api/scores", files={"file": ("piano.musicxml", io.BytesIO(client.get(f"{url}/score.musicxml").content))}).json()
+    again = client.get(f"/api/scores/{reopened['id']}/playback").json()["notes"]
+    assert [entry["staff"] for entry in again] == [1, 2, 2, 2]
+    assert client.get(f"/api/scores/{reopened['id']}").json()["barChecks"] == []
+    assert client.post(f"{url}/notes/{ids[0]}", json={"action": "crossUp"}).status_code == 422
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_random_edits_on_a_piano_with_notes_on_the_other_staff_keep_it_whole(seed):
+    import random
+
+    from test_editor_fuzz import attempt, check_outputs, check_rules
+
+    rng = random.Random(seed)
+    root, ids = piano(*(rng.randint(48, 76) for _ in range(6)))
+    for step in range(80):
+        if rng.random() < 0.25:
+            trial = copy.deepcopy(root)
+            notes = [found.get("id") for found in trial.iter("note") if found.find("pitch") is not None]
+            try:
+                if notes:
+                    target = rng.choice(notes)
+                    trial.set("last-edit", f"cross staff on {target}")
+                    rng.choice([lambda: technique.cross_staff(trial, target, rng.choice([-1, 1])), lambda: technique.toggle_hand(trial, [target], rng.choice(list(technique.HANDS))), lambda: technique.set_fingering(trial, [target], rng.choice("12345"))])()
+                root = trial
+            except EditError:
+                pass
+        else:
+            root, _ = attempt(root, rng, overfill=False)
+        finished(root)
+        check_rules(root)
+        assert structure.check_measures(root) == [], f"a bar stopped adding up after {root.get('last-edit')}"
+        saved_and_opened = technique.drawn_on_other_staves(copy.deepcopy(root))
+        technique.keep_cross_staff(saved_and_opened)
+        moved = {found.get("id"): found.get(technique.CROSS_STAFF) for found in saved_and_opened.iter("note")}
+        assert moved == {found.get("id"): found.get(technique.CROSS_STAFF) for found in root.iter("note")}, f"a file lost where notes are drawn after {root.get('last-edit')}"
+        if step % 20 == 0:
+            check_outputs(root)
+    check_outputs(root)

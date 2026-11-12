@@ -201,7 +201,9 @@ other programs. [docs/instrument-api.md](docs/instrument-api.md) lists the serve
   on the tablature too, and playback plays them.
 - **Violin:** up- and down-bows, strings as Roman numerals or "sul G", fingers 0 to 4, positions
   ("III pos."), "pizz." and "arco", which playback follows, harmonics and open strings.
-- **Piano:** fingers 1 to 5, above the right hand and below the left, typed one note after another.
+- **Piano:** fingers 1 to 5, above the right hand and below the left, typed one note after another,
+  R.H. and L.H., and notes drawn on the other staff for the other hand, which stay in their own
+  staff's voice and are saved as MusicXML has them.
 - **Playback** says which part and staff each note is on, so one hand of a piano can be heard alone.
 
 ## Train the chord reader

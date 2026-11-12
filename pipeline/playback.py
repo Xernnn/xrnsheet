@@ -21,6 +21,7 @@ from pipeline.structure import instrument_of
 
 DEFAULT_TEMPO = 100
 OCTAVE = 12
+CROSS_STAFF = "xrn-staff"  # As technique.py marks a note drawn on another staff than its voice's.
 # Techniques, as playback approximates them. Lengths are in quarter notes, or shares of the note.
 PIZZICATO_PROGRAM = 46  # General MIDI's pizzicato strings, counted from 1.
 PIZZICATO_LONGEST = 0.5
@@ -637,8 +638,9 @@ def play_part(bars: list, shifts: list[int], swings: list, holds: list, silent: 
                     ringing[key, midi] = entry
                 else:
                     ringing.pop((key, midi), None)
+            drawn = event.notes[0].get(CROSS_STAFF) or key[0]  # A note moved to the other staff is played by that hand.
             for entry in notes[made:]:
-                entry["staff"] = int(key[0]) if key[0].isdigit() else 1
+                entry["staff"] = int(drawn) if drawn.isdigit() else 1
     return notes
 
 
@@ -727,7 +729,8 @@ def event_places(root: ET.Element) -> dict[str, list]:
                 for event in line:
                     for note in event.notes:
                         if note.get("id"):
-                            found[note.get("id")] = [context.index, float(event.onset), float(event.length), midi_of(note) if note.find("pitch") is not None else None, number, int(staff) if staff.isdigit() else 1]
+                            drawn = note.get(CROSS_STAFF) or staff
+                            found[note.get("id")] = [context.index, float(event.onset), float(event.length), midi_of(note) if note.find("pitch") is not None else None, number, int(drawn) if drawn.isdigit() else 1]
     return found
 
 

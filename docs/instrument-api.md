@@ -153,6 +153,26 @@ guitar's string numbers, italic p-i-m-a, H and P over hammer-on and pull-off slu
 bend arrows with "½" or "full" (on the tablature when there is one), X for dead notes and `<12>`
 or `5<17>` for harmonics on the tablature, and "A.H." over a guitar's artificial harmonic.
 
+## Piano hands
+
+- **R.H. and L.H.:** `POST /api/scores/{id}/marks` with `{"action": "hand", "notes": [...], "name": "RH"}`
+  (or `"LH"`) puts the words over each chosen note; the same again takes them away, the other
+  hand replaces them. They're `"kind": "text"` marks.
+- **A note on the other staff:** `POST /api/scores/{id}/notes/{note_id}` with `{"action": "crossDown"}`
+  draws the note, with its chord, on the staff below its own, as MuseScore's Ctrl+Shift+↓ does, and
+  `{"action": "crossUp"}` on the staff above (or back to its own). `POST /api/scores/{id}/group` takes
+  the same two actions for a selection. Refused for a rest, past the top or bottom staff, onto a
+  tablature staff, or on a one-staff instrument.
+
+  The note stays in its own staff's voice, so its bar still adds up and every edit treats it as
+  before. The drawing, a downloaded MusicXML file and playback put it on the other staff: the file
+  gives it that `<staff>` with its own voice, as MuseScore writes it, and playback gives it that
+  `staff`, so muting a hand mutes the notes that hand plays. Opening such a file keeps the note in
+  its voice.
+- **Fingers 1–5:** the `fingering` action above, which places a right hand's fingers above the staff
+  and a left hand's below. For "typing digits after selecting notes", send the selection's ids in
+  order with one digit each, as `{"notes": [a, b, c], "text": "135"}`.
+
 ## Playback
 
 `GET /api/scores/{id}/playback`:

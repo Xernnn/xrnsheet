@@ -17,6 +17,7 @@ from pipeline.musicxml import UnreadableScore
 from pipeline.fretted import tab_staves
 from pipeline.rhythm import OCTAVE_SHIFTS, contexts, octave_lines, place, read_measure
 from pipeline.structure import BREAK_PREFIX, bars_per_line
+from pipeline.technique import drawn_on_other_staves
 
 # Verovio keeps its font location per thread, so a web server's worker threads must set it.
 RESOURCE_PATH = str(Path(verovio.__file__).parent / "data")
@@ -311,6 +312,7 @@ def prepare_for_drawing(musicxml: str) -> str:
     add_beams(root)
     set_line_breaks(root)
     place_octave_lines(root)
+    drawn_on_other_staves(root)  # Last, as beams and octave lines go by the staff a note's voice is on.
     return drop_spelled_degrees(ET.tostring(root, encoding="unicode"))
 
 

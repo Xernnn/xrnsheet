@@ -488,3 +488,104 @@ def set_position(root: ET.Element, note_id: str, number: int) -> None:
     if not 0 <= number < len(ROMAN):
         raise EditError(f"A position is from ½ to {ROMAN[-1]}.")
     toggle_words(root, note_id, ROMAN[number] + POSITION_WORDS, lambda direction: words_of(direction).endswith(POSITION_WORDS))
+
+
+HANDS = {"RH": "R.H.", "LH": "L.H."}
+# The staff a note is drawn on, where that isn't the staff whose voice it belongs to. MusicXML says that
+# with the note's <staff> alone, which this app's bars are read by, so a note kept here stays in its
+# own staff's voice and only the drawing and a saved file move it (see drawn_on_other_staves).
+CROSS_STAFF = "xrn-staff"
+
+
+def toggle_hand(root: ET.Element, note_ids: list[str], hand: str) -> None:
+    """Mark which hand plays the chosen notes, as "R.H." or "L.H." over them."""
+    if hand not in HANDS:
+        raise EditError("A hand is RH or LH.")
+    for note in pitched(root, note_ids):
+        toggle_words(root, note.get("id"), HANDS[hand], lambda direction: words_of(direction) in HANDS.values())
+
+
+def cross_staff(root: ET.Element, note_id: str, change: int) -> None:
+    """Draw a note, with the rest of its chord, on the staff above or below its own, as a pianist's other hand plays it.
+
+    It stays a note of its own staff's voice, so its bar keeps adding up. Moved back, it's drawn where it belongs.
+    """
+    spot = locate(root, note_id)
+    if spot.event.is_rest:
+        raise EditError("A rest stays on its staff.")
+    home = int(spot.key[0])
+    now = int(spot.event.notes[0].get(CROSS_STAFF) or home)
+    wanted = now + change
+    tabs = set(fretted.tab_staves(spot.part))
+    if not 1 <= wanted <= spot.context.staves or str(wanted) in tabs:
+        raise EditError("There's no staff there to move it to.")
+    for note in [*spot.event.grace, *spot.event.notes]:
+        if wanted == home:
+            note.attrib.pop(CROSS_STAFF, None)
+        else:
+            note.set(CROSS_STAFF, str(wanted))
+
+
+def drawn_on_other_staves(root: ET.Element) -> ET.Element:
+    """Put each note moved to another staff on that staff, as MusicXML and Verovio have it, for a file or a drawing."""
+    for note in root.iter("note"):
+        staff = note.attrib.pop(CROSS_STAFF, None)
+        if staff is None:
+            continue
+        found = note.find("staff")
+        if found is None:
+            found = ET.Element("staff")
+            place(note, found)
+        found.text = staff
+    return root
+
+
+def keep_cross_staff(root: ET.Element) -> None:
+    """Read a file's notes drawn on another staff as notes of their own voice, moved there.
+
+    In MusicXML each voice's notes come one after another until a <backup>, and a pianist's note
+    drawn on the other staff is one of them with that staff's number. So in a run of one voice's
+    notes on two staves, the notes on the staff that isn't the voice's are moved there. Which staff
+    is the voice's goes by how MuseScore and this app number voices, 1 to 4 on the first staff and 5
+    to 8 on the second, or else by where most of its notes are. A run drawn wholly on the other
+    staff is moved too, unless that staff's voice of that number has notes of its own in the bar:
+    many programs number each staff's voices from 1.
+    """
+    from pipeline.structure import VOICES_PER_STAFF
+
+    for part in root.findall("part"):
+        staves = int(part.findtext("measure/attributes/staves") or 1)
+        if staves < 2:
+            continue
+        for measure in part.findall("measure"):
+            runs: list[list[ET.Element]] = [[]]
+            for child in measure:
+                if child.tag in ("backup", "forward"):
+                    runs.append([])
+                elif child.tag == "note":
+                    runs[-1].append(child)
+            groups = []
+            for run in runs:
+                voices: dict[str, list[ET.Element]] = {}
+                for note in run:
+                    voices.setdefault(note.findtext("voice") or "1", []).append(note)
+                groups.extend(voices.items())
+            natural = {(notes[0].findtext("staff") or "1", voice) for voice, notes in groups if len({note.findtext("staff") or "1" for note in notes}) == 1}
+            for voice, notes in groups:
+                drawn = [note.findtext("staff") or "1" for note in notes]
+                usual = str((int(voice) - 1) // VOICES_PER_STAFF + 1) if voice.isdigit() and int(voice) >= 1 else None
+                usual = usual if usual is not None and int(usual) <= staves else None
+                if len(set(drawn)) > 1:
+                    home = usual if usual in drawn else max(dict.fromkeys(drawn), key=drawn.count)
+                elif usual is not None and drawn[0] != usual and (usual, voice) not in natural:
+                    home = usual
+                else:
+                    continue
+                for note, staff in zip(notes, drawn):
+                    if staff != home:
+                        note.set(CROSS_STAFF, staff)
+                        found = note.find("staff")
+                        if found is None:
+                            place(note, element_with_text("staff", home))
+                        else:
+                            found.text = home

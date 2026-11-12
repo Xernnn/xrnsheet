@@ -532,6 +532,7 @@ def open_score_file(data: bytes, suffix: str) -> dict:
     """Open a score written elsewhere. It's kept like one written here, with no photo behind it."""
     try:
         root = read_score_file(data, suffix)
+        technique.keep_cross_staff(root)  # A note drawn on the other staff stays in its own staff's voice.
         fit_divisions(root)
         edit.ensure_note_ids(root)
         fretted.sync(root)  # A TAB staff from elsewhere is linked to its standard staff, keeping its frets.
@@ -788,6 +789,8 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "close": lambda root: {"cursor": edit.close_gap(root, note_id)},
         "insert": lambda root: {"cursor": edit.insert_rest(root, note_id, body.type, body.dots)},
         "string": lambda root: fretted.choose_string(root, note_id, body.string or 0),
+        "crossUp": lambda root: technique.cross_staff(root, note_id, -1),
+        "crossDown": lambda root: technique.cross_staff(root, note_id, 1),
     }
     if body.action not in actions:
         raise HTTPException(422, "Unknown note action")
@@ -810,6 +813,8 @@ GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {
     "clear": edit.clear_marks,
     "respell": edit.respell_note,
     "flip": edit.flip_stem,
+    "crossUp": lambda root, note: technique.cross_staff(root, note, -1),
+    "crossDown": lambda root, note: technique.cross_staff(root, note, 1),
 }
 
 
@@ -874,6 +879,7 @@ MARK_ACTIONS: dict[str, Callable[[ET.Element, MarkEdit], dict | None]] = {
     "sul": lambda root, body: technique.toggle_sul(root, *first_and_last(body), body.text or body.name),
     "pizzicato": lambda root, body: technique.set_pizzicato(root, first_and_last(body)[0], body.on),
     "position": lambda root, body: technique.set_position(root, first_and_last(body)[0], body.number),
+    "hand": lambda root, body: technique.toggle_hand(root, body.notes, body.name),
 }
 
 
@@ -1115,7 +1121,7 @@ def download_musicxml(score_id: str) -> Response:
     root = current_root(folder)
     if saved_mixer(folder) is not None:
         root = mixer.with_mixer(root, mixer_of(folder, root))
-    text = to_text(diagrams.with_frames(root))  # Its chord diagrams, as <frame>s, when it shows them.
+    text = to_text(technique.drawn_on_other_staves(diagrams.with_frames(root)))  # With its chord diagrams, and notes on the staff they're drawn on.
     headers = {"Content-Disposition": 'attachment; filename="score.musicxml"'}
     return Response(text, media_type="application/vnd.recordare.musicxml+xml", headers=headers)
 
