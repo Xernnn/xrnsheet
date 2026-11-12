@@ -1160,3 +1160,14 @@ def test_a_barline_is_chosen_for_the_measure_a_note_is_in(client):
     assert styles() == [None, None, "light-heavy"]
     assert client.post(f"/api/scores/{score_id}/bars", json={"action": "barline", "note": second, "style": "wavy"}).status_code == 422
     assert client.post(f"/api/scores/{score_id}/bars", json={"action": "barline", "style": "double"}).status_code == 422
+
+
+def test_the_printable_score_and_parts_show_where_they_open(client, ready_score):
+    # Print and Parts open the PDF in a window to print from; as an attachment, a Chromium window
+    # (the desktop app's among them) would only offer to save it.
+    for query in ("", "?part=0"):
+        answer = client.get(f"/api/scores/{ready_score}/score.pdf{query}")
+        assert answer.status_code == 200 and answer.content.startswith(b"%PDF")
+        disposition = answer.headers["content-disposition"]
+        assert disposition.startswith("inline;"), disposition
+        assert 'filename="score.pdf"' in disposition or 'filename="part_1.pdf"' in disposition

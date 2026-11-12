@@ -944,7 +944,10 @@ def download_pdf(score_id: str, part: int | None = None) -> FileResponse:
         name = f"part_{part + 1}.pdf"
     path = folder / name
     export_pdf(to_text(root), path)
-    return FileResponse(path, media_type="application/pdf", filename=name)
+    # Shown where it opens, as Print and Parts open it in a window of its own to print from. As an
+    # attachment, Chromium and the desktop app would only offer to save it. Export PDF still saves
+    # it, as its link says to.
+    return FileResponse(path, media_type="application/pdf", filename=name, content_disposition_type="inline")
 
 
 @app.get("/api/scores/{score_id}/thumbnail.svg")
