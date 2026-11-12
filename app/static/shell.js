@@ -28,7 +28,7 @@ const ICONS = {
 const ZOOMS = [25, 50, 75, 100, 125, 150, 200, 300, 400];
 const PAGE_WIDTH_MM = 210, PAGE_HEIGHT_MM = 297, MM_TO_PX = 96 / 25.4;
 const DESK_PADDING_PX = 48;
-const FAMILIES = ["Woodwinds", "Brass", "Vocals", "Keyboards", "Strings - Plucked", "Strings - Bowed", "Plain staves"];
+const FAMILIES = ["Woodwinds", "Free Reed", "Brass", "Percussion - Pitched", "Vocals", "Keyboards", "Strings - Plucked", "Strings - Bowed", "Plain staves"];
 const SHORTCUTS = [
   ["N", "Start or stop note input"],
   ["A to G", "Write that note, then move on"],

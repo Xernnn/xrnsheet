@@ -156,6 +156,11 @@ function buildPalettes() {
     { id: "clefs", name: "Clefs", usual: true, cells: [
       clef("treble", "Treble clef", "E050", 3), clef("treble8", "Treble clef 8va bassa", "E052", 3),
       clef("alto", "Alto clef", "E05C", 2), clef("tenor", "Tenor clef", "E05C", 1), clef("bass", "Bass clef", "E062", 1),
+      clef("treble8va", "Treble clef 8va alta", "E053", 3), clef("treble15ma", "Treble clef 15ma alta", "E054", 3), clef("treble15mb", "Treble clef 15ma bassa", "E051", 3),
+      clef("french", "French violin clef", "E050", 4), clef("soprano", "Soprano clef", "E05C", 4), clef("mezzo", "Mezzo-soprano clef", "E05C", 3),
+      clef("baritoneC", "Baritone clef (C clef)", "E05C", 0), clef("baritoneF", "Baritone clef (F clef)", "E062", 2),
+      clef("bass8va", "Bass clef 8va alta", "E065", 1), clef("bass15ma", "Bass clef 15ma alta", "E066", 1), clef("bass8vb", "Bass clef 8va bassa", "E064", 1),
+      clef("bass15mb", "Bass clef 15ma bassa", "E063", 1), clef("subbass", "Subbass clef", "E062", 0), clef("percussion", "Percussion", "E069", 2),
     ] },
     { id: "keys", name: "Key signatures", usual: true, wide: 56, cells: [1, 2, 3, 4, 5, 6, 7, -7, -6, -5, -4, -3, -2, -1, 0].map(key) },
     { id: "times", name: "Time signatures", usual: true, cells: [[2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [3, 8], [4, 8], [5, 8], [6, 8], [7, 8], [9, 8], [12, 8]].map(pair => time(...pair)).concat(

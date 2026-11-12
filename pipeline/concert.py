@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from pipeline.rhythm import EditError, contexts, is_tied, place, read_measure, respell
-from pipeline.structure import MOST_KEY, at_sounding_pitch, read_setting, write_setting
+from pipeline.structure import CLEF_SHAPES, MOST_KEY, at_sounding_pitch, instrument_of, read_setting, write_setting
 from pipeline.transpose import SAME_SOUND, Interval, move_chord, move_pitch
 
 CONCERT_PITCH = "xrnsheet-concert-pitch"
@@ -135,14 +135,43 @@ def octave_change(clef: ET.Element) -> int:
     return int(clef.findtext("clef-octave-change") or 0)
 
 
-def set_octave_change(clef: ET.Element, octaves: int) -> None:
-    found = clef.find("clef-octave-change")
-    if octaves and found is None:
-        found = ET.SubElement(clef, "clef-octave-change")
-    if octaves:
-        found.text = str(octaves)
-    elif found is not None:
-        clef.remove(found)
+def shape_of(clef: ET.Element) -> tuple[str | None, str | None, int]:
+    return clef.findtext("sign"), clef.findtext("line"), octave_change(clef)
+
+
+def set_shape(clef: ET.Element, shape: tuple[str | None, str | None, int]) -> None:
+    """Draw a clef as another: its sign, its line and its octaves, in the order MusicXML wants them."""
+    for tag in ("sign", "line", "clef-octave-change"):
+        for found in clef.findall(tag):
+            clef.remove(found)
+    sign, line, octaves = shape
+    position = 0
+    for tag, text in (("sign", sign), ("line", line), ("clef-octave-change", str(octaves) if octaves else None)):
+        if text is not None:
+            element = ET.Element(tag)
+            element.text = text
+            clef.insert(position, element)
+            position += 1
+
+
+def concert_shapes(part: ET.Element, entry: ET.Element | None, intervals: list[Interval]) -> dict[ET.Element, tuple]:
+    """Return how each of a part's clefs is drawn at concert pitch.
+
+    MuseScore gives a few instruments a clef of their own there, such as a bass clef for a baritone
+    saxophone, at the start of the part. Otherwise a part's clefs take on its octaves.
+    """
+    clefs = clefs_of(part)
+    instrument = instrument_of(entry)
+    if instrument is not None and instrument.concert_clefs:
+        opening = {clef.get("number", "1"): clef for clef in clefs[: len(instrument.concert_clefs)]}
+        shapes = {clef: shape_of(clef) for clef in clefs}
+        for number, name in enumerate(instrument.concert_clefs, start=1):
+            if str(number) in opening:
+                sign, line, octaves = CLEF_SHAPES[name]
+                shapes[opening[str(number)]] = (sign, line or None, octaves)
+        return shapes
+    octaves = clef_octaves(part, intervals)
+    return {clef: (*shape_of(clef)[:2], octave_change(clef) + octaves) for clef in clefs}
 
 
 def clef_octaves(part: ET.Element, intervals: list[Interval]) -> int:
@@ -177,7 +206,7 @@ class Moved:
 
     notes: dict[ET.Element, tuple[Pitch, Pitch, list[ET.Element]]] = field(default_factory=dict)  # Written, sounding, printed accidentals.
     keys: dict[ET.Element, tuple[int, int]] = field(default_factory=dict)  # Written and sounding fifths.
-    clefs: dict[ET.Element, tuple[int, int]] = field(default_factory=dict)  # Written and shown octaves.
+    clefs: dict[ET.Element, tuple[tuple, tuple]] = field(default_factory=dict)  # Written and shown sign, line and octaves.
     chords: dict[ET.Element, tuple[ET.Element, tuple]] = field(default_factory=dict)  # A copy as written, and its pitches as shown.
     bars: dict[ET.Element, tuple] = field(default_factory=dict)  # Each moved bar's signature as shown.
 
@@ -203,14 +232,14 @@ def key_elements(measure: ET.Element) -> list[ET.Element]:
 def to_sounding(root: ET.Element) -> Moved:
     """Move every transposing part to how it sounds, in place, and say what was moved."""
     moved = Moved()
+    entries = {entry.get("id"): entry for entry in root.findall("part-list/score-part")}
     for part in root.findall("part"):
         moves = part_moves(part, sounding=True)
         if not any(move != NO_INTERVAL for move in moves):
             continue
-        octaves = clef_octaves(part, transpositions(part))
-        for clef in clefs_of(part):
-            moved.clefs[clef] = (octave_change(clef), octave_change(clef) + octaves)
-            set_octave_change(clef, octave_change(clef) + octaves)
+        for clef, shape in concert_shapes(part, entries.get(part.get("id")), transpositions(part)).items():
+            moved.clefs[clef] = (shape_of(clef), shape)
+            set_shape(clef, shape)
         for measure, move in zip(part.findall("measure"), moves):
             if move == NO_INTERVAL:
                 continue
@@ -245,8 +274,8 @@ def to_written(root: ET.Element, moved: Moved) -> None:
         known = list(contexts(part))
         unchanged = {context.measure for context in known if moved.bars.get(context.measure) == signature(context.measure, context.divisions, context.fifths)}
         for clef in clefs_of(part):
-            if clef in moved.clefs and octave_change(clef) == moved.clefs[clef][1]:
-                set_octave_change(clef, moved.clefs[clef][0])
+            if clef in moved.clefs and shape_of(clef) == moved.clefs[clef][1]:
+                set_shape(clef, moved.clefs[clef][0])
         for context, back in zip(known, moves):
             if back == NO_INTERVAL:
                 continue

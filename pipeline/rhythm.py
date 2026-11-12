@@ -167,7 +167,7 @@ def diatonic(step: str, octave: int) -> int:
 def top_line_of(clef: ET.Element) -> int:
     """Work out which pitch sits on a staff's top line, because a clef fixes one line's pitch."""
     sign = clef.findtext("sign") or "G"
-    line = int(clef.findtext("line") or 2)
+    line = 2 if sign == "percussion" else int(clef.findtext("line") or 2)  # Notes stand as a treble clef has them.
     octave_change = int(clef.findtext("clef-octave-change") or 0)
     return diatonic(*CLEF_PITCHES.get(sign, CLEF_PITCHES["G"])) + 2 * (5 - line) + 7 * octave_change
 

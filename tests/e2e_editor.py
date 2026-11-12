@@ -1680,6 +1680,45 @@ def test_concert_pitch(page, base: str, shots: Path | None, created: list[str]) 
     press(page, "Escape")
 
 
+def test_more_clefs_and_instruments(page, base: str, shots: Path | None, created: list[str]) -> None:
+    page.goto(base)
+    page.click("#blankOpen")
+    families = page.locator('#newChooser [data-list="families"] li').all_inner_texts()
+    check("the families are MuseScore's, in its order", families == ["Woodwinds", "Free Reed", "Brass", "Percussion - Pitched", "Vocals", "Keyboards", "Strings - Plucked", "Strings - Bowed", "Plain staves"], families)
+    page.click('#newChooser li:text-is("Percussion - Pitched")')
+    offered = page.locator('#newChooser [data-list="instruments"] li').all_inner_texts()
+    check("pitched percussion has its instruments", offered == ["Timpani", "Glockenspiel", "Xylophone", "Vibraphone", "Marimba"], offered)
+    page.fill("#newChooser input", "clarinet")
+    offered = page.locator('#newChooser [data-list="instruments"] li').all_inner_texts()
+    check("the clarinets can be searched for", offered == ["Clarinet in E♭", "Clarinet in B♭", "Clarinet in A", "Bass Clarinet"], offered)
+    if shots:
+        page.screenshot(path=str(shots / "instruments.png"))
+    page.click("#blankCancel")
+    score_id = written_melody(page, base, created, staff="bass-clarinet", tune="cdefgabcdefg")
+    root = saved_score(base, score_id)
+    check("a bass clarinet sounds a ninth below how it's written", (root.findtext(".//transpose/diatonic"), root.findtext(".//transpose/chromatic"), root.findtext(".//transpose/octave-change")) == ("-1", "-2", "-1"))
+    check("and says what it is for other programs", root.findtext(".//score-instrument/instrument-sound") == "wind.reed.clarinet.bass")
+    select_notes(page, 4)
+    choose(page, "clef:bass8vb")
+    settle(page)
+    clefs = page.evaluate("() => [...document.querySelectorAll('#pages g.clef use')].map(use => (use.getAttribute('xlink:href') ?? use.getAttribute('href')).slice(1, 5))")
+    check("a bass clef 8va bassa can be chosen", "E064" in clefs, clefs)
+    select_notes(page, 8)
+    choose(page, "clef:baritoneC")
+    settle(page)
+    shapes = [(clef.findtext("sign"), clef.findtext("line"), clef.findtext("clef-octave-change")) for clef in saved_score(base, score_id).iter("clef")]
+    check("so can a baritone C clef", shapes == [("G", "2", None), ("F", "4", "-1"), ("C", "5", None)], shapes)
+    select_notes(page, 8)
+    choose(page, "clef:percussion")
+    settle(page)
+    shapes = [(clef.findtext("sign"), clef.findtext("line")) for clef in saved_score(base, score_id).iter("clef")]
+    check("and a percussion clef in its place", shapes[2] == ("percussion", None), shapes)
+    clefs = page.evaluate("() => [...document.querySelectorAll('#pages g.clef use')].map(use => (use.getAttribute('xlink:href') ?? use.getAttribute('href')).slice(1, 5))")
+    check("each clef is drawn", "E064" in clefs and "E069" in clefs, clefs)
+    if shots:
+        page.screenshot(path=str(shots / "clefs.png"))
+
+
 def test_quick_entry(page, base: str, created: list[str]) -> None:
     score_id = written_melody(page, base, created, tune="cd")
     select_notes(page, 0)
@@ -2069,6 +2108,7 @@ def main() -> None:
             test_transposing(page, base, created)
             test_instruments_and_layout(page, base, arguments.shots, created)
             test_concert_pitch(page, base, arguments.shots, created)
+            test_more_clefs_and_instruments(page, base, arguments.shots, created)
             test_quick_entry(page, base, created)
             test_tuplets_and_verses(page, base, arguments.shots, created)
             test_instrument_sounds(page, base, created)
