@@ -22,6 +22,7 @@ const ICONS = {
   tie: `<ellipse cx="6" cy="9" rx="3.2" ry="2.3" fill="currentColor" stroke="none" transform="rotate(-20 6 9)"/><ellipse cx="18" cy="9" rx="3.2" ry="2.3" fill="currentColor" stroke="none" transform="rotate(-20 18 9)"/><path d="M6 15c4 4 8 4 12 0"/>`,
   slur: `<ellipse cx="5.5" cy="17" rx="2.8" ry="2" fill="currentColor" stroke="none" transform="rotate(-20 5.5 17)"/><ellipse cx="12" cy="14" rx="2.8" ry="2" fill="currentColor" stroke="none" transform="rotate(-20 12 14)"/><ellipse cx="18.5" cy="17" rx="2.8" ry="2" fill="currentColor" stroke="none" transform="rotate(-20 18.5 17)"/><path d="M4 10c5-6 11-6 16 0"/>`,
   tuplet: `<path d="M3.5 8V5h5M20.5 8V5h-5"/><text x="12" y="8" font-size="8" text-anchor="middle" fill="currentColor" stroke="none" font-family="serif" font-style="italic" font-weight="700">3</text><path d="M6.5 19v-8h12v8M12.5 19v-8" stroke-width="1.2"/><ellipse cx="4.6" cy="19" rx="2.2" ry="1.6" fill="currentColor" stroke="none"/><ellipse cx="10.6" cy="19" rx="2.2" ry="1.6" fill="currentColor" stroke="none"/><ellipse cx="16.6" cy="19" rx="2.2" ry="1.6" fill="currentColor" stroke="none"/>`,
+  fork: `<path d="M9 3v7a3 3 0 006 0V3M12 13v8"/>`,
   flip: `<path d="M17 4v16M14 7l3-3 3 3M14 17l3 3 3-3"/><ellipse cx="7" cy="15" rx="3.2" ry="2.3" fill="currentColor" stroke="none" transform="rotate(-20 7 15)"/><path d="M10 14.5V5"/>`,
 };
 const ZOOMS = [25, 50, 75, 100, 125, 150, 200, 300, 400];
@@ -251,6 +252,8 @@ function menuList() {
       { label: "Properties", keys: "F8", checked: sideShown("properties"), enabled: open, run: () => toggleSide("properties") },
       { label: "Original sheet", checked: open && !$("original").hidden, enabled: open && !score.blank, run: () => showOriginal($("original").hidden) },
       null,
+      { label: "Concert pitch", checked: open && Boolean(score.concertPitch), enabled: open, run: toggleConcertPitch },
+      null,
       { label: "Zoom in", keys: "Ctrl+=", enabled: open, run: () => stepZoom(1) },
       { label: "Zoom out", keys: "Ctrl+-", enabled: open, run: () => stepZoom(-1) },
       null,
@@ -307,6 +310,12 @@ function setUpMenus() {
   $("addButton").addEventListener("click", event => {
     if (event.currentTarget.getAttribute("aria-expanded") === "true") closeMenus(); else openMenu(event.currentTarget, addItems());
   });
+}
+
+// Transposing instruments are shown as they sound, or as their players read them. The score keeps
+// the choice, and it can be undone, as MuseScore does with its Concert pitch button.
+function toggleConcertPitch() {
+  return enqueue(() => send("concert", { on: !score.concertPitch }));
 }
 
 function appendBar() {
@@ -600,6 +609,7 @@ function setUpShell() {
   $("originalClose").addEventListener("click", () => showOriginal(false));
   for (const tab of document.querySelectorAll("#sideTabs button")) tab.addEventListener("click", () => showSide(tab.dataset.panel));
   $("partsButton").addEventListener("click", openParts);
+  $("concertPitch").addEventListener("click", toggleConcertPitch);
   $("partAdd").addEventListener("click", openAddPart);
   $("partRemove").addEventListener("click", () => enqueue(async () => {
     if (chosenPart === null) return;

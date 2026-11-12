@@ -36,7 +36,7 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
-from pipeline import edit, marks, structure, transpose
+from pipeline import concert, edit, marks, structure, transpose
 from pipeline.engrave import export_pdf, glyph_script, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
@@ -227,6 +227,7 @@ class CopiedEvent(BaseModel):
     marks: list[str] = []
     dynamic: str | None = None
     slur: list[int] = []
+    transposition: tuple[int, int] | None = None  # How far the copied part sounds from how it's written.
 
 
 class Paste(BaseModel):
@@ -278,6 +279,10 @@ class BlankScore(BaseModel):
 
 class CheckedMark(BaseModel):
     checked: bool
+
+
+class ConcertPitch(BaseModel):
+    on: bool
 
 
 def job_folder(score_id: str) -> Path:
@@ -513,11 +518,12 @@ def describe(folder: Path, status: dict) -> dict:
     root = current_root(folder)
     edit.ensure_note_ids(root)
     marks.ensure_mark_ids(root)
+    shown = concert.shown(root)  # The same score at concert pitch, if it's shown that way.
     read_info: dict[tuple[int, float], dict] = {}
     for item in read_chord_file(folder):
         read_info.setdefault((item["measure"], round(float(item["onset"]), 3)), item)  # Only the first was placed.
     chords = []
-    for chord in edit.list_chords(root):
+    for chord in edit.list_chords(shown):
         found = read_info.get((chord["origin"], chord["onset"])) if chord["part"] == 0 else None
         unchanged = found is not None and found["chord"] == chord["text"]
         chords.append(chord | {
@@ -529,7 +535,7 @@ def describe(folder: Path, status: dict) -> dict:
         "chords": chords,
         "canUndo": len(versions(folder)) > 1,
         "canRedo": bool(undone(folder)),
-        "pages": render_pages(to_text(root)),
+        "pages": render_pages(to_text(shown)),
         "sourcePages": source_pages(folder),
         "checked": (folder / "checked.json").exists(),
         "blank": not (folder / "recognized").exists(),
@@ -538,6 +544,8 @@ def describe(folder: Path, status: dict) -> dict:
         "parts": structure.part_names(root),
         "partStaves": structure.part_staves(root),
         "barsPerLine": structure.bars_per_line(root),
+        "concertPitch": concert.shown_at_concert_pitch(root),
+        "transposing": concert.is_transposing(root),
     } | structure.title_of(root)
 
 
@@ -641,7 +649,8 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None])
         edit.ensure_note_ids(root)
         marks.ensure_mark_ids(root)
         try:
-            extra = change(root)
+            with concert.editing(root):  # At concert pitch the edit is made to what's shown.
+                extra = change(root)
         except edit.EditError as error:
             raise HTTPException(422, str(error)) from error
         edit.ensure_note_ids(root)
@@ -851,7 +860,9 @@ def change_bars(score_id: str, body: BarEdit) -> dict:
             for doomed in range(structure.bar_of(root, body.last) if body.last else index, index - 1, -1):
                 structure.delete_measure(root, doomed)
         elif body.action == "key":
-            structure.set_key(root, index or 0, body.fifths)
+            # A key goes on the staff it's chosen for as it's shown there, so a trumpet's D major is a trumpet's.
+            part = structure.part_of(root, body.note) if body.note else 0
+            structure.set_key(root, index or 0, concert.wrapped(body.fifths + concert.transposition_at(root.findall("part")[part], index or 0).fifths))
         elif body.action == "time":
             structure.set_time(root, index or 0, body.beats, body.beat_type, body.symbol)
         elif body.action == "pickup":
@@ -913,6 +924,12 @@ def redo(score_id: str) -> dict:
         return describe(folder, read_status(folder))
 
 
+@app.post("/api/scores/{score_id}/concert")
+def change_concert_pitch(score_id: str, body: ConcertPitch) -> dict:
+    """Show the score at concert pitch or as written. It's an edit, so it can be undone, as in MuseScore."""
+    return apply_edit(score_id, lambda root: concert.set_concert_pitch(root, body.on))
+
+
 @app.get("/api/scores/{score_id}/playback")
 def get_playback(score_id: str) -> dict:
     return playback(current_root(job_folder(score_id)))
@@ -944,7 +961,7 @@ def download_pdf(score_id: str, part: int | None = None) -> FileResponse:
             raise HTTPException(404, str(error)) from error
         name = f"part_{part + 1}.pdf"
     path = folder / name
-    export_pdf(to_text(root), path)
+    export_pdf(to_text(concert.shown(root)), path)  # Printed as it's shown, at concert pitch if that's chosen.
     # Shown where it opens, as Print and Parts open it in a window of its own to print from. As an
     # attachment, Chromium and the desktop app would only offer to save it. Export PDF still saves
     # it, as its link says to.
@@ -964,7 +981,7 @@ def get_thumbnail(score_id: str) -> FileResponse:
         if not path.exists():
             for old in folder.glob("thumbnail_*.svg"):
                 old.unlink(missing_ok=True)
-            write_whole(path, render_pages(to_text(ET.parse(saved[-1]).getroot()))[0])
+            write_whole(path, render_pages(to_text(concert.shown(ET.parse(saved[-1]).getroot())))[0])
     return FileResponse(path, media_type="image/svg+xml")
 
 

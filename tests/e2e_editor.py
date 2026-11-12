@@ -1594,6 +1594,43 @@ def test_instruments_and_layout(page, base: str, shots: Path | None, created: li
     check("again takes the break away", page.evaluate(bars_in_lines)[0] > 1, page.evaluate(bars_in_lines))
 
 
+def head_heights(page) -> list[float]:
+    """The height of each notehead on the page, top to bottom being smaller to larger."""
+    return page.evaluate("""() => [...document.querySelectorAll("#pages g.note")].map(note => note.querySelector(".notehead").getBoundingClientRect().top)""")
+
+
+def test_concert_pitch(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, staff="trumpet", tune="cdef")
+    check("concert pitch starts off", page.get_attribute("#concertPitch", "aria-pressed") == "false")
+    check("a trumpet in concert C reads D major", page.locator("#pages g.keySig g.keyAccid").count() == 2, page.locator("#pages g.keySig g.keyAccid").count())
+    written = head_heights(page)
+    step = page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step")
+    page.click("#concertPitch")
+    settle(page)
+    check("the status bar button turns concert pitch on", page.get_attribute("#concertPitch", "aria-pressed") == "true")
+    page.click('#menuBar [data-menu="View"]')
+    ticked = page.locator('.menu button[role="menuitemcheckbox"]:has(span:text-is("Concert pitch"))').get_attribute("aria-checked")
+    page.keyboard.press("Escape")
+    check("and View ▸ Concert pitch is ticked", ticked == "true", ticked)
+    sounding = head_heights(page)
+    check("every note is drawn a step lower", all(abs(low - high - step) < 1 for high, low in zip(written, sounding)), (written, sounding, step))
+    check("the key is drawn as concert C", page.locator("#pages g.keySig g.keyAccid").count() == 0)
+    if shots:
+        page.screenshot(path=str(shots / "concert.png"))
+    select_notes(page, 0)
+    press(page, "g")
+    steps = [note.findtext("pitch/step") for note in saved_score(base, score_id).iter("note") if note.find("pitch") is not None]
+    check("a letter at concert pitch renames to the note that sounds", steps[:4] == list("ADEF"), steps)
+    root = saved_score(base, score_id)
+    check("the file keeps the trumpet's written notes and key", root.find(".//fifths").text == "2" and root.find(".//transpose") is not None)
+    menu(page, "View", "Concert pitch")
+    settle(page)
+    check("View ▸ Concert pitch turns it off again", page.get_attribute("#concertPitch", "aria-pressed") == "false")
+    press(page, "Control+z")
+    check("turning it off is undone like an edit", page.get_attribute("#concertPitch", "aria-pressed") == "true")
+    press(page, "Escape")
+
+
 def test_quick_entry(page, base: str, created: list[str]) -> None:
     score_id = written_melody(page, base, created, tune="cd")
     select_notes(page, 0)
@@ -1981,6 +2018,7 @@ def main() -> None:
             test_voice_key_waits_its_turn(page, base, created)
             test_transposing(page, base, created)
             test_instruments_and_layout(page, base, arguments.shots, created)
+            test_concert_pitch(page, base, arguments.shots, created)
             test_quick_entry(page, base, created)
             test_tuplets_and_verses(page, base, arguments.shots, created)
             test_instrument_sounds(page, base, created)

@@ -10,9 +10,13 @@ import re
 import xml.etree.ElementTree as ET
 from fractions import Fraction
 
-from pipeline.edit import Spot, copy_range, events_between, find_note, locate, next_note_id, paste
+from chords.vocab import parse_chord
+from pipeline.concert import transposition_at
+from pipeline.edit import AFTER, Spot, copy_range, events_between, find_note, locate, next_note_id, paste
+from pipeline.musicxml import chord_from_harmony, harmony_element
 from pipeline.rhythm import Context, EditError, Mark, contexts, indexed, make_note, place, read_measure, remove_wedge_end, repair_slurs, repair_wedges, respell, write_measure
 from pipeline.structure import element_with_text
+from pipeline.transpose import Interval, move_chord, move_pitch
 
 # A mark on a note: which group it sits in inside <notations>, and its tag.
 NOTE_MARKS = {
@@ -590,9 +594,17 @@ def dynamic_at(context: Context, onset: Fraction) -> str | None:
 
 
 def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
-    """Copy a stretch of a voice with its marks. A slur only comes if both its ends do."""
+    """Copy a stretch of a voice with its marks. A slur only comes if both its ends do.
+
+    Notes are copied as they're written, with how far their part sounds from that, so pasted
+    into another instrument they sound the same, as they do in MuseScore.
+    """
     with indexed(root):
         copied = copy_range(root, first_id, last_id)
+        start = locate(root, first_id)
+        moved = transposition_at(start.part, start.context.index)
+        for item in copied["events"]:
+            item["transposition"] = [moved.steps, moved.semitones]
         ends: dict[str, int] = {}
         for number, item in enumerate(copied["events"]):
             source = item.pop("source")
@@ -612,8 +624,36 @@ def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
     return copied
 
 
+def moved_chord(text: str, interval: Interval) -> str:
+    chord = parse_chord(text)
+    if chord is None:
+        return text
+    harmony = harmony_element(chord)
+    move_chord(harmony, interval)
+    return str(chord_from_harmony(harmony) or text)
+
+
+def for_instrument(items: list[dict], spot: Spot) -> list[dict]:
+    """Rewrite copied notes for the instrument they're pasted into, so they sound as they did.
+
+    A copy that doesn't say how its part was transposed is pasted as it was written.
+    """
+    target = transposition_at(spot.part, spot.context.index)
+    found = []
+    for item in items:
+        source = item.get("transposition")
+        if source is None or Interval(*source) == target:
+            found.append(item)
+            continue
+        interval = Interval(*source) + -target
+        pitches = [list(move_pitch(step, alter, octave, interval)) for step, alter, octave in item["pitches"]]
+        found.append(item | {"pitches": pitches, "chord": moved_chord(item["chord"], interval) if item.get("chord") else item.get("chord")})
+    return found
+
+
 def paste_stretch(root: ET.Element, at_id: str, items: list[dict]) -> dict:
     """Paste copied music, then put its marks back on the notes it became."""
+    items = for_instrument(items, locate(root, at_id.removeprefix(AFTER)))
     done = paste(root, at_id, items)
     placed = done.pop("placed")
     for number, item in enumerate(items):

@@ -5,6 +5,7 @@ This is also where bars are checked against the time signature.
 
 import copy
 import xml.etree.ElementTree as ET
+from contextvars import ContextVar
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -40,6 +41,9 @@ MOST_PARTS = 40
 BREAK_PREFIX = "linebreak"  # Marks a line break a person asked for, unlike those a page was read with.
 BARS_PER_LINE = "xrnsheet-bars-per-line"
 MOST_BARS_PER_LINE = 16
+# Set while a score shown at concert pitch is being edited there, where every part's notes and keys
+# already stand as they sound, so no part's key is offset from another's.
+at_sounding_pitch: ContextVar[bool] = ContextVar("at_sounding_pitch", default=False)
 
 
 @dataclass(frozen=True)
@@ -310,7 +314,7 @@ def key_offset(steps: int, semitones: int) -> int:
 def key_for_part(part: ET.Element, fifths: int) -> int:
     """Return a part's written key, wrapped round to a key that exists if it goes past seven."""
     found = part.find("measure/attributes/transpose")
-    offset = 0 if found is None else key_offset(int(found.findtext("diatonic") or 0), int(found.findtext("chromatic") or 0))
+    offset = 0 if found is None or at_sounding_pitch.get() else key_offset(int(found.findtext("diatonic") or 0), int(found.findtext("chromatic") or 0))
     written = fifths + offset
     return written - 12 * (1 if written > 0 else -1) if abs(written) > MOST_KEY else written
 
@@ -692,7 +696,11 @@ def score_part(part_id: str, instrument: Instrument) -> ET.Element:
 
 
 def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str = "treble", measures: int = 16, symbol: str = "") -> ET.Element:
-    """Make an empty score to write in from scratch, for a kind of staff or an instrument."""
+    """Make an empty score to write in from scratch, for a kind of staff or an instrument.
+
+    The key is the one the music sounds in, so a B flat trumpet asked for C major reads D major, as
+    any instrument added to it later would.
+    """
     if clef not in INSTRUMENTS:
         raise EditError("Choose a treble, bass or piano staff, or an instrument.")
     if not 1 <= measures <= MOST_BARS:
@@ -702,6 +710,8 @@ def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str =
     if not -MOST_KEY <= fifths <= MOST_KEY:
         raise EditError("A key has at most seven sharps or flats.")
     instrument = INSTRUMENTS[clef]
+    written = fifths + key_offset(instrument.steps, instrument.semitones)
+    written = written - 12 * (1 if written > 0 else -1) if abs(written) > MOST_KEY else written
     root = ET.Element("score-partwise", version="4.0")
     ET.SubElement(root, "part-list").append(score_part("P1", instrument))
     part = ET.SubElement(root, "part", id="P1")
@@ -709,7 +719,7 @@ def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str =
         measure = blank_measure(Fraction(beats * 4, beat_type), START_DIVISIONS, len(instrument.clefs))
         part.append(measure)
         if index == 0:
-            measure.insert(0, part_attributes(instrument, START_DIVISIONS, fifths, beats, beat_type, symbol))
+            measure.insert(0, part_attributes(instrument, START_DIVISIONS, written, beats, beat_type, symbol))
     # A piece ends with a final barline, which is how MuseScore starts a score too.
     set_barline_child(add_barline(measure, "right"), element_with_text("bar-style", FINAL_BARLINE))
     renumber(part)
@@ -744,7 +754,7 @@ def add_part(root: ET.Element, name: str) -> None:
     found = parts[0].find("measure/attributes/transpose")
     if found is not None:
         top_offset = key_offset(int(found.findtext("diatonic") or 0), int(found.findtext("chromatic") or 0))
-    offset = key_offset(instrument.steps, instrument.semitones) - top_offset
+    offset = 0 if at_sounding_pitch.get() else key_offset(instrument.steps, instrument.semitones) - top_offset
     part_id = new_part_id(root)
     root.find("part-list").append(score_part(part_id, instrument))
     part = ET.Element("part", id=part_id)

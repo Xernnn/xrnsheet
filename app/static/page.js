@@ -168,6 +168,7 @@ async function poll() {
 function draw() {
   $("pages").innerHTML = score.pages.map(page => `<div class="page">${page}</div>`).join("");
   $("undo").disabled = !score.canUndo;
+  $("concertPitch").setAttribute("aria-pressed", String(Boolean(score.concertPitch)));
   $("redo").disabled = !score.canRedo;
   $("checked").textContent = score.checked ? "Checked ✓" : "Mark as checked";
   $("checked").classList.toggle("done", score.checked);

@@ -88,7 +88,9 @@ A score read from a photo or PDF also has the original sheet in a panel on the r
 
 **Selecting.** Click a note or rest. Shift-click another to select the stretch between them, which gets a blue box. Click an empty part of a measure to select the whole measure. A stretch moves, deletes or copies as one undo step, within one voice. Click a dynamic, tempo, text, sign, slur or hairpin to select it: Delete removes it, and a double-click or `F2` changes its text. A right-click opens a menu for whatever is under the pointer.
 
-**Instruments and parts.** The Instruments panel adds and removes instruments, and a transposing instrument gets its own key. "Parts" opens one instrument alone as a PDF.
+**Instruments and parts.** The Instruments panel adds and removes instruments, and a transposing instrument gets its own key: the key chosen for a new score is the one it sounds in, so a B♭ trumpet in concert C reads D major. "Parts" opens one instrument alone as a PDF.
+
+**Concert pitch.** The Concert pitch button in the status bar, or View ▸ Concert pitch, shows transposing instruments as they sound instead of as their players read them. An instrument written an octave from how it sounds, such as a bass guitar or a tenor saxophone, keeps its notes in place and takes a clef with an 8 below, as in MuseScore. Notes, chords and keys entered at concert pitch are the ones that sound, and the score keeps them written for the player. The choice is saved with the score and can be undone. Printing and PDFs follow it, while MusicXML is always written for the players, and MIDI and audio always sound the same. A key signature chosen for a transposing staff is the key that staff shows, and notes copied from one instrument and pasted into another sound the same.
 
 **Properties.** With nothing selected it has the title and composer and the system breaks. With a note selected it moves or respells the note, clears its marks, and adds a chord symbol or lyrics. It also inserts and deletes measures, makes the first measure a pickup, and removes or inserts a beat.
 
@@ -153,7 +155,7 @@ Repeats & jumps starts or ends a repeat at the selected measure, and marks it as
 
 Click a chord symbol to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. Measures you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
 
-What MuseScore has and this editor doesn't yet: the mixer, the piano keyboard, the timeline, continuous view, concert pitch, the playback toolbar's loop, metronome and position, and page and style settings.
+What MuseScore has and this editor doesn't yet: the mixer, the piano keyboard, the timeline, continuous view, the playback toolbar's loop, metronome and position, and page and style settings.
 
 To recognize a sheet without the app:
 
