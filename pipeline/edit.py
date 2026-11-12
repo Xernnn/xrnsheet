@@ -305,8 +305,13 @@ def in_voice(spot: Spot, number: int) -> Spot:
 
 
 def drop_empty_voice(spot: Spot) -> None:
-    """Take a bar's extra voice away once it holds only rests, so they don't clutter the staff."""
-    if voices_on_staff(spot.part, spot.key[0]).index(spot.key[1]) == 0:
+    """Take a bar's extra voice away once it holds only rests, so they don't clutter the staff.
+
+    A voice whose only note has just moved out of it is on the staff nowhere else, which makes it
+    an extra voice if any other is there.
+    """
+    used = voices_on_staff(spot.part, spot.key[0])
+    if sorted({*used, spot.key[1]}, key=int).index(spot.key[1]) == 0:
         return
     if all(event.is_rest for event in spot.line):
         del spot.timeline.lines[spot.key]
