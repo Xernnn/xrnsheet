@@ -36,7 +36,7 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
-from pipeline import concert, edit, layout, marks, mixer, structure, transpose
+from pipeline import concert, edit, fretted, layout, marks, mixer, structure, transpose
 from pipeline.engrave import VIEWS, export_pdf, glyph_script, page_size, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
@@ -172,6 +172,7 @@ class NoteEdit(BaseModel):
     steps: int = 0
     actual: int = 3  # How many notes a tuplet holds.
     interval: int = 0  # A third is 3. Below the note if it's negative.
+    string: int | None = None  # Which string plays it, numbered from 1 for the highest.
 
 
 class GroupEdit(BaseModel):
@@ -302,6 +303,16 @@ class PageLayout(BaseModel):
 
 class ViewChoice(BaseModel):
     view: str  # "page", or "horizontal" or "vertical" for MuseScore's continuous views.
+
+
+class StringsEdit(BaseModel):
+    """A fretted instrument's tuning, capo and tablature. Whatever is left out stays as it is."""
+
+    part: int = 0  # Counted from the top.
+    tuning: str | None = None  # A tuning's name, as "standard", "dropD" or "DADGAD".
+    strings: list[str] | None = None  # Or each string's sound, from the lowest string up, as ["D2", "A2", ...].
+    capo: int | None = None
+    tab: bool | None = None  # Show a tablature staff linked under the standard staff.
 
 
 class MixerChannel(BaseModel):
@@ -522,6 +533,7 @@ def open_score_file(data: bytes, suffix: str) -> dict:
         root = read_score_file(data, suffix)
         fit_divisions(root)
         edit.ensure_note_ids(root)
+        fretted.sync(root)  # A TAB staff from elsewhere is linked to its standard staff, keeping its frets.
         marks.ensure_mark_ids(root)
         structure.ensure_measure_ids(root)
         layout.keep_imported(root)  # On the page its file sets out, as MuseScore opens it.
@@ -621,6 +633,8 @@ def describe(folder: Path, status: dict) -> dict:
         "timeline": timeline(shown),
         "mixer": mixer_of(folder, root),
         "transposing": concert.is_transposing(root),
+        "fretted": [board.describe() if board is not None else None for board in fretted.boards(root)],
+        "fretProblems": fretted.problems(root),
     } | structure.title_of(root)
 
 
@@ -642,6 +656,7 @@ def create_blank_score(body: BlankScore) -> dict:
     except edit.EditError as error:
         raise HTTPException(422, str(error)) from error
     edit.ensure_note_ids(root)
+    fretted.sync(root)
     marks.ensure_mark_ids(root)
     score_id = uuid.uuid4().hex
     folder = JOB_DIR / score_id
@@ -729,6 +744,7 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None])
         except edit.EditError as error:
             raise HTTPException(422, str(error)) from error
         edit.ensure_note_ids(root)
+        fretted.sync(root)  # Every TAB staff shows its standard staff's notes as they now are.
         marks.ensure_mark_ids(root)
         save_version(folder, root)
         return describe(folder, read_status(folder)) | (extra or {})
@@ -768,6 +784,7 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "tie": lambda root: edit.toggle_tie(root, note_id),
         "close": lambda root: {"cursor": edit.close_gap(root, note_id)},
         "insert": lambda root: {"cursor": edit.insert_rest(root, note_id, body.type, body.dots)},
+        "string": lambda root: fretted.choose_string(root, note_id, body.string or 0),
     }
     if body.action not in actions:
         raise HTTPException(422, "Unknown note action")
@@ -804,8 +821,10 @@ def change_group(score_id: str, body: GroupEdit) -> dict:
     def change(root: ET.Element) -> None:
         done = 0
         with indexed(root):  # Every chosen note is looked up, so they are found in one pass, not one search each.
+            # A note and its fret number on a TAB staff are one note, and moved once.
+            chosen = list(dict.fromkeys(edit.own_ids(root, body.notes)))
             # Respelling a note respells the notes tied to it, so a second one of those would undo it.
-            chosen = edit.one_note_per_tie(root, body.notes) if body.action == "respell" else body.notes
+            chosen = edit.one_note_per_tie(root, chosen) if body.action == "respell" else chosen
             for note_id in chosen:
                 try:
                     GROUP_ACTIONS[body.action](root, note_id)
@@ -847,6 +866,31 @@ def change_marks(score_id: str, body: MarkEdit) -> dict:
     if body.action not in MARK_ACTIONS:
         raise HTTPException(422, "Unknown mark")
     return apply_edit(score_id, lambda root: MARK_ACTIONS[body.action](root, body))
+
+
+@app.post("/api/scores/{score_id}/strings")
+def change_strings(score_id: str, body: StringsEdit) -> dict:
+    """Tune a fretted instrument, move its capo, or show or hide its tablature. The notes keep their sound."""
+
+    def change(root: ET.Element) -> None:
+        _, board = fretted.part_and_board(root, body.part)
+        changed = False
+        if body.tab is not None and body.tab != bool(board.tab):
+            fretted.set_tab(root, body.part, body.tab)
+            changed = True
+        if body.tuning is not None or body.strings is not None or body.capo is not None:
+            fretted.set_strings(root, body.part, body.tuning, body.strings, body.capo)
+            changed = True
+        if not changed:
+            raise edit.EditError("That's how this instrument is already set up.")
+
+    return apply_edit(score_id, change)
+
+
+@app.get("/api/tunings")
+def list_tunings() -> dict:
+    """List the tunings a guitar or a bass can be given by name, each string's sound from the lowest up."""
+    return {"guitar": {name: list(strings) for name, strings in fretted.TUNINGS[structure.GUITAR_STRINGS].items()}, "bass": {name: list(strings) for name, strings in fretted.TUNINGS[structure.BASS_STRINGS].items()}, "mostCapo": fretted.MOST_CAPO}
 
 
 @app.post("/api/scores/{score_id}/transpose")

@@ -42,6 +42,8 @@ NATURAL_SEMITONES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 FIFTHS_FROM_C = {"F": -1, "C": 0, "G": 1, "D": 2, "A": 3, "E": 4, "B": 5}
 CLEF_PITCHES = {"G": ("G", 4), "F": ("F", 3), "C": ("C", 4)}
 ACCIDENTAL_NAMES = {-2: "flat-flat", -1: "flat", 0: "natural", 1: "sharp", 2: "double-sharp"}
+# A note's copy on the tablature staff linked under its own is named after it with this on the end.
+TAB_COPY = "-tab"
 # These can sit between two notes' start times, because MusicXML gives them an offset.
 SHIFTABLE = {"harmony", "direction"}
 OFFSET_FOLLOWERS = {"footnote", "level", "voice", "staff", "sound"}
@@ -644,14 +646,14 @@ def respell(context: Context) -> None:
     A note only needs one if it differs from what's in force at that point. An earlier F sharp
     stays in force until the barline, so a later plain F needs a natural, which the key alone
     wouldn't show. A sharp tied over the barline holds for the tied note alone, so the next F in
-    that bar shows its accidental, whatever it is.
+    that bar shows its accidental, whatever it is. A tablature staff shows frets, never accidentals.
     """
     in_force: dict[tuple[str, str, str], int | None] = {}
     timeline = read_measure(context.measure, context.divisions)
     for event in timeline.events():
         for note in [*event.grace, *event.notes]:
             pitch = note.find("pitch")
-            if pitch is None:
+            if pitch is None or context.clefs.get(note.findtext("staff") or "1") == "TAB":
                 continue
             step, octave = pitch.findtext("step"), pitch.findtext("octave")
             alter = int(float(pitch.findtext("alter") or 0))
@@ -725,6 +727,20 @@ def tie_ends(timelines: dict[int, Timeline], number: int, ordered: list[Event], 
     return after, before
 
 
+def on_tablature(context: Context, note: ET.Element) -> bool:
+    return context.clefs.get(note.findtext("staff") or "1") == "TAB"
+
+
+def same_staff_kind(context: Context, note: ET.Element, others: list[ET.Element]) -> list[ET.Element]:
+    """Keep the notes a tie from this one could reach. A fret number's copy of a note is never one of them.
+
+    A tablature staff copies its standard staff, and until it's made again after an edit, its copy
+    of a note that has just changed would look like the other end of a tie the change has broken.
+    """
+    tab = on_tablature(context, note)
+    return [other for other in others if on_tablature(context, other) == tab]
+
+
 def repair_ties(part: ET.Element, index: int) -> None:
     """Remove half-ties around an edited measure, left when the note at one end has gone."""
     known = part_contexts(part)
@@ -735,9 +751,10 @@ def repair_ties(part: ET.Element, index: int) -> None:
             for position, event in enumerate(ordered):
                 after, before = tie_ends(timelines, number, ordered, position)
                 for note in event.notes:
-                    if is_tied(note, "start") and not any(same_pitch(note, other) and is_tied(other, "stop") for other in after):
+                    later, earlier = same_staff_kind(known[number], note, after), same_staff_kind(known[number], note, before)
+                    if is_tied(note, "start") and not any(same_pitch(note, other) and is_tied(other, "stop") for other in later):
                         set_tie(note, "start", False)
-                    if is_tied(note, "stop") and not any(same_pitch(note, other) and is_tied(other, "start") for other in before):
+                    if is_tied(note, "stop") and not any(same_pitch(note, other) and is_tied(other, "start") for other in earlier):
                         set_tie(note, "stop", False)
 
 

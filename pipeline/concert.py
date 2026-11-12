@@ -128,7 +128,8 @@ def restore_chord(harmony: ET.Element, original: ET.Element) -> None:
 
 
 def clefs_of(part: ET.Element) -> list[ET.Element]:
-    return [clef for measure in part.findall("measure") for attributes in measure.findall("attributes") for clef in attributes.findall("clef")]
+    """Return a part's clefs that stand for pitches. A tablature staff's lines are strings, whatever the pitch."""
+    return [clef for measure in part.findall("measure") for attributes in measure.findall("attributes") for clef in attributes.findall("clef") if clef.findtext("sign") != "TAB"]
 
 
 def octave_change(clef: ET.Element) -> int:

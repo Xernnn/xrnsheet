@@ -180,6 +180,20 @@ To recognize a sheet without the app:
 .venv/bin/python -m pipeline.recognize photo.jpg --out results/photo
 ```
 
+## Guitar, violin and piano notation
+
+What a score can hold for these players, all of it stored as MusicXML, so it opens in MuseScore and
+other programs. [docs/instrument-api.md](docs/instrument-api.md) lists the server's endpoints.
+
+- **Guitar and bass tablature.** "Guitar + tablature" and the acoustic, electric and bass versions
+  have a TAB staff under the standard staff, as in MuseScore. Every note on the TAB staff is
+  played by a string and fret, chosen as a player would (open strings low on the neck, near where
+  the hand already is, a chord on strings of its own) or set per note. Tunings: standard, drop D,
+  DADGAD, open G, open D, half a step down, or any other, and a capo from the 1st to the 12th
+  fret. A new tuning or capo keeps the notes' sound and moves their frets. Notes no string can play
+  are listed, and left off the tablature.
+- **Playback** says which part and staff each note is on, so one hand of a piano can be heard alone.
+
 ## Train the chord reader
 
 ```sh

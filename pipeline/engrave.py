@@ -13,7 +13,8 @@ import verovio
 
 from pipeline.layout import page_layout
 from pipeline.musicxml import UnreadableScore
-from pipeline.rhythm import OCTAVE_SHIFTS, contexts, octave_lines, read_measure
+from pipeline.fretted import tab_staves
+from pipeline.rhythm import OCTAVE_SHIFTS, contexts, octave_lines, place, read_measure
 from pipeline.structure import BREAK_PREFIX, bars_per_line
 
 # Verovio keeps its font location per thread, so a web server's worker threads must set it.
@@ -67,6 +68,7 @@ FONT_SIZE = re.compile(r'font-size="(\d+)px"')
 DRAWN_SIZE = re.compile(r'class="definition-scale"[^>]*viewBox="0 0 (\d+) (\d+)"')
 SCALE = 45  # Verovio draws a page at this percent, so a millimetre of paper is 4.5 pixels of the drawing.
 VIEWS = ("page", "horizontal", "vertical")
+TAB_NEARER = 4  # How much nearer the staff above a TAB staff is drawn than another staff, in half staff spaces.
 LONGEST_SYSTEM = 100000  # Verovio's widest page, ten metres, which a continuous view is cut down to fit.
 LONGEST_PAGE = 60000
 # A sharp or flat inside words, as in a chord symbol. Verovio sizes it for its music font, where a
@@ -145,9 +147,11 @@ def write_beam_group(group: list[tuple[ET.Element, float]]) -> None:
 def add_beams(root: ET.Element) -> None:
     """Beam eighth notes and shorter, because recognized scores arrive with none.
 
-    This runs each time a page is drawn, so beams stay right after notes are edited.
+    This runs each time a page is drawn, so beams stay right after notes are edited. Fret numbers
+    on a tablature staff have no stems to beam.
     """
     for part in root.findall("part"):
+        tabs = set(tab_staves(part))
         divisions, beats, beat_type = 1, 4, 4
         for measure in part.findall("measure"):
             divisions = int(measure.findtext(".//attributes/divisions") or divisions)
@@ -165,7 +169,7 @@ def add_beams(root: ET.Element) -> None:
                 elif child.tag == "note" and child.find("grace") is None:
                     for beam in child.findall("beam"):
                         child.remove(beam)
-                    if child.find("chord") is not None:
+                    if child.find("chord") is not None or (child.findtext("staff") or "1") in tabs:
                         continue
                     key = (child.findtext("staff") or "1", child.findtext("voice") or "1")
                     streams.setdefault(key, []).append((child, position, length))
@@ -271,12 +275,56 @@ def place_octave_lines(root: ET.Element) -> None:
                         octave.text = str(int(octave.text) + wrong)
 
 
+def prepare_tablature(root: ET.Element) -> None:
+    """Draw tablature as fret numbers alone, and a standard staff as one whatever tuning it keeps.
+
+    A TAB staff shows no rests and no stems here, as its standard staff above shows the rhythm, and
+    a note with no fret, which no string could play, isn't drawn: Verovio would print nonsense for
+    it. Verovio draws any staff whose <staff-details> tune strings as tablature, so a guitar with no
+    TAB staff keeps its tuning in the file but not in the drawing.
+    """
+    for part in root.findall("part"):
+        tabs = set(tab_staves(part))
+        for details in part.iter("staff-details"):
+            if details.get("number", "1") not in tabs:
+                for child in [*details.findall("staff-tuning"), *details.findall("capo")]:
+                    details.remove(child)
+        if not tabs:
+            continue
+        for note in part.iter("note"):
+            if (note.findtext("staff") or "1") not in tabs:
+                continue
+            if note.find("rest") is not None or note.findtext("notations/technical/fret") is None:
+                note.set("print-object", "no")
+            elif note.find("stem") is None:
+                place(note, ET.Element("stem"))
+            if note.find("stem") is not None:
+                note.find("stem").text = "none"
+
+
 def prepare_for_drawing(musicxml: str) -> str:
     root = ET.fromstring(musicxml)
+    prepare_tablature(root)
     add_beams(root)
     set_line_breaks(root)
     place_octave_lines(root)
     return drop_spelled_degrees(ET.tostring(root, encoding="unicode"))
+
+
+TAB_STAFF_DEF = re.compile(r'(<staffDef [^>]*notationtype="tab[^"]*"[^>]*?)(/?>)')
+
+
+def closer_tablature(toolkit, spacing: int) -> None:
+    """Bring each tablature staff closer to the staff above it.
+
+    Verovio draws tablature lines further apart than a staff's, and spaces a TAB staff from the one
+    above in its own larger units, which left it three times as far away as a piano's lower staff. MEI
+    can say how far a staff is from the one above, which MusicXML can't tell Verovio, so the score
+    goes through MEI to say it. That distance is the least there is: notes far below the staff
+    above still push the tablature down.
+    """
+    mei = toolkit.getMEI()
+    toolkit.loadData(TAB_STAFF_DEF.sub(lambda found: f'{found.group(1)} spacing="{spacing}"{found.group(2)}', mei))
 
 
 @functools.lru_cache(maxsize=1)
@@ -391,6 +439,8 @@ def render_pages(musicxml: str, view: str = "page") -> list[str]:
         })
         if not toolkit.loadData(prepared):
             raise UnreadableScore("Could not read this MusicXML")
+        if "<sign>TAB</sign>" in prepared:
+            closer_tablature(toolkit, max(round(layout.staves * 2) - TAB_NEARER, 0))
         return [keep_spaces(size_header(set_text_font(replace_private_glyphs(toolkit.renderToSVG(page))), layout.space)) for page in range(1, toolkit.getPageCount() + 1)]
 
 

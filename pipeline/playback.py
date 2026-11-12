@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from chords.vocab import QUALITIES
+from pipeline.fretted import fretboard
 from pipeline.marks import ACCENTS, DYNAMICS
 from pipeline.musicxml import chord_from_harmony
 from pipeline.rhythm import STEPS, Context, Event, Timeline, alteration_in_key, contexts, is_tied, line_end, read_measure
@@ -405,16 +406,20 @@ def tied_from(ringing: dict[tuple, dict], key: tuple[str, str], midi: int) -> tu
     return next((held for held in ringing if held[0][0] == key[0] and held[1] == midi), None)
 
 
-def play_part(bars: list, shifts: list[int], swings: list, holds: list) -> list[dict]:
-    """Return one part's notes, each with its moment and how loud it is."""
+def play_part(bars: list, shifts: list[int], swings: list, holds: list, silent: frozenset[str] = frozenset()) -> list[dict]:
+    """Return one part's notes, each with its moment, how loud it is and the staff it's on.
+
+    A tablature staff linked to a standard staff only shows that staff's notes again, so it's silent.
+    """
     notes: list[dict] = []
     loudness = Loudness(bars)
     ringing: dict[tuple, dict] = {}
     for context, timeline, start in bars:
         shift = shifts[context.index] if context.index < len(shifts) else 0
         # In time order across voices, because a tie can lead from one voice into another.
-        events = sorted(((key, event) for key, line in timeline.lines.items() for event in line), key=lambda item: item[1].onset)
+        events = sorted(((key, event) for key, line in timeline.lines.items() for event in line if key[0] not in silent), key=lambda item: item[1].onset)
         for key, event in events:
+            made = len(notes)
             begins = start + float(event.onset)
             length = float(event.length)
             if next((on for where, on in reversed(swings) if where <= begins), False):
@@ -444,6 +449,8 @@ def play_part(bars: list, shifts: list[int], swings: list, holds: list) -> list[
                     ringing[key, midi] = entry
                 else:
                     ringing.pop((key, midi), None)
+            for entry in notes[made:]:
+                entry["staff"] = int(key[0]) if key[0].isdigit() else 1
     return notes
 
 
@@ -521,18 +528,18 @@ def bars_played(bars: list[tuple[Context, Timeline, float]]) -> list[dict]:
 
 
 def event_places(root: ET.Element) -> dict[str, list]:
-    """Say where in its bar each note and rest is, how long it lasts, its written pitch and its part.
+    """Say where in its bar each note and rest is, how long it lasts, its written pitch, its part and its staff.
 
     The place finds a stretch to loop, and the pitch is the key the piano keyboard lights for it.
     """
     found: dict[str, list] = {}
     for number, part in enumerate(root.findall("part")):
         for context in contexts(part):
-            for line in read_measure(context.measure, context.divisions).lines.values():
+            for (staff, _), line in read_measure(context.measure, context.divisions).lines.items():
                 for event in line:
                     for note in event.notes:
                         if note.get("id"):
-                            found[note.get("id")] = [context.index, float(event.onset), float(event.length), midi_of(note) if note.find("pitch") is not None else None, number]
+                            found[note.get("id")] = [context.index, float(event.onset), float(event.length), midi_of(note) if note.find("pitch") is not None else None, number, int(staff) if staff.isdigit() else 1]
     return found
 
 
@@ -540,12 +547,14 @@ def playback(root: ET.Element) -> dict:
     """Return notes and chords, timed in quarter notes from the start of the score.
 
     The bars are listed as they're played, and each note and rest says where it is in its bar, so
-    the page can show the playback position as a measure and beat and loop over a selection.
+    the page can show the playback position as a measure and beat and loop over a selection. Each
+    note says its part and staff, so one hand of a piano can be played alone.
     """
     notes: list[dict] = []
     chords: list[dict] = []
     holds: list[tuple[float, float]] = []
     parts = root.findall("part")
+    entries = {entry.get("id"): entry for entry in root.findall("part-list/score-part")}
     order = play_order(parts[0].findall("measure"))
     top_bars, _ = laid_out(parts[0], order)
     swings = swing_at(top_bars)
@@ -553,7 +562,9 @@ def playback(root: ET.Element) -> dict:
     for part_number, part in enumerate(parts):
         bars, end = laid_out(part, order)
         total = max(total, end)
-        played = sustained(play_part(bars, transposed_bars(part), swings, holds), pedal_spans(bars, end))
+        board = fretboard(part, entries.get(part.get("id")))
+        silent = frozenset([board.linked] if board is not None and board.linked else [])
+        played = sustained(play_part(bars, transposed_bars(part), swings, holds, silent), pedal_spans(bars, end))
         notes.extend(item | {"part": part_number} for item in played)
         if part_number == 0:
             for _, timeline, start in bars:

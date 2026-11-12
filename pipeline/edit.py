@@ -19,6 +19,7 @@ from pipeline.rhythm import (
     LENGTHS,
     NATURAL_SEMITONES,
     STEPS,
+    TAB_COPY,
     Context,
     EditError,
     Event,
@@ -47,6 +48,7 @@ from pipeline.rhythm import (
     respell,
     rests,
     same_pitch,
+    same_staff_kind,
     set_length,
     set_tie,
     tie_ends,
@@ -103,6 +105,12 @@ def ensure_note_ids(root: ET.Element) -> None:
 
 
 def find_note(root: ET.Element, note_id: str) -> ET.Element:
+    """Find a note by its id. A fret number on a linked tablature staff stands for the note it plays."""
+    if note_id.endswith(TAB_COPY):
+        try:
+            return find_note(root, note_id.removesuffix(TAB_COPY))
+        except EditError:
+            pass  # It's a note of a tablature staff of its own.
     index = index_of(root)
     found = index.notes.get(note_id) if index is not None else None
     if found is not None and found.get("id") == note_id and index.place_of(found) is not None:
@@ -111,6 +119,17 @@ def find_note(root: ET.Element, note_id: str) -> ET.Element:
         if note.get("id") == note_id:
             return note
     raise EditError(f"No note with id {note_id}")
+
+
+def own_ids(root: ET.Element, note_ids: list[str]) -> list[str]:
+    """Name each note by its own id, where a selection picked a fret number on its tablature staff."""
+    found = []
+    for note_id in note_ids:
+        try:
+            found.append(find_note(root, note_id).get("id") if note_id.endswith(TAB_COPY) else note_id)
+        except EditError:
+            found.append(note_id)  # The edit itself will say what's wrong with this one.
+    return found
 
 
 def context_of(root: ET.Element, target: ET.Element) -> tuple[ET.Element, Context]:
@@ -296,6 +315,7 @@ def drop_empty_voice(spot: Spot) -> None:
 def move_to_voice(root: ET.Element, note_ids: list[str], number: int) -> None:
     """Move notes into another voice of their staff, as when a line turns out to be two."""
     fit_divisions(root)
+    note_ids = own_ids(root, note_ids)
     done = False
     for note_id in note_ids:
         spot = locate(root, note_id)
@@ -566,6 +586,7 @@ def tied_notes(root: ET.Element, note: ET.Element) -> list[ET.Element]:
                 if not any(item is member for item in event.notes):
                     continue
                 after, before = tie_ends(timelines, context.index, ordered, position)
+                after, before = same_staff_kind(context, member, after), same_staff_kind(context, member, before)
                 ends = [other for other in after if is_tied(member, "start") and is_tied(other, "stop")]
                 ends += [other for other in before if is_tied(member, "stop") and is_tied(other, "start")]
                 found.extend(other for other in ends if same_pitch(member, other) and not any(other is seen for seen in found))
@@ -764,6 +785,7 @@ def remove_range(root: ET.Element, note_ids: list[str]) -> None:
     measure those notes go and the later ones in the voice are pulled in, as closing a gap does.
     """
     fit_divisions(root)
+    note_ids = own_ids(root, note_ids)
     chosen = set(note_ids)
     whole: set[int] = set()
     seen: set[tuple[int, tuple[str, str]]] = set()

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import concert, edit, marks, playback, rhythm, structure, transpose
+from pipeline import concert, edit, fretted, marks, playback, rhythm, structure, transpose
 from pipeline.engrave import render_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import to_text
@@ -102,7 +102,10 @@ def check_voices(root):
 
 
 def removes_cleanly(root, part_number, index, key):
-    """Delete a voice's rests one by one, as a person would, and see that the voice goes."""
+    """Delete a voice's rests one by one, as a person would, and see that the voice goes.
+
+    The server brings a tablature staff in line after each edit, so a copied voice goes with its own.
+    """
     trial = copy.deepcopy(root)
     for _ in range(64):
         measure = trial.findall("part")[part_number].findall("measure")[index]
@@ -115,6 +118,8 @@ def removes_cleanly(root, part_number, index, key):
             edit.remove_tuplet(trial, event.notes[0].get("id"))
         else:
             edit.delete_note(trial, event.notes[0].get("id"))
+        edit.ensure_note_ids(trial)
+        fretted.sync(trial)
     return False
 
 
