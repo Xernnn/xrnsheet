@@ -494,9 +494,10 @@ async function openNewScore() {
   $("newDialog").showModal();
 }
 
-async function createScore() {
+// The instruments listed, or one chosen at the top of the dialog, which starts writing at once.
+async function createScore(picked = newChooser.picked) {
   const [beats, beat_type, symbol = ""] = $("blankTime").value.split("/");
-  const [first, ...more] = newChooser.picked;
+  const [first, ...more] = picked;
   const body = {
     fifths: Number($("blankKey").value), beats: Number(beats), beat_type: Number(beat_type), symbol, clef: first, more, measures: Number($("blankBars").value),
     title: $("blankTitle").value, composer: $("blankComposer").value, tempo: $("blankTempo").value, pickup: Number($("blankPickup").value),
@@ -514,20 +515,26 @@ async function createScore() {
   setInput(true);
 }
 
-// The instruments xrnsheet is made for, a click away at the top of the New score dialog.
-const QUICK_INSTRUMENTS = [["piano", "Piano", "piano"], ["guitar", "Guitar", "guitar"], ["violin", "Violin", "violin"]];
+// The instruments xrnsheet is made for, a click away at the top of the New score dialog: a click starts
+// a score for one, and its + adds it to the list to choose more.
+const QUICK_INSTRUMENTS = [["piano", "Piano", "piano", "Two staves, for both hands"], ["guitar-tab", "Guitar + tablature", "guitar", "Staff and TAB, six strings"], ["violin", "Violin", "violin", "Bowings, strings, positions"], ["bass-guitar-tab", "Bass + tablature", "guitar", "Staff and TAB, four strings"]];
 
 function setUpNewScore() {
   $("blankOpen").addEventListener("click", openNewScore);
-  $("quickStart").replaceChildren(...QUICK_INSTRUMENTS.map(([id, label, drawn]) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.quick = id;
-    button.innerHTML = `${icon(drawn)}<span></span>`;
-    button.lastChild.textContent = label;
-    button.title = `Add a ${label.toLowerCase()} to the score`;
-    button.addEventListener("click", () => newChooser?.add(id));
-    return button;
+  $("quickStart").replaceChildren(...QUICK_INSTRUMENTS.map(([id, label, drawn, what]) => {
+    const holder = document.createElement("div");
+    holder.className = "quick";
+    holder.dataset.quick = id;
+    holder.innerHTML = `<button type="button" class="start">${icon(drawn)}<span class="name"></span><span class="what"></span></button><button type="button" class="add flat">${icon("plus")}</button>`;
+    const [start, add] = holder.querySelectorAll("button");
+    start.querySelector(".name").textContent = label;
+    start.querySelector(".what").textContent = what;
+    start.title = `Start writing for ${label.replace(" +", " and")}`;
+    add.title = `Add ${label.replace(" +", " and")} to the list, to choose more instruments`;
+    add.setAttribute("aria-label", add.title);
+    start.addEventListener("click", () => createScore([id]));
+    add.addEventListener("click", () => newChooser?.add(id));
+    return holder;
   }));
   $("blankCancel").addEventListener("click", () => $("newDialog").close());
   $("blankNext").addEventListener("click", () => showNewPage(true));

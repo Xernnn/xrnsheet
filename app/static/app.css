@@ -413,9 +413,16 @@ dialog .content .choices { display: flex; gap: 18px; }
 dialog .buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 16px; }
 dialog .buttons button { min-width: 96px; }
 dialog .error { color: var(--bad); }
-.quickStart { display: flex; flex-wrap: wrap; gap: 8px; }
-.quickStart button { flex: 1 1 140px; min-height: 64px; flex-direction: column; gap: 4px; font-weight: 650; }
-.quickStart button svg.icon { width: 24px; height: 24px; color: var(--accent); }
+.quickStart { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.quickStart .quick { position: relative; display: flex; }
+.quickStart .start { flex: 1; min-height: 72px; flex-direction: column; gap: 2px; padding: 8px 34px 8px 12px; align-items: flex-start; white-space: normal; text-align: left; }
+.quickStart .start .name { font-weight: 700; }
+.quickStart .start .what { color: var(--muted); font-size: 12px; }
+.quickStart .start svg.icon { width: 24px; height: 24px; color: var(--accent); margin-bottom: 2px; }
+.quickStart .add { position: absolute; top: 6px; right: 6px; min-height: 26px; min-width: 26px; padding: 0; border-radius: 50%; color: var(--muted); }
+.quickStart .add svg.icon { width: 15px; height: 15px; }
+.quickStart .add:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
+.quickHint { color: var(--muted); font-size: 12.5px; margin: -4px 0 0; }
 .columns { display: grid; grid-template-columns: 170px minmax(180px, 1fr) minmax(200px, 1fr); gap: 0; min-height: 300px; }
 .columns > div { display: flex; flex-direction: column; min-height: 0; padding: 0 12px; border-right: 1px solid var(--line); }
 .columns > div:first-child { padding-left: 0; }

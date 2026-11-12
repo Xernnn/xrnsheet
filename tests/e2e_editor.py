@@ -2613,12 +2613,7 @@ def neck_spots(page, holder: str, kind: str) -> list[list[int]]:
 
 def test_fretboard(page, base: str, shots: Path | None, created: list[str]) -> None:
     page.goto(base)
-    page.click("#blankOpen")
-    page.click('#quickStart [data-quick="guitar"]')
-    page.click("#blankNext")
-    page.fill("#blankBars", "2")
-    page.click("#blankDone")
-    page.wait_for_selector("#pages svg")
+    new_score(page, "guitar", bars=2)
     score_id = page.evaluate("() => scoreId")
     created.append(score_id)
     page.wait_for_function("() => playState.data !== null")
@@ -2657,8 +2652,8 @@ def test_fretboard(page, base: str, shots: Path | None, created: list[str]) -> N
 def test_fingerboard_and_switcher(page, base: str, shots: Path | None, created: list[str]) -> None:
     page.goto(base)
     page.click("#blankOpen")
-    page.click('#quickStart [data-quick="piano"]')
-    page.click('#quickStart [data-quick="violin"]')
+    page.click('#quickStart [data-quick="piano"] .add')
+    page.click('#quickStart [data-quick="violin"] .add')
     page.click("#blankNext")
     page.fill("#blankBars", "2")
     page.click("#blankDone")
@@ -2702,6 +2697,51 @@ def test_fingerboard_and_switcher(page, base: str, shots: Path | None, created: 
     settle(page)
     check("selecting the piano's music switches back to its keyboard", page.inner_text("#partName") == "Piano" and page.is_visible("#pianoPanel"))
     page.keyboard.press("Escape")
+
+
+def score_data(base: str, score_id: str) -> dict:
+    return json.loads(fetch_text(base, f"/api/scores/{score_id}"))
+
+
+def test_new_scores_for_players(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """Guitarists and bassists get tablature from New score, one click away, and from the instrument choosers."""
+    page.goto(base)
+    page.click("#blankOpen")
+    offered = page.locator("#quickStart .quick .name").all_inner_texts()
+    check("New score offers the players' instruments first", offered == ["Piano", "Guitar + tablature", "Violin", "Bass + tablature"], offered)
+    if shots:
+        page.screenshot(path=str(shots / "new-score.png"))
+    page.click('#quickStart [data-quick="guitar-tab"] .start')
+    page.wait_for_selector("#pages svg")
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    data = score_data(base, score_id)
+    check("one click on Guitar + tablature starts a guitar score with its TAB staff", data["parts"] == ["Guitar"] and data["partStaves"] == [2] and data["fretted"][0]["tab"] is True, (data["parts"], data["partStaves"]))
+    check("ready to write in", page.evaluate("() => editor.on") and page.is_hidden("#newDialog"))
+    check("and its staff and tablature are drawn", page.locator("#pages g.measure").first.locator(":scope > g.staff").count() == 2)
+    page.keyboard.press("Escape")
+    page.click("#blankOpen")
+    page.fill("#newChooser input", "tablature")
+    found = page.locator('#newChooser [data-list="instruments"] li span').all_inner_texts()
+    check("searching for tablature finds a guitar and bass with it", {"Guitar + tablature", "Acoustic Guitar + tablature", "Electric Guitar + tablature", "Bass Guitar + tablature"} <= set(found), found)
+    page.click('#newChooser [data-instrument="bass-guitar-tab"] button')
+    page.click("#blankNext")
+    page.fill("#blankBars", "2")
+    page.click("#blankDone")
+    page.wait_for_function("id => scoreId !== id", arg=score_id)
+    page.wait_for_selector("#pages svg")
+    bass_id = page.evaluate("() => scoreId")
+    created.append(bass_id)
+    bass = score_data(base, bass_id)
+    check("a bass with tablature can be chosen from the list too", bass["fretted"][0] is not None and bass["fretted"][0]["strings"] == ["E1", "A1", "D2", "G2"] and bass["fretted"][0]["tab"], bass["fretted"])
+    page.keyboard.press("Escape")
+    page.keyboard.press("i")
+    page.fill("#partChooser input", "tablature")
+    page.click('#partChooser [data-instrument="guitar-tab"] button')
+    page.click("#partOk")
+    settle(page)
+    both = score_data(base, bass_id)
+    check("and a guitar with tablature can be added to a score", both["parts"] == ["Bass Guitar", "Guitar"] and both["fretted"][1]["tab"] is True and both["partStaves"] == [2, 2], (both["parts"], both["partStaves"]))
 
 
 def test_practice(context, base: str, shots: Path | None, created: list[str]) -> None:
@@ -2926,6 +2966,7 @@ def main() -> None:
             test_command_palette(page, base, created)
             test_fretboard(page, base, arguments.shots, created)
             test_fingerboard_and_switcher(page, base, arguments.shots, created)
+            test_new_scores_for_players(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)
