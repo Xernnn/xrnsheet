@@ -17,8 +17,8 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          # Not the README's 3.11: tests/helpers.py has an f-string that only 3.12 on can parse.
-          python-version: "3.12"
+          # The README's minimum, so nothing newer slips in unnoticed.
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements.txt
 
