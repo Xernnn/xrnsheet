@@ -24,6 +24,16 @@ at concert pitch when the score is shown that way, and it answers with the whole
 - `fretProblems`: notes no string can play, which the tablature leaves out:
   `[{"note": "note12", "part": 0, "reason": "C2 is below this instrument's lowest string."}]`.
   Show them like `barChecks`.
+- `strings`: each part's strings as they sound, from the lowest up (a fretted part's as it's tuned,
+  a violin's or viola's `["G3", "D4", "A4", "E5"]`), or `null` for anything without strings.
+- `transpositions`: how many semitones each part's first bar sounds from how it's written (`-12`
+  for a bass guitar), so the page can place a played note before it has fetched playback.
+- `notes`: each note's details have a sixth item when the score says how it's played:
+  `{"string": 2, "fret": 5}` from the tablature (the fret counted from the capo), and any of
+  `"finger"`, `"pluck"`, `"mark"` (its string number), `"bend"` (`half`, `full`, `oneAndHalf`),
+  `"harmonic"` (`natural`, `artificial`), `"dead"`, `"cross"` (the staff it's drawn on), and for a
+  bowed instrument the `"position"` in force and the `"sul"` string over it. A fret number's
+  `-tab` copy has no sixth item: look up the note it copies.
 
 ### The tablature staff
 
@@ -82,6 +92,12 @@ it. The choice holds until the note's pitch changes. Refused with the reason whe
 play the note ("String 1 can't play C4: the lowest it plays is E4."), when it would be past the last
 fret, when another note sounding at that moment is on that string, or when the instrument has no
 tablature yet.
+
+A note written or stacked (`"action": "write"` or `"stack"`) can carry `"string": 2`, as a fret
+clicked on the fretboard does. On a guitar with tablature the note is played on that string in the
+same edit, so one undo takes both back; on a bowed instrument it gets that string number. If the
+string is busy the note is still written, on a string of its own, and the reply's `message` says
+why. A guitar without tablature has nowhere to keep it.
 
 Strings are otherwise chosen automatically for every new or changed note: a string that's free at
 that moment, near where the hand already is, open strings while the hand is low on the neck, and
@@ -145,7 +161,8 @@ and asking for something else of the same kind replaces it.
 
 Removing a hammer-on or pull-off removes both its ends. `{"action": "label", "id": ..., "text": "3"}`
 retypes a clicked fingering, pluck or string number, and a bend as `½`, `full` or `1½`; an empty text
-removes it. "Clear marks" on a note removes all its techniques too.
+removes it. A guitar's string number retyped moves its tablature to that string too, or is refused
+with the reason. "Clear marks" on a note removes all its techniques too.
 
 ### How they're drawn
 
@@ -155,6 +172,21 @@ guitar's string numbers, italic p-i-m-a, slurs for hammer-ons and pull-offs on b
 their H and P on the tablature (on the staff when there's none),
 bend arrows with "½" or "full" (on the tablature when there is one), X for dead notes and `<12>`
 or `5<17>` for harmonics on the tablature, and "A.H." over a guitar's artificial harmonic.
+
+### Copying and pasting them
+
+`POST /api/scores/{id}/copy` gives each copied event `techniques` (one per note of the chord: its
+`fingering`, `pluck`, `string`, `bend`, `harmonic`, `dead`), `strings` (on a guitar with
+tablature, each note's string) and `joins` (`[later event, "hammerOn" | "pullOff" | "slide" |
+"glissando" | "vibrato"]`). `POST /api/scores/{id}/paste` puts them back, leaving out what the
+instrument pasted into can't have, and the strings once its tablature has the notes, as one edit.
+A violin's artificial harmonic is copied as its stopped note, and the paste adds its diamond. A
+passage's words and lines (P.M., sul G, pizz., positions, hands) aren't copied.
+
+### A capo
+
+A guitar with a capo has "Capo 2" drawn over the start of its music, as a `g.xrn-capo`, which isn't
+one of the score's marks and can't be selected.
 
 ## Piano hands
 
