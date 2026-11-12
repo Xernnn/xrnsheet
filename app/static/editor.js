@@ -116,7 +116,8 @@ function updateTools() {
   const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
   const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
   const chosen = mark ? `${MARK_NAMES[mark.kind] ?? "Mark"}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : selection;
-  $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : chosen);
+  const practising = currentMode() === "practice" ? "Space plays from the selected note. A and B set the loop's ends there, and Hear and Wait for choose a part or a hand." : null;
+  $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : practising ?? chosen);
   hint = "";
   drawInspector();
   lightKeys();

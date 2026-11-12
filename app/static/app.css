@@ -179,7 +179,7 @@ body.atHome.busy #library { display: none; }
 [data-voice="3"] { color: var(--tool3); }
 [data-voice="4"] { color: var(--tool4); }
 body:not([data-mode="write"]) #noteBar, body:not([data-mode="practice"]) #practiceBar { display: none; }
-#practiceBar { gap: 8px; }
+#practiceBar { gap: 8px; flex-wrap: wrap; row-gap: 4px; }
 #practiceBar .tool { display: flex; align-items: center; gap: 6px; flex: none; }
 #practiceBar .tool > .label { color: var(--muted); font-size: 12px; }
 #practiceBar select { min-height: 30px; padding: 2px 6px; }
