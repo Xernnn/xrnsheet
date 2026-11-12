@@ -187,6 +187,12 @@ body:not([data-mode="write"]) #noteBar, body:not([data-mode="practice"]) #practi
 #practiceSpeedValue { min-width: 38px; font-variant-numeric: tabular-nums; }
 #waitState { color: var(--muted); font-size: 12px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #waitState.waiting { color: var(--expected); font-weight: 600; }
+#timingState { color: var(--muted); font-size: 12px; white-space: nowrap; }
+/* How each note you played fell while playback waited for you: on time, early, late, let go early. */
+#pages g.note.onTime, #pages g.note.onTime * { fill: var(--good); }
+#pages g.note.early, #pages g.note.early * { fill: var(--voice4); }
+#pages g.note.late, #pages g.note.late * { fill: var(--bad); }
+#pages g.note.short { opacity: .55; }
 #pitches { display: none; flex: none; gap: 4px; padding: 6px 10px; background: var(--surface); border-bottom: 1px solid var(--line); overflow-x: auto; }
 #pitches button { min-width: 40px; min-height: 38px; padding: 4px 8px; }
 #barChecks { display: flex; flex: none; flex-wrap: wrap; gap: 6px; padding: 7px 12px; background: var(--surface); border-bottom: 1px solid var(--line); }

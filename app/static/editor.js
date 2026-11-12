@@ -1028,7 +1028,11 @@ function setUpMidi() {
   midiAsked = true;
   navigator.requestMIDIAccess?.().then(access => {
     const listen = input => {
-      input.onmidimessage = ({ data }) => { if ((data[0] & 0xf0) === 0x90 && data[2] > 0) midiNoteOn(data[1]); };
+      input.onmidimessage = ({ data }) => {
+        const kind = data[0] & 0xf0;
+        if (kind === 0x90 && data[2] > 0) midiNoteOn(data[1]);
+        else if (kind === 0x80 || kind === 0x90) midiNoteOff(data[1]);
+      };
     };
     access.inputs.forEach(listen);
     practice.midi = access.inputs.size ? "ready" : "none";

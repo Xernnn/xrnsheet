@@ -3706,6 +3706,104 @@ def test_practice(context, base: str, shots: Path | None, created: list[str]) ->
     page.close()
 
 
+def test_practice_details(context, base: str, shots: Path | None, created: list[str]) -> None:
+    """A count-in comes in on the music's own beat, waiting for you says how each note fell, and a loop can speed up."""
+    page = context.new_page()
+    page.add_init_script("""
+        window.fakeMidi = { inputs: new Map([["key", { type: "input", state: "connected" }]]), onstatechange: null };
+        navigator.requestMIDIAccess = async () => window.fakeMidi;
+        window.press = number => window.fakeMidi.inputs.get("key").onmidimessage({ data: [0x90, number, 90] });
+        window.lift = number => window.fakeMidi.inputs.get("key").onmidimessage({ data: [0x80, number, 0] });
+    """)
+    page.goto(base)
+    page.click("#blankOpen")
+    page.fill("#newChooser input", "treble")
+    page.click('#newChooser [data-instrument="treble"] button')
+    page.click("#blankNext")
+    page.fill("#blankBars", "2")
+    page.select_option("#blankPickup", "4")
+    page.click("#blankDone")
+    page.wait_for_selector("#pages svg")
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    page.click('#modeSwitch [data-mode="write"]')  # The mode an earlier test left is kept.
+    if not page.evaluate("() => editor.on"):
+        page.keyboard.press("n")
+    page.keyboard.press("5")
+    page.keyboard.type("cdefg", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => playState.data && playState.data.notes.length === 5")
+    page.click('#modeSwitch [data-mode="practice"]')
+    lead = lambda: page.evaluate("() => player.cycles[0].zero - player.audio.currentTime")
+    counted = {}
+    for choice in ("1", "1w"):
+        page.select_option("#countIn", choice)
+        page.click("#rewind")
+        page.click("#play")
+        wait_playing(page, True)
+        counted[choice] = lead()
+        page.click("#play")
+        wait_playing(page, False)
+    check("before a pickup a bar counted in is the beats it's missing, 1 2 3", 1.6 < counted["1"] < 2.1, counted)
+    check("or a whole bar, then those beats", 4.0 < counted["1w"] < 4.5, counted)
+    check("and stopping during the count takes it away", page.inner_text("#waitState") == "")
+    select_notes(page, 3)
+    page.select_option("#countIn", "1")
+    page.click("#play")
+    wait_playing(page, True)
+    check("from a note on the third beat, the count is the two beats before it", 1.0 < lead() < 1.5, lead())
+    page.click("#play")
+    wait_playing(page, False)
+    page.select_option("#countIn", "0")
+
+    # Waiting for you: each note's timing, against the moment the music reached it.
+    page.select_option("#waitFor", "part:0")
+    page.wait_for_function("() => practice.midi === 'ready'")
+    page.click("#rewind")
+    page.keyboard.press(" ")
+    page.wait_for_function("() => practice.follower?.arrived")
+    page.wait_for_timeout(500)
+    page.evaluate("() => press(72)")
+    page.wait_for_function("() => practice.follower?.index === 1")
+    first = own_notes(saved_score(base, score_id))[0].get("id")
+    check("a note played after the music reached it is late, and marked so", "Late by" in page.inner_text("#timingState") and page.locator(f"[id='{first}'].late").count() == 1, page.inner_text("#timingState"))
+    page.evaluate("() => lift(72)")
+    page.evaluate("() => press(74)")
+    page.wait_for_function("() => practice.follower?.index === 2", timeout=5000)
+    page.evaluate("() => lift(74)")
+    check("one played before is early, and one let go at once is short", "1 early" in page.inner_text("#timingState") and "let go early" in page.inner_text("#timingState"), page.inner_text("#timingState"))
+    if shots:
+        page.screenshot(path=str(shots / "practice-timing.png"))
+    page.keyboard.press(" ")
+    wait_playing(page, False)
+    check("the counts stay in view once it stops", page.is_visible("#timingState"))
+    page.select_option("#waitFor", "off")
+
+    # A loop round one note, 60% to 100% in steps of 20%.
+    select_notes(page, 1)
+    page.click("#practiceLoop")
+    page.locator("#practiceSpeed").fill("60")
+    page.click("#speedSteps")
+    page.select_option("#speedStep", "20")
+    page.select_option("#speedTarget", "100")
+    page.click("#play")
+    wait_playing(page, True)
+    page.wait_for_function("() => document.querySelector('#practiceSpeedValue').textContent === '80%'", timeout=5000)
+    page.wait_for_function("() => document.querySelector('#practiceSpeedValue').textContent === '100%'", timeout=5000)
+    page.wait_for_timeout(1300)
+    check("each time round the loop is faster, up to the speed chosen", page.inner_text("#practiceSpeedValue") == "100%")
+    page.click("#play")
+    wait_playing(page, False)
+    check("and stopped, it goes back to where it started", page.inner_text("#practiceSpeedValue") == "60%")
+    page.click("#speedSteps")
+    page.click("#practiceLoop")
+    page.locator("#practiceSpeed").fill("100")
+    page.close()
+
+
 def test_phone(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()
     page.set_viewport_size({"width": 390, "height": 800})
@@ -3864,6 +3962,7 @@ def main() -> None:
             test_words_copied_with_a_passage(page, base, created)
             test_chord_diagram_editing(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
+            test_practice_details(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])

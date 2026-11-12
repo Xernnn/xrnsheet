@@ -4,12 +4,20 @@
 // on a MIDI keyboard or on the instrument below, while the rest plays along.
 const practice = {
   countIn: Number(readSetting("countIn", "0")) || 0, // Bars of ticks before the music starts.
+  countWhole: readSetting("countWhole", "off") === "on", // Whole bars, then the beats up to the start.
   hear: "all", // What playback sounds: everything, "part:N" or "staff:N:S".
   waitFor: "off", // Whose notes playback waits for, in the same terms.
   follower: null, // Playback while it waits for you.
   midi: "unknown",
+  stepUp: readSetting("speedSteps", "off") === "on", // Each time round the loop a little faster.
+  step: Number(readSetting("speedStep", "10")) || 10, // By this many percent,
+  target: Number(readSetting("speedTarget", "100")) || 100, // up to this speed.
+  startSpeed: null, // The speed a stepped-up loop started at, to go back to.
+  timing: null, // How your notes fell while playback waited for you: { early, late, onTime, short }.
 };
 const COUNT_TICK_SECONDS = 0.05;
+const ON_TIME_SECONDS = 0.08; // A note played this near its moment, or an eighth of a beat, is on time.
+const HELD_SHARE = 0.5; // A note let go before half its length is short.
 
 function practising() {
   return currentMode() === "practice";
@@ -69,38 +77,74 @@ function drawPracticeState() {
   const percent = Math.round(playState.speed * 100);
   $("practiceSpeed").value = percent;
   $("practiceSpeedValue").textContent = `${percent}%`;
-  $("countIn").value = String(practice.countIn);
+  $("countIn").value = `${practice.countIn}${practice.countIn && practice.countWhole ? "w" : ""}`;
+  $("speedSteps").setAttribute("aria-pressed", String(practice.stepUp));
+  $("speedStep").value = String(practice.step);
+  $("speedTarget").value = String(practice.target);
 }
 
-function setCountIn(bars) {
-  practice.countIn = Math.max(0, Math.min(2, Number(bars) || 0));
+// "1" or "2" bars, or "1w" and "2w" for whole bars before the beats up to the start.
+function setCountIn(choice) {
+  practice.countIn = Math.max(0, Math.min(2, parseInt(choice, 10) || 0));
+  practice.countWhole = String(choice).endsWith("w");
   keepSetting("countIn", String(practice.countIn));
+  keepSetting("countWhole", practice.countWhole ? "on" : "off");
   drawPracticeState();
 }
 
-// The bar a place is in, its beat, and the seconds one beat takes at the speed chosen.
+// The bar a place is in, its beat, how many beats into the bar the place is, and the seconds one
+// beat takes at the speed chosen. A pickup's beats are the last of its bar.
 function beatAtPlace(data, place) {
   const bar = data.bars.findLast(item => item.start <= place + EARLY) ?? data.bars[0];
   const unit = bar ? beatOf(bar) : 1;
   const beats = bar ? Math.max(1, Math.round(bar.full / unit)) : 4;
   const bpm = clockFor(data, playState.speed).bpm(place) * playState.speed;
-  return { beats, seconds: unit * 60 / bpm };
+  const into = bar ? Math.max(0, (place - barBegins(bar)) / unit) : 0;
+  return { beats, seconds: unit * 60 / bpm, into: into < EARLY * 1000 ? 0 : into };
 }
 
-// Count a bar or two in, ticking every beat and higher on the first, and say how long it takes.
+// How many beats the count-in lasts before the music, as players count it: the bars chosen, the last
+// of them cut short so that the music comes in on its own beat, as "1, 2, 3" before a pickup on 4.
+// With whole bars the count is whole bars, then the beats up to where the music starts.
+function countBeats(beats, into, bars = practice.countIn, whole = practice.countWhole) {
+  if (!bars) return 0;
+  return into > 0 ? (whole ? bars : bars - 1) * beats + into : bars * beats;
+}
+
+// Count in, ticking every beat and higher on the first of each bar, and say how long it takes.
 function countIn(audio, data, from, start, nodes) {
   if (!practising() || !practice.countIn) return 0;
-  const { beats, seconds } = beatAtPlace(data, from);
-  const count = practice.countIn * beats;
+  const { beats, seconds, into } = beatAtPlace(data, from);
+  const lead = countBeats(beats, into);
+  const ticks = Math.ceil(lead - EARLY * 1000);
   const timers = [];
-  for (let number = 0; number < count; number++) {
+  for (let number = 0; number < ticks; number++) {
     tick(audio, start + number * seconds, number % beats === 0, nodes.metronome.gain);
     timers.push(setTimeout(() => showWait(`Count in: ${(number % beats) + 1}`), (start + number * seconds - audio.currentTime) * 1000));
   }
-  timers.push(setTimeout(() => showWait(""), (start + count * seconds - audio.currentTime) * 1000));
+  timers.push(setTimeout(() => showWait(""), (start + lead * seconds - audio.currentTime) * 1000));
   player?.timers.push(...timers);
   practice.follower?.timers.push(...timers);
-  return count * seconds + COUNT_TICK_SECONDS;
+  return lead * seconds + COUNT_TICK_SECONDS;
+}
+
+// A practice loop can go a little faster each time round, from the speed it started at up to the one
+// chosen, and goes back to where it started when it stops.
+function nextSpeed(now = playState.speed) {
+  if (!practising() || !practice.stepUp) return now;
+  practice.startSpeed ??= now;
+  return Math.min(Math.max(practice.target, practice.startSpeed * 100), Math.round(now * 100) + practice.step) / 100;
+}
+
+function showSpeed(speed) {
+  playState.speed = speed;
+  $("speed").value = $("speedValue").value = Math.round(speed * 100);
+  drawPracticeState();
+}
+
+function speedBack() {
+  if (practice.startSpeed !== null) showSpeed(practice.startSpeed);
+  practice.startSpeed = null;
 }
 
 function showWait(text, waiting = false) {
@@ -123,8 +167,11 @@ async function startFollowing(place = null) {
   const yours = notesOf(practice.waitFor);
   const audio = new (window.AudioContext || window.webkitAudioContext)();
   const nodes = mixerNodes(audio, mixerForPlayback());
-  practice.follower = { data, audio, nodes, loop, until, timers: [], steps: [], index: 0, pressed: new Set(), place: from, arrived: false, flowing: null, yours };
+  practice.follower = { data, audio, nodes, loop, until, timers: [], steps: [], index: 0, pressed: new Set(), pressedAt: new Map(), holding: new Map(), place: from, arrived: false, flowing: null, dueAt: null, yours };
   practice.follower.steps = stepsBetween(data, yours, from, until);
+  practice.timing = { early: 0, late: 0, onTime: 0, short: 0 };
+  document.querySelectorAll("#pages .early, #pages .late, #pages .onTime, #pages .short").forEach(element => element.classList.remove("early", "late", "onTime", "short"));
+  drawTiming("");
   showPlaying(true);
   setUpMidi();
   const lead = countIn(audio, data, from, audio.currentTime + START_DELAY, nodes);
@@ -160,6 +207,7 @@ function waitAtStep() {
       follower.place = follower.loop.start;
       follower.steps = stepsBetween(follower.data, follower.yours, follower.loop.start, follower.loop.end);
       follower.index = 0;
+      showSpeed(nextSpeed());
       waitAtStep();
     } else {
       stopPlaying(true);
@@ -169,8 +217,9 @@ function waitAtStep() {
 
 function flow(from, to, then) {
   const follower = practice.follower;
-  if (to - from < EARLY) { follower.flowing = null; then(); return; }
+  if (to - from < EARLY) { follower.flowing = null; follower.dueAt = follower.audio.currentTime; then(); return; }
   const zero = follower.audio.currentTime + 0.03;
+  follower.dueAt = zero + clockFor(follower.data, playState.speed)(to) - clockFor(follower.data, playState.speed)(from);
   const { notes, at } = schedule(follower.audio, follower.data, from, zero, playState.speed, to, { metronome: playState.metronome, chords: playState.chords, nodes: follower.nodes, only: hearing() });
   follower.flowing = { from, to, zero, clock: clockFor(follower.data, playState.speed) };
   for (const note of notes) {
@@ -185,7 +234,7 @@ function arrive() {
   follower.arrived = true;
   follower.place = step.start;
   drawPosition(step.start);
-  if ([...step.pitches].every(pitch => follower.pressed.has(pitch))) { advance(); return; }
+  if ([...step.pitches].every(pitch => follower.pressed.has(pitch))) { played(step); advance(); return; }
   document.querySelectorAll("#pages .awaited").forEach(element => element.classList.remove("awaited"));
   step.ids.forEach(id => document.getElementById(id)?.classList.add("awaited"));
   followNote(document.getElementById(step.ids[0]));
@@ -199,9 +248,42 @@ function advance() {
   follower.place = step.start;
   follower.index += 1;
   follower.pressed = new Set();
+  follower.pressedAt = new Map();
   follower.arrived = false;
   showWait("");
   waitAtStep();
+}
+
+// How a step's notes fell: early or late against the moment the music reached them, from the last of
+// them pressed, as a chord is played when it's all down. Each note is marked on the page, and the
+// counts are kept beside what playback waits for.
+function played(step) {
+  const follower = practice.follower;
+  const pressed = [...step.pitches].map(pitch => follower.pressedAt.get(pitch) ?? follower.audio.currentTime);
+  const off = Math.max(...pressed) - (follower.dueAt ?? follower.audio.currentTime);
+  const near = Math.max(ON_TIME_SECONDS, beatAtPlace(follower.data, step.start).seconds / 8);
+  const kind = Math.abs(off) <= near ? "onTime" : off < 0 ? "early" : "late";
+  practice.timing[kind] += step.ids.length;
+  step.ids.forEach(id => document.getElementById(id)?.classList.add(kind));
+  // Each note should be held for half its length at least, from when it was played.
+  const clock = clockFor(follower.data, playState.speed);
+  for (const note of step.notes) {
+    const length = follower.data.notes.find(item => item.id === note.id && Math.abs(item.start - step.start) < EARLY * 1000)?.length ?? 0;
+    const pitch = keyOfSound(follower.data, note.midi, follower.data.notes.find(item => item.id === note.id)?.part ?? 0);
+    const from = follower.pressedAt.get(pitch) ?? follower.audio.currentTime;
+    follower.holding.set(pitch, { id: note.id, until: from + (clock(step.start + length) - clock(step.start)) * HELD_SHARE });
+  }
+  const said = kind === "onTime" ? "On time" : `${kind === "early" ? "Early" : "Late"} by ${Math.abs(off).toFixed(2)} s`;
+  drawTiming(said);
+}
+
+function drawTiming(last) {
+  const timing = practice.timing;
+  const counted = timing ? timing.onTime + timing.early + timing.late : 0;
+  $("timingState").hidden = !counted;
+  if (!counted) return;
+  const parts = [`${timing.onTime} on time`, ...(timing.early ? [`${timing.early} early`] : []), ...(timing.late ? [`${timing.late} late`] : []), ...(timing.short ? [`${timing.short} let go early`] : [])];
+  $("timingState").textContent = `${last ? `${last} · ` : ""}${parts.join(", ")}`;
 }
 
 // A note you played, as the staff shows it. It counts towards your next notes, and is kept if
@@ -213,9 +295,24 @@ function practiseHeard(midi) {
   if (!step) return true;
   if (step.pitches.has(midi)) {
     follower.pressed.add(midi);
-    if (follower.arrived && [...step.pitches].every(pitch => follower.pressed.has(pitch))) advance();
+    if (!follower.pressedAt.has(midi)) follower.pressedAt.set(midi, follower.audio.currentTime);
+    if (follower.arrived && [...step.pitches].every(pitch => follower.pressed.has(pitch))) { played(step); advance(); }
   } else if (follower.arrived) {
     showWait(`That was ${noteName(midi)}. Play ${[...step.pitches].sort((a, b) => a - b).map(noteName).join(" ")}`, true);
+  }
+  return true;
+}
+
+// A key let go: a note you were to hold is short if it's let go before half its length.
+function practiseReleased(midi) {
+  const follower = practice.follower;
+  const held = follower?.holding.get(midi);
+  if (!held) return Boolean(follower);
+  follower.holding.delete(midi);
+  if (follower.audio.currentTime < held.until) {
+    practice.timing.short += 1;
+    document.getElementById(held.id)?.classList.add("short");
+    drawTiming("Let go early");
   }
   return true;
 }
@@ -250,6 +347,7 @@ function stopFollowing(finished = false) {
   quietKeys();
   showWait("");
   showPlaying(false);
+  speedBack();
   drawPosition(playState.place);
   drawDock();
 }
@@ -258,6 +356,10 @@ function stopFollowing(finished = false) {
 function midiNoteOn(number) {
   if (practiseHeard(number)) { hearKey(soundingPitch(number, activePart())); return; }
   midiKey(number);
+}
+
+function midiNoteOff(number) {
+  practiseReleased(number);
 }
 
 function drawMidiState() {
@@ -276,18 +378,27 @@ function setUpPractice() {
     </div>
     <span class="divider"></span>
     <label class="tool"><span class="label">Speed</span><input id="practiceSpeed" type="range" min="25" max="150" step="5" value="100" aria-label="Practice speed"><span id="practiceSpeedValue">100%</span></label>
-    <label class="tool"><span class="label">Count in</span><select id="countIn"><option value="0">Off</option><option value="1">1 bar</option><option value="2">2 bars</option></select></label>
+    <label class="tool" title="Before a pickup or a start partway through a bar, the last bar counted is cut short, so the music comes in on its own beat"><span class="label">Count in</span><select id="countIn"><option value="0">Off</option><option value="1">1 bar</option><option value="2">2 bars</option><option value="1w" title="A whole bar, then the beats up to the start">1 bar + beats</option><option value="2w" title="Two whole bars, then the beats up to the start">2 bars + beats</option></select></label>
+    <div class="tool" role="group" aria-label="Speed up each time round the loop">
+      <button id="speedSteps" class="toggle" aria-pressed="false" title="Each time round the loop, play a little faster, up to the speed chosen. Stopped, it goes back to where it started">Step up</button>
+      <select id="speedStep" aria-label="By how much each time round">${[5, 10, 20].map(step => `<option value="${step}">+${step}%</option>`).join("")}</select>
+      <select id="speedTarget" aria-label="Up to">${[80, 90, 100, 110, 120, 150].map(speed => `<option value="${speed}">to ${speed}%</option>`).join("")}</select>
+    </div>
     <button id="practiceMetronome" class="toggle" aria-pressed="false" title="Tick every beat">${icon("metronome")}Metronome</button>
     <span class="divider"></span>
     <label class="tool"><span class="label">Hear</span><select id="practiceHear" aria-label="What playback sounds"></select></label>
     <label class="tool"><span class="label">Wait for</span><select id="waitFor" aria-label="Whose notes playback waits for you to play"></select></label>
-    <span id="waitState" role="status"></span>`;
+    <span id="waitState" role="status"></span>
+    <span id="timingState" role="status" hidden title="How your notes fell against the music while it waited for you"></span>`;
   $("loopStart").addEventListener("click", () => setLoopEnd("first"));
   $("loopEnd").addEventListener("click", () => setLoopEnd("last"));
   $("practiceLoop").addEventListener("click", toggleLoop);
   $("practiceMetronome").addEventListener("click", toggleMetronome);
   $("practiceSpeed").addEventListener("input", event => setSpeed(event.target.value));
   $("countIn").addEventListener("change", event => { setCountIn(event.target.value); event.target.blur(); });
+  $("speedSteps").addEventListener("click", () => { practice.stepUp = !practice.stepUp; keepSetting("speedSteps", practice.stepUp ? "on" : "off"); drawPracticeState(); });
+  $("speedStep").addEventListener("change", event => { practice.step = Number(event.target.value); keepSetting("speedStep", event.target.value); event.target.blur(); });
+  $("speedTarget").addEventListener("change", event => { practice.target = Number(event.target.value); keepSetting("speedTarget", event.target.value); event.target.blur(); });
   $("practiceHear").addEventListener("change", event => {
     practice.hear = event.target.value;
     event.target.blur();

@@ -206,7 +206,7 @@ function drawPages() {
   for (const child of [...holder.children]) if (!kept.has(child)) child.remove();
   drawnPages.forEach(({ element }, index) => { if (holder.children[index] !== element) holder.insertBefore(element, holder.children[index] ?? null); });
   // A page that stayed still shows what was selected or playing when it was drawn.
-  holder.querySelectorAll(".selected, .playing, .awaited, .unsure, .active").forEach(element => element.classList.remove("selected", "voice2", "voice3", "voice4", "playing", "awaited", "unsure", "active"));
+  holder.querySelectorAll(".selected, .playing, .awaited, .unsure, .active, .early, .late, .onTime, .short").forEach(element => element.classList.remove("selected", "voice2", "voice3", "voice4", "playing", "awaited", "unsure", "active", "early", "late", "onTime", "short"));
 }
 
 function draw() {

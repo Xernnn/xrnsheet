@@ -184,6 +184,7 @@ function drawKeyboard() {
       else key.style.setProperty("--at", String(whites++));
       if (midi % 12 === 0) key.innerHTML = `<span>C${midi / 12 - 1}</span>`;
       key.addEventListener("pointerdown", event => { event.preventDefault(); pressKey(midi, event.shiftKey); });
+      key.addEventListener("pointerup", () => practiseReleased(midi));
       keys.append(key);
     }
     keys.style.setProperty("--whites", String(whites));
@@ -247,6 +248,7 @@ function drawNeck(holder, neck, kind) {
       spot.setAttribute("aria-label", spot.title);
       if (stop < capo) spot.disabled = true;
       spot.addEventListener("pointerdown", event => { event.preventDefault(); pressKey(shownPitch(midi, activePart()), event.shiftKey, { string: index + 1, stop }); });
+      spot.addEventListener("pointerup", () => practiseReleased(shownPitch(midi, activePart())));
     }
   });
   for (let stop = 0; stop <= neck.stops; stop++) {
