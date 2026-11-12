@@ -16,6 +16,9 @@ const USUAL_SOUND = { wave: "triangle", level: 1 };
 const TICK = { strong: 1760, weak: 1320, seconds: 0.04, level: 0.35 }; // The metronome: higher on the first beat of a bar.
 const SLOWEST_SPEED = 10, FASTEST_SPEED = 300; // Percent of the written tempo, as MuseScore allows.
 const EARLY = 1e-9; // Places are sums of fractions, so a beat may land a hair before where it's due.
+// A pan in the middle gives each speaker this much less of a sound, so it's given back, and a score
+// nobody has mixed sounds just as it did before there was a mixer.
+const PAN_LAW = Math.SQRT2;
 // Where playback starts and what it does. The place is in quarter notes along the music as it's
 // played, with its repeats, so it means the same here as the times the server sends.
 const playState = {
@@ -110,46 +113,96 @@ function beatsBetween(data, from, until) {
   return found;
 }
 
+// A channel's level as a gain. Muted, or left out while others are soloed, it's silent.
+function gainOf(channel, soloing, soloable = true) {
+  if (!channel || channel.mute || (soloing && soloable && !channel.solo) || channel.volume <= QUIETEST_DB) return channel ? 0 : 1;
+  return 10 ** (channel.volume / 20);
+}
+
+// The mixer as playback reads it: each part's channel by its place in the score, not its id.
+function mixerForPlayback(settings = mixerOf(score)) {
+  return { parts: (score?.partIds ?? []).map(id => settings.parts[id]), chords: settings.chords, metronome: settings.metronome, master: settings.master };
+}
+
+// Each part, the chord symbols and the metronome go through a level and a pan of their own into the
+// master channel, as in MuseScore's mixer. Their values can change while the music plays.
+function mixerNodes(audio, mixer = {}) {
+  const master = audio.createGain();
+  master.connect(audio.destination);
+  const strip = () => {
+    const gain = audio.createGain(), panner = audio.createStereoPanner();
+    gain.connect(panner).connect(master);
+    return { gain, panner };
+  };
+  const nodes = { master, parts: [], chords: strip(), metronome: strip(), part: index => (nodes.parts[index] ??= strip()) };
+  (mixer.parts ?? []).forEach((_, index) => nodes.part(index));
+  setMixer(nodes, mixer);
+  return nodes;
+}
+
+function setMixer(nodes, mixer, when = null) {
+  const soloing = (mixer.parts ?? []).some(channel => channel?.solo) || Boolean(mixer.chords?.solo);
+  const set = (parameter, value) => (when === null ? (parameter.value = value) : parameter.setTargetAtTime(value, when, 0.02));
+  set(nodes.master.gain, gainOf(mixer.master, false));
+  const level = (strip, channel, soloable) => {
+    set(strip.gain.gain, gainOf(channel, soloing, soloable) * PAN_LAW);
+    set(strip.panner.pan, (channel?.pan ?? 0) / 100);
+  };
+  nodes.parts.forEach((strip, index) => level(strip, mixer.parts?.[index], true));
+  level(nodes.chords, mixer.chords, true);
+  level(nodes.metronome, mixer.metronome, false);
+}
+
+// The mixer moved: what's playing follows it at once.
+function applyMixer(settings) {
+  if (player) setMixer(player.nodes, mixerForPlayback(settings), player.audio.currentTime);
+}
+
 // Works with speakers or with an offline context, which is how the tests check what would be heard.
 // Nothing is played from `until` on, which is where a loop goes back to its start.
 function schedule(audio, data, from, zero, speed = 1, until = Infinity, options = {}) {
   const clock = clockFor(data, speed);
   const at = place => zero + clock(place) - clock(from);
+  const nodes = options.nodes ?? mixerNodes(audio, options.mixer);
   const notes = data.notes.filter(note => note.start >= from && note.start < until);
   for (const note of notes) {
     const { wave, level } = soundOf(data, note);
     const ends = Math.min(note.start + note.length, until);
-    tone(audio, note.midi, at(note.start), at(ends) - at(note.start), 0.4 * note.volume ** 2 * level, wave);
+    tone(audio, note.midi, at(note.start), at(ends) - at(note.start), 0.4 * note.volume ** 2 * level, wave, nodes.part(note.part ?? 0).gain);
   }
   const chords = options.chords === false ? [] : data.chords.filter(chord => chord.start + chord.length > from && chord.start < until);
   for (const chord of chords) {
     const begins = Math.max(chord.start, from);
     const ends = Math.min(chord.start + chord.length, until);
-    for (const midi of chord.midi) tone(audio, midi, at(begins), at(ends) - at(begins), 0.045, "sine");
+    for (const midi of chord.midi) tone(audio, midi, at(begins), at(ends) - at(begins), 0.045, "sine", nodes.chords.gain);
   }
   const beats = options.metronome ? beatsBetween(data, from, Math.min(until, data.total)) : [];
-  for (const beat of beats) tick(audio, at(beat.place), beat.strong);
-  return { notes, chords, beats, at };
+  for (const beat of beats) tick(audio, at(beat.place), beat.strong, nodes.metronome.gain);
+  return { notes, chords, beats, at, nodes };
 }
 
-// A plain 16-bit WAV, which any program can open.
+// A plain 16-bit WAV, which any program can open: one channel, or the left and right of a stereo one.
 function wavFile(samples, rate) {
-  const peak = Math.max(1, samples.reduce((top, sample) => Math.max(top, Math.abs(sample)), 0));
-  const file = new DataView(new ArrayBuffer(44 + samples.length * 2));
+  const channels = ArrayBuffer.isView(samples) ? [samples] : samples;
+  const frames = channels[0].length, size = frames * channels.length * 2;
+  const peak = Math.max(1, ...channels.map(channel => channel.reduce((top, sample) => Math.max(top, Math.abs(sample)), 0)));
+  const file = new DataView(new ArrayBuffer(44 + size));
   const write = (at, word) => [...word].forEach((letter, index) => file.setUint8(at + index, letter.charCodeAt(0)));
   write(0, "RIFF");
-  file.setUint32(4, 36 + samples.length * 2, true);
+  file.setUint32(4, 36 + size, true);
   write(8, "WAVEfmt ");
   file.setUint32(16, 16, true);
   file.setUint16(20, 1, true); // Plain samples, not compressed.
-  file.setUint16(22, 1, true); // One channel.
+  file.setUint16(22, channels.length, true);
   file.setUint32(24, rate, true);
-  file.setUint32(28, rate * 2, true);
-  file.setUint16(32, 2, true);
+  file.setUint32(28, rate * 2 * channels.length, true);
+  file.setUint16(32, 2 * channels.length, true);
   file.setUint16(34, 16, true);
   write(36, "data");
-  file.setUint32(40, samples.length * 2, true);
-  samples.forEach((sample, index) => file.setInt16(44 + index * 2, sample / peak * 0x7fff, true));
+  file.setUint32(40, size, true);
+  for (let frame = 0; frame < frames; frame++) {
+    channels.forEach((channel, number) => file.setInt16(44 + (frame * channels.length + number) * 2, channel[frame] / peak * 0x7fff, true));
+  }
   return new Blob([file], { type: "audio/wav" });
 }
 
@@ -161,16 +214,17 @@ async function fetchPlayback() {
 }
 
 // Made by the same code as Play, so the file sounds just as the score does, only faster than real
-// time. As in MuseScore, the metronome is in it when it's switched on.
+// time. As in MuseScore, it's mixed as the mixer is set, in stereo, and the metronome is in it when
+// it's switched on.
 function saveAudio() {
   return enqueue(async () => {
     const data = await fetchPlayback();
     const seconds = clockFor(data, 1)(data.total) + AUDIO_TAIL_SECONDS;
-    const audio = new OfflineAudioContext(1, Math.ceil(seconds * AUDIO_RATE), AUDIO_RATE);
-    schedule(audio, data, 0, 0, 1, Infinity, { metronome: playState.metronome, chords: playState.chords });
+    const audio = new OfflineAudioContext(2, Math.ceil(seconds * AUDIO_RATE), AUDIO_RATE);
+    schedule(audio, data, 0, 0, 1, Infinity, { metronome: playState.metronome, chords: playState.chords, mixer: mixerForPlayback() });
     const rendered = await audio.startRendering();
     const link = document.createElement("a");
-    link.href = URL.createObjectURL(wavFile(rendered.getChannelData(0), AUDIO_RATE));
+    link.href = URL.createObjectURL(wavFile([rendered.getChannelData(0), rendered.getChannelData(1)], AUDIO_RATE));
     link.download = "score.wav";
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
@@ -221,7 +275,7 @@ function playingPlace() {
 // One time through: to the end of the score, or round the loop, which then goes round again.
 function playCycle(from, until, zero) {
   const { audio, data, speed } = player;
-  const { notes, chords, at } = schedule(audio, data, from, zero, speed, until, { metronome: playState.metronome, chords: playState.chords });
+  const { notes, chords, at } = schedule(audio, data, from, zero, speed, until, { metronome: playState.metronome, chords: playState.chords, nodes: player.nodes });
   player.cycles.push({ from, until, zero });
   for (const note of notes) {
     player.timers.push(setTimeout(() => {
@@ -271,7 +325,8 @@ async function startPlaying(place = null) {
   const loop = playState.looping ? loopWindow(data) : null;
   if (loop && (from < loop.start - EARLY || from >= loop.end - EARLY)) from = loop.start;
   const audio = new (window.AudioContext || window.webkitAudioContext)();
-  player = { audio, data, speed: playState.speed, clock: clockFor(data, playState.speed), timers: [], cycles: [], loop };
+  const nodes = mixerNodes(audio, mixerForPlayback());
+  player = { audio, data, nodes, speed: playState.speed, clock: clockFor(data, playState.speed), timers: [], cycles: [], loop };
   playCycle(from, loop ? loop.end : data.total, audio.currentTime + START_DELAY);
   showPlaying(true);
   followPlaying();

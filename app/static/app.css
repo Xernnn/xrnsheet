@@ -231,6 +231,29 @@ body.inputting #pages { cursor: crosshair; }
 .box.active { border-color: var(--voice1); background: rgba(0, 101, 191, .16); }
 #checks { display: flex; flex: none; flex-wrap: wrap; gap: 6px; padding: 8px 10px; align-items: center; border-top: 1px solid var(--stroke); }
 
+/* The panels docked below the score, MuseScore's mixer among them. */
+#dock { flex: none; display: flex; flex-direction: column; max-height: 45vh; background: var(--bg); border-top: 1px solid var(--stroke); }
+#dockHead { display: flex; align-items: center; flex: none; background: var(--bg2); border-bottom: 1px solid var(--stroke); }
+#dockTabs { display: flex; flex: 1; min-width: 0; }
+#dockTabs button { background: transparent; border-radius: 0; min-height: 30px; padding: 0 14px; border-right: 1px solid var(--stroke); }
+#dockTabs button[aria-selected="true"] { background: var(--bg); font-weight: 700; margin-bottom: -1px; }
+#dockClose { min-height: 26px; margin-right: 4px; }
+.dockPanel { flex: 1; overflow: auto; min-height: 0; }
+#mixerStrips { display: flex; gap: 2px; padding: 8px; width: max-content; }
+.strip { display: grid; grid-template-rows: auto 1fr auto auto; justify-items: center; gap: 6px; width: 88px; padding: 8px 4px 6px; background: var(--bg2); border-radius: 3px; }
+.strip.master { margin-left: 14px; }
+.strip .pan { display: grid; justify-items: center; gap: 2px; min-height: 36px; }
+.strip .pan input { width: 72px; }
+.strip input[type="range"] { accent-color: var(--accent); }
+.strip .fader { display: grid; justify-items: center; gap: 4px; }
+.strip .fader input { writing-mode: vertical-lr; direction: rtl; height: 120px; width: 26px; margin: 0; }
+.strip output { font-size: 11px; font-variant-numeric: tabular-nums; opacity: .85; white-space: nowrap; }
+.strip .switches { display: flex; gap: 4px; }
+.strip .switches button { min-width: 28px; min-height: 22px; padding: 0 4px; font-weight: 700; }
+.strip .switches button.mute[aria-pressed="true"] { background: color-mix(in srgb, var(--warn) 65%, transparent); }
+.strip .switches button.solo[aria-pressed="true"] { background: color-mix(in srgb, var(--good) 65%, transparent); }
+.strip .name { font-size: 12px; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* The status bar. */
 #statusBar { display: flex; flex: none; align-items: center; gap: 6px; min-height: 28px; padding: 0 8px 0 12px; background: var(--bg); border-top: 1px solid var(--stroke); }
 body.publishing #toolLabel { visibility: hidden; }

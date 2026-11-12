@@ -1867,17 +1867,87 @@ def test_audio_file(page, base: str, created: list[str]) -> None:
         rate, channels, width, length = sound.getframerate(), sound.getnchannels(), sound.getsampwidth(), sound.getnframes()
         frames = sound.readframes(length)
     samples = array.array("h", frames)
+    left, right = samples[0::2], samples[1::2]
     tempo = page.evaluate("async () => (await (await fetch(`/api/scores/${scoreId}/playback`)).json()).tempo")
     beat = 60 / tempo
-    check("it's a plain WAV another program can read", (rate, channels, width) == (44100, 1, 2), (rate, channels, width))
+    check("it's a plain stereo WAV another program can read", (rate, channels, width) == (44100, 2, 2), (rate, channels, width))
     check("it lasts as long as the score", abs(length / rate - (8 * beat + 0.5)) < 0.01, length / rate)
-    check("the notes can be heard", max(abs(sample) for sample in samples[: int(rate * beat * 3)]) > 3000)
-    check("the empty bar is silent", max(abs(sample) for sample in samples[int(rate * beat * 4.5) :]) == 0)
+    check("the notes can be heard", max(abs(sample) for sample in left[: int(rate * beat * 3)]) > 3000)
+    check("in the middle, as nothing is panned", left[: int(rate * beat * 3)] == right[: int(rate * beat * 3)])
+    check("the empty bar is silent", max(abs(sample) for sample in samples[int(rate * beat * 4.5) * 2 :]) == 0)
     turned_down = page.evaluate("""async () => {
         const file = new DataView(await wavFile(Float32Array.of(0.5, 2, -1), 44100).arrayBuffer());
         return [file.getInt16(44, true), file.getInt16(46, true), file.getInt16(48, true)];
     }""")
     check("a sound too loud for the file is turned down, not wrapped round", turned_down == [8191, 32767, -16383], turned_down)
+    paired = page.evaluate("""async () => {
+        const file = new DataView(await wavFile([Float32Array.of(1, 0), Float32Array.of(0, -1)], 44100).arrayBuffer());
+        return [file.getUint16(22, true), file.getUint32(28, true), file.getUint16(32, true), file.getInt16(44, true), file.getInt16(46, true), file.getInt16(48, true), file.getInt16(50, true)];
+    }""")
+    check("a stereo file keeps left and right side by side", paired == [2, 44100 * 4, 4, 32767, 0, 0, -32767], paired)
+
+
+def mixer_strip(page, name: str):
+    return page.locator(f'#mixerStrips .strip:has(.name:text-is("{name}"))')
+
+
+def test_mixer(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, bars=2, tune="cdef")
+    page.click('#sideTabs [data-panel="instruments"]')
+    page.click("#partAdd")
+    page.click('#partChooser li:text-is("Woodwinds")')
+    page.dblclick('#partChooser [data-instrument="flute"]')
+    page.click("#partOk")
+    settle(page)
+    page.keyboard.press("F10")
+    check("F10 opens the mixer below the score", page.is_visible("#mixerPanel") and page.locator("#dockTabs button").all_inner_texts() == ["Mixer"])
+    names = page.locator("#mixerStrips .strip .name").all_inner_texts()
+    check("it has a strip for each instrument, the chord symbols, the metronome and the master", names == ["Music", "Flute", "Chord symbols", "Metronome", "Master"], names)
+    mixer_strip(page, "Music").locator(".fader input").fill("-12")
+    mixer_strip(page, "Music").locator(".pan input").fill("-100")
+    mixer_strip(page, "Music").locator(".solo").click()
+    check("a fader shows its level", mixer_strip(page, "Music").locator(".fader output").inner_text() == "-12.0 dB")
+    check("and a pan its side", mixer_strip(page, "Music").locator(".pan output").inner_text() == "L 100")
+    page.wait_for_timeout(600)
+    saved = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["mixer"]
+    parts = list(saved["parts"].values())
+    check("the score keeps the mixer", parts[0]["volume"] == -12 and parts[0]["pan"] == -100 and parts[0]["solo"], saved)
+    check("which isn't an edit to undo", json.loads(fetch_text(base, f"/api/scores/{score_id}"))["canUndo"] is True and page.evaluate("() => score.canUndo"))
+    heard = page.evaluate("""async () => {
+        const data = await fetchPlayback();
+        const rate = 44100, audio = new OfflineAudioContext(2, rate * 3, rate);
+        schedule(audio, data, 0, 0, 1, Infinity, { mixer: mixerForPlayback() });
+        const sound = await audio.startRendering();
+        const top = samples => samples.reduce((most, sample) => Math.max(most, Math.abs(sample)), 0);
+        return [top(sound.getChannelData(0)), top(sound.getChannelData(1))];
+    }""")
+    check("panned hard left, only the left speaker sounds", heard[0] > 0.01 and heard[1] < 1e-6, heard)
+    mixer_strip(page, "Flute").locator(".mute").click()
+    quiet = page.evaluate("""async () => {
+        const data = await fetchPlayback();
+        data.notes = data.notes.map(note => ({ ...note, part: 1 }));
+        const audio = new OfflineAudioContext(2, 44100 * 3, 44100);
+        schedule(audio, data, 0, 0, 1, Infinity, { mixer: mixerForPlayback() });
+        return (await audio.startRendering()).getChannelData(0).reduce((most, sample) => Math.max(most, Math.abs(sample)), 0);
+    }""")
+    check("a muted instrument is silent", quiet == 0, quiet)
+    mixer_strip(page, "Music").locator(".solo").click()
+    mixer_strip(page, "Music").locator(".pan input").fill("0")
+    mixer_strip(page, "Flute").locator(".mute").click()
+    mixer_strip(page, "Flute").locator(".pan input").fill("-100")
+    page.wait_for_timeout(600)
+    with urllib.request.urlopen(f"{base}/api/scores/{score_id}/score.musicxml") as response:
+        exported = ET.fromstring(response.read())
+    levels = [(entry.findtext("midi-instrument/volume"), entry.findtext("midi-instrument/pan")) for entry in exported.findall("part-list/score-part")]
+    check("MusicXML gets each instrument's volume and pan", levels == [("39.3701", "0"), ("78.7402", "-90")], levels)
+    if shots:
+        page.screenshot(path=str(shots / "mixer.png"))
+    page.keyboard.press("F10")
+    check("F10 puts it away again", page.is_hidden("#dock"))
+    menu(page, "View", "Mixer")
+    check("as View ▸ Mixer shows it", page.is_visible("#mixerPanel"))
+    page.click("#dockClose")
+    check("and its close button closes it", page.is_hidden("#dock"))
 
 
 def test_midi_keyboard(context, base: str, created: list[str]) -> None:
@@ -2193,6 +2263,7 @@ def main() -> None:
             test_instrument_sounds(page, base, created)
             test_pickup(page, base, created)
             test_audio_file(page, base, created)
+            test_mixer(page, base, arguments.shots, created)
             test_midi_keyboard(context, base, created)
             test_opening_a_file(page, base, arguments.shots, created)
             test_sound_of_marks(page, base, created)

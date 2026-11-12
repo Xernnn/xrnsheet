@@ -132,6 +132,7 @@ A score read from a photo or PDF also has the original sheet in a panel on the r
 | Space | Play or stop, from the playback position |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | `F9`, `F7`, `F8` | Show or hide Palettes, Instruments, Properties |
+| `F10` | Show or hide the mixer |
 | Ctrl+`=`, Ctrl+`-`, Ctrl+`0` | Zoom in, zoom out, 100%. Ctrl and the mouse wheel also zoom |
 | Esc | Stop entering notes, clear the selection, or close a menu or box |
 | Click the staff | While entering notes, place a note there. Shift+click adds it to a chord |
@@ -139,7 +140,7 @@ A score read from a photo or PDF also has the original sheet in a panel on the r
 | Drag the paper | Move the pages about |
 | Double-click the title | Change the title and composer |
 
-The keys are MuseScore's where MuseScore has one. A browser keeps a few for itself: in an ordinary tab Ctrl+T opens a new tab, so use Add ▸ Text ▸ Staff text there.
+The keys are MuseScore's where MuseScore has one. A browser keeps a few for itself: in an ordinary tab Ctrl+T opens a new tab, so use Add ▸ Text ▸ Staff text there, and some browsers open their own menu on `F10`, so use View ▸ Mixer there.
 
 Measures that don't add up to the time signature are listed above the score, which is usually how a misread rhythm shows itself. Click one to go there, then fix it with "Remove beat" or "Insert beat" in the Properties panel. A new time signature doesn't move notes between measures: the ones that no longer fit are listed for you to fix.
 
@@ -148,6 +149,8 @@ Play sounds the notes and the chord symbols. It follows repeats, first and secon
 An 8va line keeps the notes under it at the pitch they sound, which is how MusicXML and MuseScore store them, and draws them an octave lower. A note clicked onto the staff under one is the note an octave above where it's drawn.
 
 **The playback toolbar** is MuseScore's: Rewind, Play, Loop, the metronome and the playback settings, then the position as a time and as a measure and beat, and the tempo. Play starts from the playback position, which is wherever you last selected a note or rest, typed a time or a measure and beat into the counters, rewound, or stopped. While entering notes it starts where the next note goes. Loop goes round the selection, or the whole score if nothing is selected, between flags drawn on the page; the settings also set either flag at the selected note, and turn the chord symbols off or on. The metronome ticks each beat, a dotted one in 6/8, 9/8 and 12/8, higher on the first of each bar, and an exported audio file has it in while it's on. The tempo opens the speed, from 10% to 300% of the written tempo, and the tempo shown follows it.
+
+**Mixer.** View ▸ Mixer, or `F10`, opens MuseScore's mixer below the score, with a strip for each instrument, the chord symbols, the metronome and the master: a pan, a fader from −∞ to +12 dB, and mute and solo. Double-click a pan or fader to put it back. Playback follows it as it moves, and exported audio is mixed the same way, in stereo. The score keeps the mixer, but moving it isn't an edit to undo, as in MuseScore. MusicXML takes each instrument's volume and pan, and brings them back when it's opened, and MIDI takes them as volume and pan controllers. Mute and solo are only for listening, so no file keeps them.
 
 Tools ▸ Transpose moves the selection, or the whole score if nothing is selected, to a key or by an interval, and the chord symbols move with it. Format ▸ Add/remove system breaks sets how many measures go on a line.
 
@@ -159,7 +162,7 @@ Repeats & jumps starts or ends a repeat at the selected measure, and marks it as
 
 Click a chord symbol to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. Measures you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
 
-What MuseScore has and this editor doesn't yet: the mixer, the piano keyboard, the timeline, continuous view, the playback toolbar's loop, metronome and position, and page and style settings.
+What MuseScore has and this editor doesn't yet: the piano keyboard, the timeline, continuous view, and page and style settings.
 
 To recognize a sheet without the app:
 

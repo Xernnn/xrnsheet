@@ -36,7 +36,7 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
-from pipeline import concert, edit, marks, structure, transpose
+from pipeline import concert, edit, marks, mixer, structure, transpose
 from pipeline.engrave import export_pdf, glyph_script, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
@@ -285,6 +285,20 @@ class ConcertPitch(BaseModel):
     on: bool
 
 
+class MixerChannel(BaseModel):
+    volume: float = 0.0  # In decibels, 0 being the instrument's usual level.
+    pan: float = 0.0  # From -100, hard left, to 100, hard right.
+    mute: bool = False
+    solo: bool = False
+
+
+class MixerSettings(BaseModel):
+    parts: dict[str, MixerChannel] = {}  # By the part's id.
+    chords: MixerChannel = MixerChannel()
+    metronome: MixerChannel = MixerChannel()
+    master: MixerChannel = MixerChannel()
+
+
 def job_folder(score_id: str) -> Path:
     if re.fullmatch(r"[0-9a-f]{32}", score_id) is None or not (JOB_DIR / score_id).is_dir():
         raise HTTPException(404, "No such score")
@@ -500,6 +514,8 @@ def open_score_file(data: bytes, suffix: str) -> dict:
     folder = JOB_DIR / score_id
     folder.mkdir(parents=True)
     save_version(folder, root)
+    if (levels := mixer.read_from_score(root)) is not None:
+        save_mixer(folder, levels, root)  # A file's instruments keep the volume and pan it gave them.
     write_status(folder, "ready")
     return {"id": score_id}
 
@@ -512,6 +528,28 @@ def read_chord_file(folder: Path) -> list[dict]:
 def source_pages(folder: Path) -> list[int]:
     path = folder / "recognized" / "pages.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def part_ids(root: ET.Element) -> list[str]:
+    return [part.get("id") for part in root.findall("part")]
+
+
+def saved_mixer(folder: Path) -> dict | None:
+    path = folder / "mixer.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except ValueError:
+        return None  # A mixer that can't be read is the usual one again, and the music is untouched.
+
+
+def mixer_of(folder: Path, root: ET.Element) -> dict:
+    return mixer.settled(saved_mixer(folder), part_ids(root))
+
+
+def save_mixer(folder: Path, settings: dict | None, root: ET.Element) -> dict:
+    settled = mixer.settled(settings, part_ids(root))
+    write_whole(folder / "mixer.json", json.dumps(settled))
+    return settled
 
 
 def describe(folder: Path, status: dict) -> dict:
@@ -545,6 +583,8 @@ def describe(folder: Path, status: dict) -> dict:
         "partStaves": structure.part_staves(root),
         "barsPerLine": structure.bars_per_line(root),
         "concertPitch": concert.shown_at_concert_pitch(root),
+        "partIds": part_ids(root),
+        "mixer": mixer_of(folder, root),
         "transposing": concert.is_transposing(root),
     } | structure.title_of(root)
 
@@ -812,7 +852,13 @@ def change_parts(score_id: str, body: PartEdit) -> dict:
         else:
             raise HTTPException(422, "Unknown instrument action")
 
-    return apply_edit(score_id, change)
+    done = apply_edit(score_id, change)
+    if body.action == "remove" and saved_mixer(job_folder(score_id)) is not None:
+        # The next instrument added may be given the removed one's id, and mustn't take its levels.
+        with edit_lock:
+            folder = job_folder(score_id)
+            done["mixer"] = save_mixer(folder, saved_mixer(folder), current_root(folder))
+    return done
 
 
 @app.post("/api/scores/{score_id}/range")
@@ -932,6 +978,14 @@ def change_concert_pitch(score_id: str, body: ConcertPitch) -> dict:
     return apply_edit(score_id, lambda root: concert.set_concert_pitch(root, body.on))
 
 
+@app.post("/api/scores/{score_id}/mixer")
+def change_mixer(score_id: str, body: MixerSettings) -> dict:
+    """Set the mixer. It's kept beside the score, not in it, so it isn't an edit to undo, as in MuseScore."""
+    folder = job_folder(score_id)
+    with edit_lock:
+        return {"mixer": save_mixer(folder, body.model_dump(), current_root(folder))}
+
+
 @app.get("/api/scores/{score_id}/playback")
 def get_playback(score_id: str) -> dict:
     return playback(current_root(job_folder(score_id)))
@@ -939,14 +993,21 @@ def get_playback(score_id: str) -> dict:
 
 @app.get("/api/scores/{score_id}/score.musicxml")
 def download_musicxml(score_id: str) -> Response:
-    text = to_text(current_root(job_folder(score_id)))
+    folder = job_folder(score_id)
+    root = current_root(folder)
+    if saved_mixer(folder) is not None:
+        root = mixer.with_mixer(root, mixer_of(folder, root))
+    text = to_text(root)
     headers = {"Content-Disposition": 'attachment; filename="score.musicxml"'}
     return Response(text, media_type="application/vnd.recordare.musicxml+xml", headers=headers)
 
 
 @app.get("/api/scores/{score_id}/score.mid")
 def download_midi(score_id: str) -> Response:
-    data = midi_bytes(playback(current_root(job_folder(score_id))))
+    folder = job_folder(score_id)
+    root = current_root(folder)
+    levels = mixer_of(folder, root)
+    data = midi_bytes(playback(root) | {"mixer": [levels["parts"][part_id] for part_id in part_ids(root)]})
     return Response(data, media_type="audio/midi", headers={"Content-Disposition": 'attachment; filename="score.mid"'})
 
 

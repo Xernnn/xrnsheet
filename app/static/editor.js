@@ -83,6 +83,7 @@ function staffNumber(element) {
 }
 
 function receive(data) {
+  keepMixer(data);
   score = data;
   if (data.written) editor.last = data.written;
   if (data.type) { editor.type = data.type; editor.dots = data.dots ?? 0; }
@@ -1027,12 +1028,17 @@ document.addEventListener("keydown", event => {
   if (key === "Escape" && openMenus.length) { closeMenus(); return; }
   // A field keeps the focus for a moment after its dialog or box has closed. It isn't being typed in then.
   const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName) && event.target.getClientRects().length > 0;
-  if (typing || $("workspace").hidden || publishing || document.querySelector("dialog[open]")) return;
+  // A fader or a switch in a panel keeps its own keys, but the keys that show and hide panels still
+  // work, and so does Space on a fader, which has no use for it.
+  const control = typing && event.target.tagName === "INPUT" && ["range", "checkbox"].includes(event.target.type);
+  const passed = control && (/^F\d+$/.test(key) || (key === " " && event.target.type === "range"));
+  if ((typing && !passed) || $("workspace").hidden || publishing || document.querySelector("dialog[open]")) return;
   if (event.ctrlKey || event.metaKey) { handleControlKey(event); return; }
   const handled = () => event.preventDefault();
   // A button someone has tabbed to is pressed by Space, so it mustn't also start playing.
   if (key === " " && event.target.tagName === "BUTTON") return;
   if (PANEL_KEYS[key]) { handled(); toggleSide(PANEL_KEYS[key]); return; }
+  if (key === "F10") { handled(); toggleDock("mixer"); return; }
   if (key === "Insert") { handled(); barAction("insert"); return; }
   if (event.altKey && event.shiftKey && key.toLowerCase() === "t") { handled(); askForTempo(); return; }
   if (event.altKey && event.shiftKey && key === "ArrowUp") { handled(); noteAction("up"); return; }
@@ -1088,6 +1094,7 @@ document.addEventListener("keydown", event => {
 setUpPage();
 setUpShell();
 setUpPlayback();
+setUpDock();
 setUpToolbar();
 updateTools();
 if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); } else drawHistory();

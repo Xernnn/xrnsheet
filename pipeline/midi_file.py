@@ -4,7 +4,10 @@ A MIDI file is a list of events, each saying how long after the one before it ha
 gets its own track, and one more track holds the tempo.
 """
 
+from pipeline.mixer import midi_pan, midi_volume
+
 TICKS_PER_QUARTER = 480
+VOLUME_CONTROLLER, PAN_CONTROLLER = 7, 10
 CHORD_VELOCITY = 50
 MOST_CHANNELS = 16
 DRUM_CHANNEL = 9  # General MIDI keeps this channel for drums, so it's skipped.
@@ -76,6 +79,10 @@ def midi_bytes(data: dict) -> bytes:
         if not 1 <= program <= MOST_SOUNDS:
             program = 1  # The usual sound, as when a part doesn't say.
         events = [(0, -1, bytes([0xC0 | channel, program - 1]))]
+        mixed = data.get("mixer") or []
+        levels = mixed[part] if part < len(mixed) else None
+        if levels is not None:  # The mixer's volume and pan, as the controllers every MIDI program reads.
+            events += [(0, -1, bytes([0xB0 | channel, VOLUME_CONTROLLER, midi_volume(levels["volume"])])), (0, -1, bytes([0xB0 | channel, PAN_CONTROLLER, midi_pan(levels["pan"])]))]
         events += note_events([note for note in data["notes"] if note.get("part", 0) == part], channel)
         tracks.append(track(events))
     if data["chords"]:

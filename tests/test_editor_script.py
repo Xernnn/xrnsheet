@@ -85,7 +85,7 @@ def run_script(program: str) -> object:
 
 
 def test_the_page_loads_the_scripts_these_tests_read():
-    assert page_scripts() == ["page.js", "palettes.js", "shell.js", "playback.js", "editor.js"]
+    assert page_scripts() == ["page.js", "palettes.js", "shell.js", "playback.js", "dock.js", "editor.js"]
 
 
 def playback_program(body: str) -> str:

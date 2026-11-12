@@ -197,6 +197,7 @@ function draw() {
     if (!pieces.length) selectedMark = null;
   }
   drawRange();
+  if (dock.active === "mixer" && !$("dock").hidden) drawMixer();
   drawCursor();
   updateTools();
   refreshPosition();

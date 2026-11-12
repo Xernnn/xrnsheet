@@ -189,6 +189,10 @@
       <div id="checks" hidden><span class="label">Please check:</span></div>
     </aside>
   </div>
+  <section id="dock" aria-label="Panels below the score" hidden>
+    <div id="dockHead"><div id="dockTabs" role="tablist"></div><button id="dockClose" class="flat" aria-label="Close this panel" title="Close"><span data-icon="close"></span></button></div>
+    <div id="mixerPanel" class="dockPanel" role="tabpanel" aria-label="Mixer" hidden><div id="mixerStrips"></div></div>
+  </section>
   <div id="statusBar">
     <span id="toolLabel"></span>
     <button id="concertPitch" class="flat toggle" aria-pressed="false" aria-label="Concert pitch" title="Show transposing instruments at the pitch they sound"><span data-icon="fork"></span><span>Concert pitch</span></button>
@@ -332,6 +336,7 @@
 <script src="palettes.js"></script>
 <script src="shell.js"></script>
 <script src="playback.js"></script>
+<script src="dock.js"></script>
 <script src="editor.js"></script>
 </body>
 </html>
