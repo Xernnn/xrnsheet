@@ -22,6 +22,8 @@ const CURVE_SAMPLE_PX = 4;
 const MARK_NAMES = {
   dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin", ottava: "Ottava", pedal: "Pedal",
   textline: "Line", fingering: "Fingering", pluck: "Right-hand finger", string: "String number", bend: "Bend", hammer: "Hammer-on", pull: "Pull-off",
+  slide: "Slide", glissando: "Glissando", vibrato: "Vibrato", harmonic: "Harmonic", upbow: "Up-bow", downbow: "Down-bow", open: "Open string", stopped: "Stopped",
+  staccato: "Staccato", staccatissimo: "Staccatissimo", tenuto: "Tenuto", accent: "Accent", marcato: "Marcato",
 };
 // Words a mark is known by, where its kind alone doesn't say: a line's, or a position's.
 const MARK_WORDS = [[/^P\.M\.$/, "Palm mute"], [/^let ring$/, "Let ring"], [/^sul (pont\.|tasto)$/, "Sul ponticello or tasto"], [/^sul /, "String to play on"], [/ pos\.$/, "Position"], [/^(pizz\.|arco)$/, "Pizzicato or arco"], [/^[RL]\.H\.$/, "Hand"]];
@@ -968,7 +970,11 @@ function slurNear(x, y) {
   return null;
 }
 
+// A mark drawn on a note, such as a staccato or a bowing, or the diamond of a violin's harmonic, is
+// that mark's, not the note's.
 function markAt(event) {
+  const own = event.target.closest("#pages g.artic[data-mark], #pages g.note[data-mark]");
+  if (own) return own;
   if (event.target.closest("g.note, g.rest, g.mRest")) return null;
   return event.target.closest("g[data-mark], g.slur, g.hairpin")
     ?? slurNear(event.clientX, event.clientY)

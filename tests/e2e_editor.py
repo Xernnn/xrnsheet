@@ -3331,6 +3331,49 @@ def test_techniques_copied_and_the_capo(page, base: str, shots: Path | None, cre
     page.keyboard.press("Escape")
 
 
+def test_marks_drawn_on_notes(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """Slides, glissandos, vibratos, harmonics, bowings and articulations are clicked, named, deleted and undone."""
+    score_id = open_blank(page, base, created, bars=2, staff="guitar-tab")
+    page.keyboard.press("5")
+    page.keyboard.type("egabcdef", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    ids = [note.get("id") for note in own_notes(saved_score(base, score_id))]
+    for body in [{"action": "join", "notes": ids[0:2], "name": "slide"}, {"action": "join", "notes": ids[2:4], "name": "glissando"},
+                 {"action": "vibrato", "notes": ids[4:6]}, {"action": "harmonic", "notes": ids[6:7], "name": "natural"},
+                 {"action": "toggle", "notes": ids[7:8], "name": "upbow"}, {"action": "toggle", "notes": ids[5:6], "name": "staccato"}]:
+        marks_api(base, score_id, body)
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    page.click('#modeSwitch [data-mode="write"]')
+    listed = {mark["kind"]: mark["id"] for mark in score_data(base, score_id)["marks"]}
+    for kind, name, selector, gone in [
+        ("slide", "Slide", f'#pages g.gliss[data-mark="{listed["slide"]}"]', "slide"),
+        ("glissando", "Glissando", f'#pages g.gliss[data-mark="{listed["glissando"]}"]', "glissando"),
+        ("vibrato", "Vibrato", f'#pages g.trill[data-mark="{listed["vibrato"]}"]', "wavy-line"),
+        ("harmonic", "Harmonic", f'#pages g.artic[data-mark="{listed["harmonic"]}"]', "harmonic"),
+        ("upbow", "Up-bow", f'#pages g.artic[data-mark="{listed["upbow"]}"]', "up-bow"),
+        ("staccato", "Staccato", f'#pages g.artic[data-mark="{listed["staccato"]}"]', "staccato"),
+    ]:
+        click_mark(page, selector)
+        named = page.evaluate("() => selectedMark") == listed[kind] and page.inner_text("#propMarkKind") == name
+        selected = page.locator(f'#pages [data-mark="{listed[kind]}"].selected').count() >= 1
+        page.keyboard.press("Delete")
+        settle(page)
+        removed = not list(saved_score(base, score_id).iter(gone)) and page.locator(selector).count() == 0
+        press(page, "Control+z")
+        back = len(list(saved_score(base, score_id).iter(gone))) >= 1
+        check(f"a {name.lower()} is selected by a click, deleted and undone", named and selected and removed and back, (named, selected, removed, back))
+    if shots:
+        click_mark(page, f'#pages g.gliss[data-mark="{listed["slide"]}"]')
+        page.screenshot(path=str(shots / "slide-selected.png"))
+    page.keyboard.press("Escape")
+    click_on(page, page.locator(f"[id='{ids[5]}']"))
+    check("a click on the note itself still selects the note", page.evaluate("() => selected") == ids[5] and page.evaluate("() => selectedMark") is None)
+    page.keyboard.press("Escape")
+
+
 def tab_point(page, event_id: str, string: int) -> tuple[float, float]:
     """Where a string of the tablature is, at a note or rest of the staff it's linked under."""
     return tuple(page.evaluate("""([id, string]) => {
@@ -3699,6 +3742,7 @@ def main() -> None:
             test_techniques_at_concert_pitch(page, base, arguments.shots, created)
             test_techniques_copied_and_the_capo(page, base, arguments.shots, created)
             test_tablature_editing(page, base, arguments.shots, created)
+            test_marks_drawn_on_notes(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)

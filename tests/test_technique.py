@@ -777,3 +777,94 @@ def test_a_pull_off_over_a_barline_is_drawn_on_each_staff_from_note_to_note():
     assert len(slurs) >= 2
     for _, start, _, end in slurs:
         assert abs(int(start) - int(end)) < 600, "it stays on its staff, not drawn from one to the other"
+
+
+def kinds_listed(root):
+    return {item["kind"]: item for item in marks.list_marks(root) if item["drawn"] == "self"}
+
+
+def test_slides_vibratos_harmonics_and_bowings_are_named_in_the_drawing_and_removed_by_a_click():
+    root, ids = score("guitar-tab", 2, 64, 67, 69, 71, 72, 74, 76, 77)
+    technique.toggle_pair(root, ids[0], ids[1], "slide")
+    technique.toggle_pair(root, ids[1], ids[2], "glissando")
+    technique.toggle_vibrato(root, ids[2], ids[3])
+    technique.toggle_harmonic(root, [ids[4]], "natural")
+    technique.toggle_harmonic(root, [ids[5]], "artificial")
+    marks.toggle_mark(root, [ids[6]], "upbow")
+    marks.toggle_mark(root, [ids[7]], "staccato")
+    marks.toggle_mark(root, [ids[7]], "downbow")
+    finished(root)
+    listed = kinds_listed(root)
+    assert {"slide", "glissando", "vibrato", "harmonic", "upbow", "staccato", "downbow"} <= set(listed)
+    svg = svg_of(root)
+    named = re.findall(r'data-mark="([^"]+)"', svg)
+    assert {item["id"] for item in marks.list_marks(root)} == set(named), "every mark listed can be clicked"
+    assert named.count(listed["slide"]["id"]) == 2, "a slide is named on the staff and between the fret numbers"
+    assert re.search(rf'class="gliss slide" data-mark="{listed["slide"]["id"]}"', svg)
+    assert re.search(rf'class="trill" data-mark="{listed["vibrato"]["id"]}"', svg)
+    assert re.search(rf'class="artic technical" data-mark="{listed["upbow"]["id"]}"', svg)
+    assert re.search(rf'class="xrn-harmonic" data-mark="[^"]+"><text[^>]*>A.H.</text>', svg), "a guitar's A.H. names its harmonic"
+    natural = note(root, ids[4]).find("notations/technical/harmonic").get("id")
+    for mark_id in [listed[kind]["id"] for kind in ("slide", "vibrato", "upbow", "staccato")] + [natural]:
+        marks.remove_placed(root, mark_id)
+        finished(root)
+    assert not [mark for mark in root.iter() if mark.tag in ("slide", "wavy-line", "up-bow", "staccato")], "a slide and a vibrato go with both their ends"
+    assert technique.harmonic_kind(note(root, ids[4]))[0] is None and technique.harmonic_kind(note(root, ids[5]))[0] == "artificial"
+    assert note(root, ids[7]).find("notations/technical/down-bow") is not None, "the down-bow beside the staccato stays"
+
+
+def test_a_chords_staccato_and_a_violins_artificial_harmonic_are_named_and_removed():
+    root, ids = score("violin", 1, 67, 71)
+    edit.add_pitch(root, ids[0], "", midi=74)
+    finished(root)
+    marks.toggle_mark(root, [ids[0]], "staccato")
+    technique.toggle_harmonic(root, [ids[1]], "artificial")
+    finished(root)
+    listed = kinds_listed(root)
+    svg = svg_of(root)
+    assert re.search(rf'class="artic" data-mark="{listed["staccato"]["id"]}"', svg), "a chord's staccato is named on the chord"
+    diamond = next(found for found in root.iter("note") if technique.harmonic_kind(found)[1] == "touching-pitch")
+    assert re.search(rf'<g id="{diamond.get("id")}" class="note" data-mark="{listed["harmonic"]["id"]}"', svg), "the diamond touched above is the harmonic"
+    marks.set_label(root, listed["harmonic"]["id"], "")
+    finished(root)
+    assert technique.harmonic_kind(note(root, ids[1]))[0] is None and len(edit.locate(root, ids[1]).event.notes) == 1, "deleted, the diamond goes too"
+
+
+def test_a_mark_clicked_and_deleted_comes_back_with_undo(tmp_path, monkeypatch):
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from app import server
+
+    monkeypatch.setattr(server, "JOB_DIR", tmp_path)
+    monkeypatch.setattr(server, "stopping", threading.Event())
+    client = TestClient(server.app, base_url="http://127.0.0.1:8000")
+    url = f"/api/scores/{client.post('/api/scores/blank', json={'measures': 1, 'clef': 'guitar-tab'}).json()['id']}"
+    cursor = client.get(url).json()
+    cursor = next(key for key in cursor["notes"] if not key.endswith(TAB_COPY))
+    first = client.post(f"{url}/notes/{cursor}", json={"action": "write", "type": "quarter", "midi": 64}).json()
+    second = client.post(f"{url}/notes/{first['cursor']}", json={"action": "write", "type": "quarter", "midi": 67}).json()
+    joined = client.post(f"{url}/marks", json={"action": "join", "notes": [first["written"], second["written"]], "name": "glissando"}).json()
+    glissando = next(item["id"] for item in joined["marks"] if item["kind"] == "glissando")
+    gone = client.post(f"{url}/marks", json={"action": "remove", "id": glissando}).json()
+    assert not any(item["kind"] == "glissando" for item in gone["marks"])
+    back = client.post(f"{url}/undo").json()
+    assert any(item["id"] == glissando for item in back["marks"])
+
+
+def test_clear_marks_takes_a_players_techniques_too():
+    root, ids = score("guitar-tab", 1, 64, 67, 69)
+    technique.toggle_dead_note(root, [ids[0]])
+    technique.toggle_pair(root, ids[1], ids[2], "slide")
+    finished(root)
+    edit.clear_marks(root, ids[0])
+    edit.clear_marks(root, ids[1])
+    finished(root)
+    assert note(root, ids[0]).find("notehead") is None, "a dead note is a plain note again"
+    assert not list(root.iter("slide")), "a slide goes with both its ends"
+    violin, notes = score("violin", 1, 67)
+    technique.toggle_harmonic(violin, notes, "artificial")
+    finished(violin)
+    edit.clear_marks(violin, notes[0])
+    assert len(edit.locate(violin, notes[0]).event.notes) == 1, "an artificial harmonic's diamond goes with it"

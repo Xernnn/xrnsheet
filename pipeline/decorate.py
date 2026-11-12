@@ -17,9 +17,11 @@ bends, dead notes and harmonics on a tablature staff, and an artificial harmonic
   harmonic.
 
 Each mark a click can name carries its id in a data-mark attribute, as the page's own marks do, so
-a click on a fingering, a string number, a bend or a hammer-on selects it and Delete removes it.
-Verovio makes up its own ids for fingerings, so they're matched to the score's in the order each
-bar draws them, and left unnamed in a bar where the counts differ.
+a click on a fingering, a string number, a bend, a hammer-on, a slide, a vibrato, an articulation,
+a bowing or a harmonic selects it and Delete removes it. Verovio makes up its own ids for most of
+them: fingerings and vibratos are matched to the score's in the order each bar draws them, and left
+unnamed in a bar where the counts differ, and articulations and bowings by the symbol drawn on
+each note. A slide or glissando keeps its own id, and its copy on the tablature is named after it.
 """
 
 import re
@@ -34,6 +36,15 @@ from pipeline.technique import BOWED, family_of, harmonic_kind
 JOINED = {"hammer-on": "H", "pull-off": "P"}
 DRAWN_SLUR = "-slur"  # A hammer-on's slur on the standard staff is named after it with this on the end.
 DRAWN_TAB_SLUR = "-tabslur"
+DRAWN_TAB_JOINT = "-tabjoint"  # A slide's or a glissando's copy between the fret numbers.
+HARMONIC_MARK = "xrn-harmonic"  # The id of an artificial harmonic the drawing leaves off its note.
+# The music font's symbols for marks drawn on a note, and the marks they are (see marks.ON_NOTES).
+ARTICULATION_GLYPHS = {
+    "E4A0": "accent", "E4A1": "accent", "E4A2": "staccato", "E4A3": "staccato", "E4A4": "tenuto", "E4A5": "tenuto",
+    "E4A6": "staccatissimo", "E4A7": "staccatissimo", "E4A8": "staccatissimo", "E4A9": "staccatissimo",
+    "E4AC": "strong-accent", "E4AD": "strong-accent", "E5E5": "stopped", "E5E7": "open-string",
+    "E610": "down-bow", "E611": "down-bow", "E612": "up-bow", "E613": "up-bow", "E614": "harmonic",
+}
 HIGHEST_SLUR_NUMBER = 16  # MusicXML numbers slurs to 16. Drawn ones count down from there, away from the score's own.
 FIRST_DRAWN_SLUR = 7
 ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
@@ -112,6 +123,7 @@ def prepare(root: ET.Element) -> None:
     for part in root.findall("part"):
         tabs = set(tab_staves(part))
         bowed = family_of(root, part) == BOWED
+        stopped = None  # The id of the last stopped note's artificial harmonic, for the diamond touched above it.
         for note in part.iter("note"):
             if (note.findtext("staff") or "1") in tabs:
                 continue
@@ -121,7 +133,11 @@ def prepare(root: ET.Element) -> None:
                 note.set(DRAWN_AS, which or kind)
                 for technical in note.iterfind("notations/technical"):
                     for harmonic in technical.findall("harmonic"):
+                        if which != "touching-pitch":
+                            stopped = harmonic.get("id")
                         technical.remove(harmonic)
+                if stopped:
+                    note.set(HARMONIC_MARK, stopped)
             for technical in note.iterfind("notations/technical"):
                 has_fret = technical.find("fret") is not None
                 for position, mark in enumerate(list(technical)):
@@ -153,7 +169,7 @@ def prepare(root: ET.Element) -> None:
                         add_slur(first_copy, "start", number, name + DRAWN_TAB_SLUR if name else None)
                         add_slur(last_copy, "stop", number)
                     else:
-                        add_joint(first_copy, tag, "start", number, start.get("line-type", "solid"))
+                        add_joint(first_copy, tag, "start", number, start.get("line-type", "solid"), {"id": name + DRAWN_TAB_JOINT} if name else None)
                         add_joint(last_copy, tag, "stop", number)
 
 
@@ -356,12 +372,114 @@ def name_tab_rests(svg: str, root: ET.Element) -> str:
     return svg
 
 
+def named(svg: str, found: re.Match, mark_id: str) -> str:
+    """Put a mark's id on the group a match opens, as data-mark."""
+    close = svg.find(">", found.start())
+    close -= 1 if svg[close - 1] == "/" else 0
+    return svg[:close] + f' data-mark="{escape(mark_id)}"' + svg[close:]
+
+
+GLISS_GROUP = re.compile(r'<g id="([^"]+)" class="gliss[^"]*"')
+TRILL_GROUP = re.compile(r'<g id="[^"]+" class="trill"')
+OWNER_GROUP = re.compile(r'<g id="([^"]+)" class="(note|chord)"')
+ARTIC_GROUP = re.compile(r'<g id="[^"]+" class="artic[^"]*"')
+GLYPH = re.compile(r'xlink:href="#(E[0-9A-F]{3})-')
+
+
+def name_joins(svg: str, root: ET.Element) -> str:
+    """Name each slide and glissando, which keep their ids, and their copies between the fret numbers."""
+    from pipeline.marks import JOINS
+
+    starts = {mark.get("id") for note in root.iter("note") for tag in JOINS for mark in note.iterfind(f"notations/{tag}") if mark.get("type") == "start" and mark.get("id")}
+    for found in reversed(list(GLISS_GROUP.finditer(svg))):
+        mark_id = found.group(1).removesuffix(DRAWN_TAB_JOINT)
+        if mark_id in starts:
+            svg = named(svg, found, mark_id)
+    return svg
+
+
+def name_vibratos(svg: str, root: ET.Element) -> str:
+    """Name each vibrato's wavy line, in the order each bar draws them, as Verovio makes up their ids.
+
+    A trill is drawn the same way, so it's counted, and left unnamed.
+    """
+    expected: dict[str, list[str | None]] = {}
+    top = [measure.get("id") for measure in root.find("part").findall("measure")]
+    for part in root.findall("part"):
+        for index, measure in enumerate(part.findall("measure")):
+            if index >= len(top):
+                continue
+            for note in measure.iter("note"):
+                for ornaments in note.iterfind("notations/ornaments"):
+                    if ornaments.find("trill-mark") is not None:
+                        expected.setdefault(top[index], []).append(None)
+                    else:
+                        expected.setdefault(top[index], []).extend(mark.get("id") for mark in ornaments.findall("wavy-line") if mark.get("type") == "start")
+    if not any(expected.values()):
+        return svg
+    renamed = []
+    for bar in MEASURE_GROUP.finditer(svg):
+        wanted = expected.get(bar.group(1), [])
+        drawn = list(TRILL_GROUP.finditer(svg, bar.end(), group_end(svg, bar.start())))
+        if wanted and len(drawn) == len(wanted):
+            renamed.extend((found, mark_id) for found, mark_id in zip(drawn, wanted) if mark_id)
+    for found, mark_id in sorted(renamed, key=lambda item: item[0].start(), reverse=True):
+        svg = named(svg, found, mark_id)
+    return svg
+
+
+def name_articulations(svg: str, root: ET.Element) -> str:
+    """Name the articulations, bowings and harmonics drawn on each note or chord, by the symbol each is drawn with.
+
+    A violin's artificial harmonic is named on the diamond touched above its note.
+    """
+    from pipeline.marks import ON_NOTES
+
+    marks_of: dict[str, dict[str, str | None]] = {}  # By note, each kind of mark's id, or None where it's there twice.
+    diamonds = {}
+    for note in root.iter("note"):
+        if note.get(DRAWN_AS) == "touching-pitch" and note.get(HARMONIC_MARK):
+            diamonds[note.get("id")] = note.get(HARMONIC_MARK)
+        for holder in [*note.iterfind("notations/articulations"), *note.iterfind("notations/technical")]:
+            for mark in holder:
+                if mark.tag in ON_NOTES and mark.get("id"):
+                    kinds = marks_of.setdefault(note.get("id"), {})
+                    kinds[mark.tag] = None if mark.tag in kinds else mark.get("id")
+    if not marks_of and not diamonds:
+        return svg
+    owners = [(found, group_end(svg, found.start())) for found in OWNER_GROUP.finditer(svg)]
+    renamed = []
+    for owner, end in owners:
+        if owner.group(2) == "note" and owner.group(1) in diamonds:
+            renamed.append((owner, diamonds[owner.group(1)]))
+        inner = [found for found, _ in owners if owner.start() < found.start() < end]
+        kinds: dict[str, str | None] = {}
+        for note_id in [owner.group(1), *(found.group(1) for found in inner)] if owner.group(2) == "chord" else [owner.group(1)]:
+            for tag, mark_id in marks_of.get(note_id, {}).items():
+                kinds[tag] = None if tag in kinds else mark_id
+        if not kinds:
+            continue
+        for artic in ARTIC_GROUP.finditer(svg, owner.end(), end):
+            # An articulation of a note inside a chord is the chord's, and is named once, there.
+            if owner.group(2) == "chord" or not any(found.start() < artic.start() < found_end for found, found_end in owners if owner.start() < found.start() < end):
+                glyphs = GLYPH.findall(svg, artic.end(), group_end(svg, artic.start()))
+                tag = ARTICULATION_GLYPHS.get(glyphs[0]) if len(glyphs) == 1 else None
+                if tag and kinds.get(tag):
+                    renamed.append((artic, kinds[tag]))
+    for found, mark_id in sorted(renamed, key=lambda item: item[0].start(), reverse=True):
+        svg = named(svg, found, mark_id)
+    return svg
+
+
 def decorate(svg: str, root: ET.Element, space: float) -> str:
     """Draw a page's guitar and string marks that Verovio left out. `space` is a staff space in the drawing's units."""
     if "<g" not in svg:
         return svg
     svg = name_tab_rests(svg, root)
     svg = name_capo(svg, root)
+    svg = name_joins(svg, root)
+    svg = name_vibratos(svg, root)
+    svg = name_articulations(svg, root)
     svg, texts = tag_fingerings(svg, root)
     places = drawn_notes(svg)
     pieces: list[str] = []
@@ -392,7 +510,7 @@ def decorate(svg: str, root: ET.Element, space: float) -> str:
                     svg = replace_fret(svg, copy.get("id"), text)
             if harmonic_of(note) == "artificial" and note_id in places:
                 x, y, _ = places[note_id]
-                pieces.append(letter(x + HEAD_WIDTH * space / 2, y - 2.2 * space, "A.H.", space, None, "harmonic", italic=True))
+                pieces.append(letter(x + HEAD_WIDTH * space / 2, y - 2.2 * space, "A.H.", space, note.get(HARMONIC_MARK), "harmonic", italic=True))
         for tag, text in JOINED.items():
             for start, first, _ in pairs_of(part, tag, NOTE_PAIRS[tag]):
                 if not start.get("id"):

@@ -79,12 +79,38 @@ def new_id(root: ET.Element) -> str:
 # draws with no ids of their own, so the drawing is given them (see decorate.py).
 NAMED_TECHNICAL = {"fingering", "pluck", "string", "bend"}
 NAMED_STARTS = {"slur", "hammer-on", "pull-off"}
+# Articulations, bowings and the like, each drawn on its note, and what the page calls them.
+ON_NOTES = {
+    "staccato": "staccato", "staccatissimo": "staccatissimo", "tenuto": "tenuto", "accent": "accent", "strong-accent": "marcato",
+    "up-bow": "upbow", "down-bow": "downbow", "open-string": "open", "stopped": "stopped", "harmonic": "harmonic",
+}
+JOINS = {"slide": "slide", "glissando": "glissando"}  # Lines from one note to another, named at their start.
+VIBRATO = "wiggleVibrato"
 
 
 def named_in(technical: ET.Element) -> list[ET.Element]:
     """Return a note's marks of this kind that are clicked on. A string beside a fret is a tablature note's, not a mark."""
     has_fret = technical.find("fret") is not None
     return [mark for mark in technical if (mark.tag in NAMED_TECHNICAL and not (mark.tag == "string" and has_fret)) or (mark.tag in NAMED_STARTS and mark.get("type") == "start")]
+
+
+def drawn_on(note: ET.Element) -> list[tuple[ET.Element, str]]:
+    """Return the marks drawn on a note or from it that a click can name, with what each is called.
+
+    A violin's touched note is only part of its harmonic, and a trill's wavy line belongs to the trill.
+    """
+    found = []
+    for notations in note.findall("notations"):
+        for holder in notations:
+            if holder.tag in ("articulations", "technical"):
+                for mark in holder:
+                    if mark.tag in ON_NOTES and not (mark.tag == "harmonic" and mark.find("touching-pitch") is not None):
+                        found.append((mark, ON_NOTES[mark.tag]))
+            elif holder.tag in JOINS and holder.get("type") == "start":
+                found.append((holder, JOINS[holder.tag]))
+            elif holder.tag == "ornaments" and holder.find("trill-mark") is None:
+                found.extend((mark, "vibrato") for mark in holder.findall("wavy-line") if mark.get("type") == "start")
+    return found
 
 
 def ensure_mark_ids(root: ET.Element) -> None:
@@ -94,6 +120,7 @@ def ensure_mark_ids(root: ET.Element) -> None:
     """
     used = {element.get("id") for element in root.iter() if element.get("id")}
     named = {id(mark) for technical in root.iter("technical") for mark in named_in(technical)}
+    named |= {id(mark) for note in root.iter("note") for mark, _ in drawn_on(note)}
     number = 0
     for element in root.iter():
         wanted = element.tag == "direction" or (element.tag == "slur" and element.get("type") == "start") or (element.tag == "wedge" and element.get("type") != "stop") or id(element) in named
@@ -578,6 +605,7 @@ def note_mark_entries(measure: ET.Element, bar: str | None) -> list[dict]:
                 if kind:
                     text = BEND_NAMES.get(mark.findtext("bend-alter") or "", mark.findtext("bend-alter") or "") if mark.tag == "bend" else (mark.text or "").strip()
                     found.append({"id": mark.get("id"), "bar": bar, "kind": kind, "drawn": SELF_NAMED, "text": text})
+        found.extend({"id": mark.get("id"), "bar": bar, "kind": kind, "drawn": SELF_NAMED, "text": ""} for mark, kind in drawn_on(note) if mark.get("id"))
     return found
 
 
@@ -655,21 +683,31 @@ def remove_slur(root: ET.Element, mark_id: str) -> bool:
 
 
 def remove_note_mark(root: ET.Element, mark_id: str) -> bool:
-    """Take away a mark inside a note, such as a fingering. A hammer-on goes with its other end."""
+    """Take away a mark on a note, such as a fingering, a staccato or a bowing.
+
+    A hammer-on, a slide, a glissando or a vibrato goes with its other end, and a violin's
+    artificial harmonic with the diamond touched above it.
+    """
     for part in root.findall("part"):
         for note in part.iter("note"):
-            for technical in note.iterfind("notations/technical"):
-                mark = next((found for found in technical if found.get("id") == mark_id), None)
-                if mark is None:
-                    continue
-                technical.remove(mark)
-                if len(technical) == 0:
-                    note.find("notations").remove(technical)
-                drop_if_empty(note)
-                repair_slurs(part)
-                for other in part.iter("note"):
-                    drop_if_empty(other)
-                return True
+            for notations in note.findall("notations"):
+                for holder in [notations, *notations]:
+                    mark = next((found for found in holder if found.get("id") == mark_id), None)
+                    if mark is None or holder.tag not in ("notations", "technical", "articulations", "ornaments"):
+                        continue
+                    if mark.tag == "harmonic":
+                        from pipeline.technique import remove_harmonic  # It builds on this module.
+
+                        remove_harmonic(root, note)
+                        return True
+                    holder.remove(mark)
+                    if holder is not notations and len(holder) == 0:
+                        notations.remove(holder)
+                    drop_if_empty(note)
+                    repair_slurs(part)
+                    for other in part.iter("note"):
+                        drop_if_empty(other)
+                    return True
     return False
 
 

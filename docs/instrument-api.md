@@ -185,6 +185,18 @@ and asking for something else of the same kind replaces it.
   marks on notes. `"self"` means the drawing already carries the id: the element has
   `data-mark="<id>"` (a `g.fing` for fingerings, plucks and string numbers, `g.xrn-bend`, and the
   hammer-on's `g.slur` and its `g.xrn-joined` letter). Don't match these up by order.
+- `"kind": "slide" | "glissando" | "vibrato"`, also `"drawn": "self"`: a `g.gliss` on the staff and
+  another between the fret numbers, and a vibrato's `g.trill`. Removing one removes both its ends.
+- `"kind": "harmonic" | "upbow" | "downbow" | "open" | "stopped" | "staccato" | "staccatissimo" |
+  "tenuto" | "accent" | "marcato"`, `"drawn": "self"`: the `g.artic` Verovio draws inside the note's
+  `g.note` (or its chord's `g.chord`), a guitar's `g.xrn-harmonic` A.H., and for a violin's
+  artificial harmonic the diamond's own `g.note`, which is that harmonic's and not a note to select.
+  Removing a violin's artificial harmonic removes its diamond.
+
+A dead note is its notehead, an "x", so it isn't a mark of its own: its note is selected, and the
+`deadNote` action or the note's `clear` action takes it away. `clear` now takes a player's
+techniques too, a slide's and a glissando's other ends and a violin harmonic's diamond with them,
+and leaves the string and fret a guitar's note is played at.
 
 Removing a hammer-on or pull-off removes both its ends. `{"action": "label", "id": ..., "text": "3"}`
 retypes a clicked fingering, pluck or string number, and a bend as `½`, `full` or `1½`; an empty text

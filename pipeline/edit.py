@@ -1379,14 +1379,25 @@ def paste(root: ET.Element, at_id: str, items: list[dict]) -> dict:
 
 
 def clear_marks(root: ET.Element, note_id: str) -> None:
-    """Remove fermatas, ornaments, articulations and bowings, keeping slurs and ties.
+    """Remove fermatas, ornaments, articulations, bowings and a player's techniques, keeping slurs and ties.
 
-    Chord text just above a staff is sometimes misread as one of these, about once a page.
+    Chord text just above a staff is sometimes misread as one of these, about once a page. A dead
+    note's x is one of a guitarist's techniques too, and its notehead becomes a plain one again.
     """
-    notations = find_note(root, note_id).find("notations")
+    from pipeline.technique import harmonic_kind, remove_harmonic  # It builds on this module.
+
+    note = find_note(root, note_id)
     removed = 0
+    for head in note.findall("notehead"):
+        if (head.text or "").strip() == "x":
+            note.remove(head)
+            removed += 1
+    if harmonic_kind(note) == ("artificial", "base-pitch"):
+        remove_harmonic(root, note)  # With the diamond touched above it.
+        removed += 1
+    notations = note.find("notations")
     if notations is not None:
-        for tag in ("fermata", "ornaments", "articulations", "technical", "arpeggiate"):
+        for tag in ("fermata", "ornaments", "articulations", "technical", "arpeggiate", "slide", "glissando"):
             for child in notations.findall(tag):
                 if tag == "technical" and child.find("fret") is not None:
                     # The string and fret a guitar's note is played at aren't marks.
@@ -1399,9 +1410,9 @@ def clear_marks(root: ET.Element, note_id: str) -> None:
                 removed += 1
     if not removed:
         raise EditError("This note has no marks to clear")
-    if len(notations) == 0:
-        find_note(root, note_id).remove(notations)
-    repair_slurs(context_of(root, find_note(root, note_id))[0], {"hammer-on", "pull-off", "wavy-line"})  # Their other ends go too.
+    if notations is not None and len(notations) == 0:
+        note.remove(notations)
+    repair_slurs(context_of(root, find_note(root, note_id))[0], {"hammer-on", "pull-off", "wavy-line", "slide", "glissando"})  # Their other ends go too.
 
 
 def list_chords(root: ET.Element) -> list[dict]:
