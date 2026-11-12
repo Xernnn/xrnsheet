@@ -101,7 +101,8 @@ from the open and barre chords guitarists learn; other chords and other tunings 
 chord's bass on the lowest string played, its needed notes above, low on the neck).
 
 They're drawn into the page SVG inside each chord symbol's `g.harm`, as `g.xrn-diagram`, so a
-click on a diagram is a click on its chord. Each system gets room above it for them.
+click on a diagram is a click on its chord. Each system gets room above it for them, chords close
+together on a line get smaller diagrams, and the composer's line moves up out of their way.
 
 A downloaded MusicXML file has each chord's diagram as its `<harmony><frame>`. A file opened with
 `<frame>`s turns diagrams on; a frame that isn't the library's shape (someone's own fingering) is
@@ -149,7 +150,8 @@ techniques too.
 
 Verovio draws fingerings, slides, glissandos, vibratos, harmonic circles, and the words and dashed
 lines. The server draws what it leaves out into the page SVG (pipeline/decorate.py): circles round a
-guitar's string numbers, italic p-i-m-a, H and P over hammer-on and pull-off slurs on both staves,
+guitar's string numbers, italic p-i-m-a, slurs for hammer-ons and pull-offs on both staves with
+their H and P on the tablature (on the staff when there's none),
 bend arrows with "½" or "full" (on the tablature when there is one), X for dead notes and `<12>`
 or `5<17>` for harmonics on the tablature, and "A.H." over a guitar's artificial harmonic.
 

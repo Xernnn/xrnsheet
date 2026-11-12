@@ -659,3 +659,15 @@ def test_random_edits_on_a_piano_with_notes_on_the_other_staff_keep_it_whole(see
         if step % 20 == 0:
             check_outputs(root)
     check_outputs(root)
+
+
+def test_a_hammer_ons_letter_goes_on_the_tablature_or_else_the_staff():
+    root, ids = score("guitar-tab", 1, 64, 67)
+    technique.toggle_pair(root, ids[0], ids[1], "hammerOn")
+    finished(root)
+    assert svg_of(root).count(">H</text>") == 1
+    plain, ids = score("guitar", 1, 64, 67)
+    technique.toggle_pair(plain, ids[0], ids[1], "hammerOn")
+    finished(plain)
+    svg = svg_of(plain)
+    assert svg.count(">H</text>") == 1 and 'class="slur" data-mark=' in svg

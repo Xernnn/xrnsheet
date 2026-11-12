@@ -9,7 +9,8 @@ bends, dead notes and harmonics on a tablature staff, and an artificial harmonic
   standard staff and on the tablature, and the tablature's fret numbers are joined by the slides
   and glissandos of the notes they copy. This is only for the drawing; the score keeps its marks.
 - After it draws (decorate), a string number's fingering is put in a circle on a guitar, a pluck is
-  set in italics, an H or P goes over each hammer-on's or pull-off's slur, a bend gets its arrow
+  set in italics, an H or P goes over each hammer-on's or pull-off's slur on the tablature, or on
+  the staff when there's no tablature, a bend gets its arrow
   and amount, and a fret number on the tablature becomes an X for a dead note or <12> for a
   harmonic.
 
@@ -307,12 +308,14 @@ def decorate(svg: str, root: ET.Element, space: float) -> str:
                 x, y, _ = places[note_id]
                 pieces.append(letter(x + HEAD_WIDTH * space / 2, y - 2.2 * space, "A.H.", space, None, "harmonic", italic=True))
         for tag, text in JOINED.items():
-            for start, _, _ in pairs_of(part, tag, NOTE_PAIRS[tag]):
+            for start, first, _ in pairs_of(part, tag, NOTE_PAIRS[tag]):
                 if not start.get("id"):
                     continue
+                # The letter goes on the tablature, as MuseScore has it, or on the staff if there's none.
+                lettered = DRAWN_TAB_SLUR if copies.get((first.get("id") or "") + TAB_COPY) is not None else DRAWN_SLUR
                 for suffix in (DRAWN_SLUR, DRAWN_TAB_SLUR):
                     svg, made = slur_letter(svg, start.get("id") + suffix, text, space, start.get("id"))
-                    if made:
+                    if made and suffix == lettered:
                         pieces.append(made)
     svg = circle_strings(svg, circled, space)
     svg = italic_plucks(svg, plucked)

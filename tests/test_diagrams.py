@@ -172,3 +172,40 @@ def test_diagrams_are_turned_on_and_off_through_the_server(client):
     data = client.get(url).json()
     assert data["diagrams"] is False and "xrn-diagram" not in data["pages"][0]
     assert "<frame>" not in client.get(f"{url}/score.musicxml").text
+
+
+def diagram_widths(svg):
+    widths = []
+    for drawn in re.findall(r'class="xrn-diagram">(.*?)</g>', svg, re.S):
+        xs = [int(found) for found in re.findall(r'<path d="M(-?\d+) -?\d+ L\1 ', drawn)]
+        widths.append(max(xs) - min(xs))
+    return widths
+
+
+def test_chords_close_together_get_smaller_diagrams():
+    root = structure.blank_score(clef="guitar-tab", measures=2)
+    edit.ensure_note_ids(root)
+    cursor = root.find("part/measure/note").get("id")
+    written = []
+    for length in ("half", "eighth", "eighth", "quarter", "whole"):
+        done = edit.write_note(root, cursor, length, 0, None, midi=64)
+        written.append(done["written"])
+        cursor = done["cursor"]
+    for note_id, chord in zip(written, ["C", "G", "Am", "F", "E"]):
+        edit.add_chord(root, note_id, chord)
+    fretted.sync(root)
+    diagrams.set_shown(root, True)
+    widths = diagram_widths("".join(render_pages(to_text(root))))
+    assert len(widths) == 5 and widths[0] == max(widths) and widths[1] == widths[2] == min(widths) < widths[0], "the chords an eighth apart are drawn smallest"
+
+
+def test_the_composer_is_lifted_clear_of_the_first_diagrams():
+    root = chart("C", "G")
+    structure.set_title(root, "Song", "Someone")
+    diagrams.set_shown(root, True)
+    svg = render_pages(to_text(root))[0]
+    composer = int(re.search(r'<text x="\d+" y="(\d+)"[^>]*text-anchor="end"', svg).group(1)) if 'text-anchor="end"' in svg else None
+    head = svg[svg.find('class="pgHead"'):]
+    baselines = [int(found) for found in re.findall(r' y="(\d+)"', head[: head.find("</g>")])]
+    tops = [int(found) for found in re.findall(r'class="xrn-diagram"><path d="M-?\d+ (-?\d+)', svg)]
+    assert baselines and tops and max(baselines) < min(tops), (composer, baselines, tops)

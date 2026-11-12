@@ -60,6 +60,8 @@ STRING_GAP, FRET_GAP, ABOVE_TEXT = 1.0, 1.15, 0.6
 DOT, MARK = 0.34, 0.3
 FINGERS = 4  # A shape needing more fingers than a hand has is played with a barre.
 ROOM = 7  # Staff spaces kept free above each system for its diagrams.
+DIAGRAM_GAP = 1.5  # The least room between neighbouring diagrams, in staff spaces.
+SMALLEST_DIAGRAM = 0.6
 
 
 def shown(root: ET.Element) -> bool:
@@ -348,23 +350,31 @@ def harm_text(piece: str) -> str:
 
 
 def draw(svg: str, drawing: Drawing | None, space: float) -> str:
-    """Draw each chord symbol's diagram above it, inside its own group so a click on either chooses the chord."""
+    """Draw each chord symbol's diagram above it, inside its own group so a click on either chooses the chord.
+
+    Chords close together on a line get smaller diagrams, so that neighbours don't run into each other.
+    """
     if drawing is None:
         return svg
-    pieces = []
+    placed = []
     for match in HARM_GROUP.finditer(svg):
         end = svg.find("</g>", match.end())
         piece = svg[match.end(): end]
-        text, place = harm_text(piece), TEXT_AT.search(piece)
+        text, where = harm_text(piece), TEXT_AT.search(piece)
         shape = drawing.shape_of(text)
-        if shape is None or place is None:
+        if shape is None or where is None:
             continue
         sizes = [float(found) for found in SIZE.findall(piece) if float(found)]
         size = max(sizes) if sizes else 2 * space
-        width = len(text) * 0.55 * size
-        centre = float(place.group(1)) + width / 2
-        bottom = float(place.group(2)) - 0.8 * size - ABOVE_TEXT * space
-        pieces.append((end, diagram(shape, centre, bottom, space)))
+        centre = float(where.group(1)) + len(text) * 0.55 * size / 2
+        placed.append((end, shape, centre, float(where.group(2)) - 0.8 * size - ABOVE_TEXT * space))
+    pieces = []
+    for number, (end, shape, centre, bottom) in enumerate(placed):
+        neighbours = [other[2] for other in (placed[number - 1] if number else None, placed[number + 1] if number + 1 < len(placed) else None) if other is not None and abs(other[3] - bottom) < space]
+        room = min((abs(other - centre) for other in neighbours), default=float("inf"))
+        wanted = ((len(shape.frets) - 1) * STRING_GAP + DIAGRAM_GAP) * space
+        scale = max(min(room / wanted, 1.0), SMALLEST_DIAGRAM)
+        pieces.append((end, diagram(shape, centre, bottom, space * scale)))
     for end, drawn in reversed(pieces):
         svg = svg[:end] + drawn + svg[end:]
     return svg

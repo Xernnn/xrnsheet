@@ -368,11 +368,13 @@ def frame_height(space: float) -> float:
     return FRAME_SPACES * space * 100
 
 
-def size_header(svg: str, space: float = 1.75) -> str:
+def size_header(svg: str, space: float = 1.75, lifted: float = 0) -> str:
     """Lay the title and the composer out as MuseScore's title frame does.
 
     Verovio prints every credit in one size on one line. The title goes at the top of the frame in
     its own size, and the composer at the bottom right. The room under the header makes way for them.
+    Where Verovio can't leave room enough under the frame, as for chord diagrams over the first
+    system, the composer is lifted by what's missing, in the hundredths of a millimetre a page is drawn in.
     """
     head = svg.find('class="pgHead"')
     if head < 0:
@@ -381,7 +383,7 @@ def size_header(svg: str, space: float = 1.75) -> str:
     pieces = re.split(r"(?=<text )", svg[head:end])
     for index, piece in enumerate(pieces[1:], start=1):
         is_title = 'text-anchor="middle"' in piece  # The title is the centred line.
-        points, baseline = (TITLE_POINTS, TITLE_BASELINE) if is_title else (COMPOSER_POINTS, round(frame_height(space) - COMPOSER_ABOVE_FOOT))
+        points, baseline = (TITLE_POINTS, TITLE_BASELINE) if is_title else (COMPOSER_POINTS, round(frame_height(space) - COMPOSER_ABOVE_FOOT - lifted))
         piece = FONT_SIZE.sub(lambda found: f'font-size="{round(points * POINT) if int(found.group(1)) else 0}px"', piece)
         pieces[index] = re.sub(r' y="-?\d+"', f' y="{baseline}"', piece)
     return svg[:head] + "".join(pieces) + svg[end:]
@@ -416,6 +418,8 @@ def render_pages(musicxml: str, view: str = "page") -> list[str]:
     room = diagrams.ROOM * 2 if diagrams.shown(score) else 0  # Half staff spaces above each system for its chord diagrams.
     unit = layout.space * 10 / 2  # Half a staff space, in tenths of a millimetre, which is how Verovio counts.
     prepared = prepare_for_drawing(musicxml)
+    header_margin = 2 + room + (frame_height(layout.space) - ONE_LINE_OF_TEXT) / (unit * 10)
+    lifted = max(header_margin - MOST_HEADER_MARGIN, 0) * unit * 10
     with RENDER_LOCK:
         toolkit = verovio.toolkit(False)  # It would look for fonts itself, and fail on a worker thread.
         toolkit.setResourcePath(RESOURCE_PATH)
@@ -437,7 +441,7 @@ def render_pages(musicxml: str, view: str = "page") -> list[str]:
             "engravingDefaults": LINE_WEIGHTS,
             "lyricSize": TEXT_POINTS * POINT / TIMES_WIDTH / (unit * 10),
             "header": "auto" if has_title else "none",
-            "bottomMarginHeader": min(2 + room + (frame_height(layout.space) - ONE_LINE_OF_TEXT) / (unit * 10), MOST_HEADER_MARGIN),  # In half staff spaces.
+            "bottomMarginHeader": min(header_margin, MOST_HEADER_MARGIN),  # In half staff spaces.
             "footer": "none",
             "breaks": "none" if view == "horizontal" else breaks,
             "breaksSmartSb": 0.0,  # A break someone asked for always counts, however short the line.
@@ -454,7 +458,7 @@ def render_pages(musicxml: str, view: str = "page") -> list[str]:
         pages = []
         for page in range(1, toolkit.getPageCount() + 1):
             svg = diagrams.draw(decorate.decorate(replace_private_glyphs(toolkit.renderToSVG(page)), drawn, space), chords, space)
-            pages.append(keep_spaces(size_header(set_text_font(svg), layout.space)))
+            pages.append(keep_spaces(size_header(set_text_font(svg), layout.space, lifted)))
         return pages
 
 
