@@ -42,6 +42,8 @@ NATURAL_SEMITONES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 FIFTHS_FROM_C = {"F": -1, "C": 0, "G": 1, "D": 2, "A": 3, "E": 4, "B": 5}
 CLEF_PITCHES = {"G": ("G", 4), "F": ("F", 3), "C": ("C", 4)}
 ACCIDENTAL_NAMES = {-2: "flat-flat", -1: "flat", 0: "natural", 1: "sharp", 2: "double-sharp"}
+# A note's copy on the tablature staff linked under its own is named after it with this on the end.
+TAB_COPY = "-tab"
 # These can sit between two notes' start times, because MusicXML gives them an offset.
 SHIFTABLE = {"harmony", "direction"}
 OFFSET_FOLLOWERS = {"footnote", "level", "voice", "staff", "sound"}
@@ -605,15 +607,19 @@ def set_tuplet_mark(note: ET.Element, kind: str | None) -> None:
 def overwrite(line: list[Event], new: Event, context: Context, key: tuple[str, str]) -> list[Event]:
     """Put an event into a voice. Anything it covers goes, and leftover time becomes rests.
 
-    A triplet can only be replaced whole, because part of one wouldn't add up to anything.
+    A triplet can only be replaced whole, because part of one wouldn't add up to anything. That's
+    the whole triplet, not just the notes of it that are covered: a note carried over a barline can
+    cover the first two notes of a triplet and none of the third.
     """
     kept: list[Event] = []
     for event in sorted(line, key=lambda event: event.onset):
         if event.end <= new.onset or event.onset >= new.end:
             kept.append(event)
             continue
-        if event.in_tuplet and (event.onset < new.onset or event.end > new.end):
-            raise EditError("Triplets can't be cut in half.")
+        if event.in_tuplet:
+            start, end = tuplet_bounds(line, event)
+            if start < new.onset or end > new.end:
+                raise EditError("Triplets can't be cut in half.")
         if event.onset < new.onset:
             kept.extend(rests(event.onset, new.onset, context, key))
         if event.end > new.end:
@@ -640,14 +646,14 @@ def respell(context: Context) -> None:
     A note only needs one if it differs from what's in force at that point. An earlier F sharp
     stays in force until the barline, so a later plain F needs a natural, which the key alone
     wouldn't show. A sharp tied over the barline holds for the tied note alone, so the next F in
-    that bar shows its accidental, whatever it is.
+    that bar shows its accidental, whatever it is. A tablature staff shows frets, never accidentals.
     """
     in_force: dict[tuple[str, str, str], int | None] = {}
     timeline = read_measure(context.measure, context.divisions)
     for event in timeline.events():
         for note in [*event.grace, *event.notes]:
             pitch = note.find("pitch")
-            if pitch is None:
+            if pitch is None or context.clefs.get(note.findtext("staff") or "1") == "TAB":
                 continue
             step, octave = pitch.findtext("step"), pitch.findtext("octave")
             alter = int(float(pitch.findtext("alter") or 0))
@@ -721,6 +727,20 @@ def tie_ends(timelines: dict[int, Timeline], number: int, ordered: list[Event], 
     return after, before
 
 
+def on_tablature(context: Context, note: ET.Element) -> bool:
+    return context.clefs.get(note.findtext("staff") or "1") == "TAB"
+
+
+def same_staff_kind(context: Context, note: ET.Element, others: list[ET.Element]) -> list[ET.Element]:
+    """Keep the notes a tie from this one could reach. A fret number's copy of a note is never one of them.
+
+    A tablature staff copies its standard staff, and until it's made again after an edit, its copy
+    of a note that has just changed would look like the other end of a tie the change has broken.
+    """
+    tab = on_tablature(context, note)
+    return [other for other in others if on_tablature(context, other) == tab]
+
+
 def repair_ties(part: ET.Element, index: int) -> None:
     """Remove half-ties around an edited measure, left when the note at one end has gone."""
     known = part_contexts(part)
@@ -731,31 +751,42 @@ def repair_ties(part: ET.Element, index: int) -> None:
             for position, event in enumerate(ordered):
                 after, before = tie_ends(timelines, number, ordered, position)
                 for note in event.notes:
-                    if is_tied(note, "start") and not any(same_pitch(note, other) and is_tied(other, "stop") for other in after):
+                    later, earlier = same_staff_kind(known[number], note, after), same_staff_kind(known[number], note, before)
+                    if is_tied(note, "start") and not any(same_pitch(note, other) and is_tied(other, "stop") for other in later):
                         set_tie(note, "start", False)
-                    if is_tied(note, "stop") and not any(same_pitch(note, other) and is_tied(other, "start") for other in before):
+                    if is_tied(note, "stop") and not any(same_pitch(note, other) and is_tied(other, "start") for other in earlier):
                         set_tie(note, "stop", False)
 
 
-def repair_slurs(part: ET.Element) -> None:
-    """Remove slurs that have lost their start or their end."""
-    waiting: dict[str, tuple[ET.Element, ET.Element]] = {}
-    unmatched = []
-    for note in part.iter("note"):
-        for notations in note.findall("notations"):
-            for slur in notations.findall("slur"):
-                number = slur.get("number", "1")
-                if slur.get("type") == "start":
-                    if number in waiting:
-                        unmatched.append(waiting[number])
-                    waiting[number] = (notations, slur)
-                elif slur.get("type") == "stop":
-                    if number in waiting:
-                        del waiting[number]
-                    else:
-                        unmatched.append((notations, slur))
-    for notations, slur in [*unmatched, *waiting.values()]:
-        notations.remove(slur)
+# Marks that join one note to a later one, each end on its note, and where in <notations> they are.
+NOTE_PAIRS = {"slur": "", "slide": "", "glissando": "", "hammer-on": "technical", "pull-off": "technical", "wavy-line": "ornaments"}
+
+
+def repair_slurs(part: ET.Element, tags: frozenset[str] | set[str] = frozenset(NOTE_PAIRS)) -> None:
+    """Remove slurs, slides, glissandos, hammer-ons, pull-offs and wavy lines that have lost their start or their end."""
+    for tag, group in NOTE_PAIRS.items():
+        if tag not in tags:
+            continue
+        waiting: dict[str, tuple[ET.Element, ET.Element, ET.Element]] = {}
+        unmatched = []
+        for note in part.iter("note"):
+            for notations in note.findall("notations"):
+                for holder in [notations] if not group else notations.findall(group):
+                    for mark in holder.findall(tag):
+                        number = mark.get("number", "1")
+                        if mark.get("type") == "start":
+                            if number in waiting:
+                                unmatched.append(waiting[number])
+                            waiting[number] = (notations, holder, mark)
+                        elif mark.get("type") == "stop":
+                            if number in waiting:
+                                del waiting[number]
+                            else:
+                                unmatched.append((notations, holder, mark))
+        for notations, holder, mark in [*unmatched, *waiting.values()]:
+            holder.remove(mark)
+            if holder is not notations and len(holder) == 0:
+                notations.remove(holder)
 
 
 def remove_wedge_end(measure: ET.Element, direction: ET.Element, wedge: ET.Element) -> None:
@@ -774,13 +805,16 @@ def remove_wedge_end(measure: ET.Element, direction: ET.Element, wedge: ET.Eleme
 
 # Lines that are directions with two ends, and the types that start each. A pedal can also change
 # partway, which is neither end.
-LINE_STARTS = {"wedge": {"crescendo", "diminuendo"}, "octave-shift": {"up", "down"}, "pedal": {"start", "sostenuto"}}
+LINE_STARTS = {"wedge": {"crescendo", "diminuendo"}, "octave-shift": {"up", "down"}, "pedal": {"start", "sostenuto"}, "dashes": {"start"}}
 # An octave line moves the notes under it this many octaves from where they're drawn: 8va is +1.
 OCTAVE_SHIFTS = {("down", "8"): 1, ("down", "15"): 2, ("up", "8"): -1, ("up", "15"): -2}
 
 
 def repair_lines(part: ET.Element) -> None:
-    """Remove hairpins, octave lines and pedals that have lost their start or their end."""
+    """Remove hairpins, octave lines, pedals and text lines that have lost their start or their end.
+
+    A text line such as "P.M. - - -" goes with its words, which say nothing without the line.
+    """
     for tag, starts in LINE_STARTS.items():
         waiting: dict[str, tuple[ET.Element, ET.Element, ET.Element]] = {}
         unmatched = []
@@ -798,7 +832,10 @@ def repair_lines(part: ET.Element) -> None:
                             unmatched.append(waiting[number])
                         waiting[number] = (measure, direction, line)
         for measure, direction, line in [*unmatched, *waiting.values()]:
-            remove_wedge_end(measure, direction, line)
+            if tag == "dashes" and any(child is direction for child in measure):
+                measure.remove(direction)
+            else:
+                remove_wedge_end(measure, direction, line)
 
 
 @dataclass(frozen=True)

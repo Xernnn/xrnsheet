@@ -19,6 +19,7 @@ from pipeline.rhythm import (
     LENGTHS,
     NATURAL_SEMITONES,
     STEPS,
+    TAB_COPY,
     Context,
     EditError,
     Event,
@@ -47,6 +48,7 @@ from pipeline.rhythm import (
     respell,
     rests,
     same_pitch,
+    same_staff_kind,
     set_length,
     set_tie,
     tie_ends,
@@ -59,6 +61,8 @@ from pipeline.structure import VOICES_PER_STAFF, delete_measure, insert_measure,
 
 # Where the first note on an empty staff lands: the middle of that clef's staff.
 CLEF_MIDDLE = {"G": ("B", 4), "F": ("D", 3), "C": ("C", 4)}
+MIDDLE_LINE_BELOW_TOP = 4  # Steps from a staff's top line down to its middle one.
+COMFORTABLE_REACH = 36  # Three octaves up from a fretted instrument's lowest string: E2 to E5 on a guitar, written E3 to E6.
 ENTERED_LENGTHS = {"whole", "half", "quarter", "eighth", "16th", "32nd", "64th"}
 MOST_DOTS = 2
 AFTER = "after:"
@@ -103,6 +107,12 @@ def ensure_note_ids(root: ET.Element) -> None:
 
 
 def find_note(root: ET.Element, note_id: str) -> ET.Element:
+    """Find a note by its id. A fret number on a linked tablature staff stands for the note it plays."""
+    if note_id.endswith(TAB_COPY):
+        try:
+            return find_note(root, note_id.removesuffix(TAB_COPY))
+        except EditError:
+            pass  # It's a note of a tablature staff of its own.
     index = index_of(root)
     found = index.notes.get(note_id) if index is not None else None
     if found is not None and found.get("id") == note_id and index.place_of(found) is not None:
@@ -111,6 +121,17 @@ def find_note(root: ET.Element, note_id: str) -> ET.Element:
         if note.get("id") == note_id:
             return note
     raise EditError(f"No note with id {note_id}")
+
+
+def own_ids(root: ET.Element, note_ids: list[str]) -> list[str]:
+    """Name each note by its own id, where a selection picked a fret number on its tablature staff."""
+    found = []
+    for note_id in note_ids:
+        try:
+            found.append(find_note(root, note_id).get("id") if note_id.endswith(TAB_COPY) else note_id)
+        except EditError:
+            found.append(note_id)  # The edit itself will say what's wrong with this one.
+    return found
 
 
 def context_of(root: ET.Element, target: ET.Element) -> tuple[ET.Element, Context]:
@@ -286,8 +307,13 @@ def in_voice(spot: Spot, number: int) -> Spot:
 
 
 def drop_empty_voice(spot: Spot) -> None:
-    """Take a bar's extra voice away once it holds only rests, so they don't clutter the staff."""
-    if voices_on_staff(spot.part, spot.key[0]).index(spot.key[1]) == 0:
+    """Take a bar's extra voice away once it holds only rests, so they don't clutter the staff.
+
+    A voice whose only note has just moved out of it is on the staff nowhere else, which makes it
+    an extra voice if any other is there.
+    """
+    used = voices_on_staff(spot.part, spot.key[0])
+    if sorted({*used, spot.key[1]}, key=int).index(spot.key[1]) == 0:
         return
     if all(event.is_rest for event in spot.line):
         del spot.timeline.lines[spot.key]
@@ -296,6 +322,7 @@ def drop_empty_voice(spot: Spot) -> None:
 def move_to_voice(root: ET.Element, note_ids: list[str], number: int) -> None:
     """Move notes into another voice of their staff, as when a line turns out to be two."""
     fit_divisions(root)
+    note_ids = own_ids(root, note_ids)
     done = False
     for note_id in note_ids:
         spot = locate(root, note_id)
@@ -474,7 +501,32 @@ def previous_height(spot: Spot) -> int:
             earlier = [event for event in sorted(line, key=lambda event: event.onset, reverse=True) if not event.is_rest and (context.index < spot.context.index or event.onset < spot.event.onset)]
             if earlier:
                 return height_of(earlier[0].notes[-1])
+    # The middle of the staff, where its clef puts it: a guitar's treble clef with an 8 below has B3 there.
+    if spot.key[0] in spot.context.tops:
+        return spot.context.tops[spot.key[0]] - MIDDLE_LINE_BELOW_TOP
     return diatonic(*CLEF_MIDDLE.get(spot.context.clefs.get(spot.key[0], "G"), CLEF_MIDDLE["G"]))
+
+
+def within_reach(root: ET.Element, spot: Spot, step: str, octave: int) -> int:
+    """Move a typed note by octaves into the three octaves a guitar or bass plays most, from its lowest string up.
+
+    The nearest note to the one before can be out of reach: a guitar that has climbed to its top
+    E would put a typed G above the staff and the frets. Anything else is left where it was.
+    """
+    from pipeline import fretted  # Fretted parts are this module's caller's business too, and it imports this.
+
+    entry = next((found for found in root.findall("part-list/score-part") if found.get("id") == spot.part.get("id")), None)
+    board = fretted.fretboard(spot.part, entry)
+    if board is None:
+        return octave
+    shifts = fretted.shifts_of(spot.part)
+    lowest = min(board.opens) + board.capo - (shifts[spot.context.index] if spot.context.index < len(shifts) else 0)
+    sound = lambda at: 12 * (at + 1) + NATURAL_SEMITONES[step]
+    while sound(octave) < lowest:
+        octave += 1
+    while sound(octave) > lowest + COMFORTABLE_REACH and sound(octave - 1) >= lowest:
+        octave -= 1
+    return octave
 
 
 def alter_in_force(spot: Spot, step: str, octave: int) -> int:
@@ -545,7 +597,7 @@ def write_note(root: ET.Element, at_id: str, type_name: str, dots: int, step: st
     elif line is not None:
         pitches = [pitch_on_line(spot, line)]
     elif step is not None:
-        octave = round((previous_height(spot) - STEPS.index(step)) / 7)
+        octave = within_reach(root, spot, step, round((previous_height(spot) - STEPS.index(step)) / 7))
         pitches = [(step, alter_in_force(spot, step, octave), octave)]
     written = write_at(root, spot, length, pitches)
     return {"written": written.head[0].get("id"), "cursor": written.cursor}
@@ -566,6 +618,7 @@ def tied_notes(root: ET.Element, note: ET.Element) -> list[ET.Element]:
                 if not any(item is member for item in event.notes):
                     continue
                 after, before = tie_ends(timelines, context.index, ordered, position)
+                after, before = same_staff_kind(context, member, after), same_staff_kind(context, member, before)
                 ends = [other for other in after if is_tied(member, "start") and is_tied(other, "stop")]
                 ends += [other for other in before if is_tied(member, "stop") and is_tied(other, "start")]
                 found.extend(other for other in ends if same_pitch(member, other) and not any(other is seen for seen in found))
@@ -764,6 +817,7 @@ def remove_range(root: ET.Element, note_ids: list[str]) -> None:
     measure those notes go and the later ones in the voice are pulled in, as closing a gap does.
     """
     fit_divisions(root)
+    note_ids = own_ids(root, note_ids)
     chosen = set(note_ids)
     whole: set[int] = set()
     seen: set[tuple[int, tuple[str, str]]] = set()
@@ -1340,6 +1394,7 @@ def clear_marks(root: ET.Element, note_id: str) -> None:
         raise EditError("This note has no marks to clear")
     if len(notations) == 0:
         find_note(root, note_id).remove(notations)
+    repair_slurs(context_of(root, find_note(root, note_id))[0], {"hammer-on", "pull-off", "wavy-line"})  # Their other ends go too.
 
 
 def list_chords(root: ET.Element) -> list[dict]:

@@ -8,6 +8,8 @@ to read notes with our own reader instead of homr.
 """
 
 import argparse
+import functools
+import hashlib
 import json
 import os
 import re
@@ -28,7 +30,7 @@ from urllib.parse import urlsplit
 import uvicorn
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -36,7 +38,7 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
-from pipeline import concert, edit, layout, marks, mixer, structure, transpose
+from pipeline import concert, diagrams, edit, fretted, layout, marks, mixer, structure, technique, transpose
 from pipeline.engrave import VIEWS, export_pdf, glyph_script, page_size, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
@@ -59,6 +61,7 @@ MAX_PDF_PAGES = 40
 LONGEST_PDF_PAGE = 5000
 PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
+DRAWINGS_KEPT = 4  # A long score's drawing is a few megabytes, so only the last few are kept.
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
 OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
@@ -172,6 +175,7 @@ class NoteEdit(BaseModel):
     steps: int = 0
     actual: int = 3  # How many notes a tuplet holds.
     interval: int = 0  # A third is 3. Below the note if it's negative.
+    string: int | None = None  # Which string plays it, numbered from 1 for the highest.
 
 
 class GroupEdit(BaseModel):
@@ -188,6 +192,7 @@ class MarkEdit(BaseModel):
     unit: str = "quarter"
     dots: int = 0
     on: bool = True
+    number: int = 0  # A string, or a position, by its number.
 
 
 class TransposeEdit(BaseModel):
@@ -229,6 +234,9 @@ class CopiedEvent(BaseModel):
     dynamic: str | None = None
     slur: list[int] = []
     transposition: tuple[int, int] | None = None  # How far the copied part sounds from how it's written.
+    techniques: list[dict] = []  # Each note's fingering, pluck, string number, bend, harmonic and dead note.
+    strings: list[int | None] = []  # Each note's string on a guitar's tablature.
+    joins: list[tuple[int, str]] = []  # Hammer-ons and the like to a later copied note: its place and the join.
 
 
 class Paste(BaseModel):
@@ -302,6 +310,16 @@ class PageLayout(BaseModel):
 
 class ViewChoice(BaseModel):
     view: str  # "page", or "horizontal" or "vertical" for MuseScore's continuous views.
+
+
+class StringsEdit(BaseModel):
+    """A fretted instrument's tuning, capo and tablature. Whatever is left out stays as it is."""
+
+    part: int = 0  # Counted from the top.
+    tuning: str | None = None  # A tuning's name, as "standard", "dropD" or "DADGAD".
+    strings: list[str] | None = None  # Or each string's sound, from the lowest string up, as ["D2", "A2", ...].
+    capo: int | None = None
+    tab: bool | None = None  # Show a tablature staff linked under the standard staff.
 
 
 class MixerChannel(BaseModel):
@@ -379,11 +397,13 @@ def undone(folder: Path) -> list[Path]:
     return sorted((folder / "undone").glob("version_*.musicxml"), key=version_number)
 
 
-def save_version(folder: Path, root: ET.Element) -> None:
-    """Save the next version. A new edit starts a new future, so anything undone is dropped."""
+def save_version(folder: Path, root: ET.Element) -> str:
+    """Save the next version, and return it as it was written. A new edit starts a new future, so anything undone is dropped."""
     number = version_number(versions(folder)[-1]) + 1 if versions(folder) else 0
-    write_whole(folder / f"version_{number:04d}.musicxml", to_text(root))
+    text = to_text(root)
+    write_whole(folder / f"version_{number:04d}.musicxml", text)
     shutil.rmtree(folder / "undone", ignore_errors=True)
+    return text
 
 
 def pdf_to_images(path: Path) -> tuple[list[Path], str]:
@@ -520,11 +540,14 @@ def open_score_file(data: bytes, suffix: str) -> dict:
     """Open a score written elsewhere. It's kept like one written here, with no photo behind it."""
     try:
         root = read_score_file(data, suffix)
+        technique.keep_cross_staff(root)  # A note drawn on the other staff stays in its own staff's voice.
         fit_divisions(root)
         edit.ensure_note_ids(root)
+        fretted.sync(root)  # A TAB staff from elsewhere is linked to its standard staff, keeping its frets.
         marks.ensure_mark_ids(root)
         structure.ensure_measure_ids(root)
         layout.keep_imported(root)  # On the page its file sets out, as MuseScore opens it.
+        diagrams.keep_imported(root)  # With its chord diagrams, if it has them.
         playback(root)
         render_pages(to_text(root))
     except (ValueError, TypeError, AttributeError, ZeroDivisionError) as error:
@@ -581,8 +604,47 @@ def view_of(folder: Path) -> str:
     return found if found in VIEWS else "page"
 
 
-def describe(folder: Path, status: dict) -> dict:
-    root = current_root(folder)
+@functools.lru_cache(maxsize=DRAWINGS_KEPT)
+def drawn_pages(musicxml: str, view: str) -> tuple[str, ...]:
+    """Draw a score's pages, keeping the last few drawings made.
+
+    Opening a score again, undoing and redoing, switching a view back, and the library's picture of
+    the score being edited each ask for a drawing that has just been made, and drawing takes longer
+    than everything else an edit does put together.
+    """
+    return tuple(render_pages(musicxml, view=view))
+
+
+def note_details(root: ET.Element) -> dict[str, list]:
+    """Say what each note and rest is, by its id, for the inspector to name it as it's shown.
+
+    A note has its step, alteration and octave, then its written type and dots; a rest has no pitch.
+    A note the score says something about how to play has a sixth item: its string and fret on a
+    guitar's tablature, its finger, string number and the rest (see technique.how_played), which the
+    inspector shows and the fretboard and fingerboard place it by.
+    Reading them from the score is far quicker than having the engraver write them into the pages.
+    """
+    played = technique.how_played(root)
+    found = {}
+    for note in root.iter("note"):
+        if not note.get("id"):
+            continue
+        pitch = note.find("pitch")
+        named = [pitch.findtext("step") or "", round(float(pitch.findtext("alter") or 0)), int(pitch.findtext("octave") or 0)] if pitch is not None else ["", 0, 0]
+        found[note.get("id")] = [*named, note.findtext("type") or "", len(note.findall("dot"))]
+        if note.get("id") in played:
+            found[note.get("id")].append(played[note.get("id")])
+    return found
+
+
+def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
+    """Say everything the page shows of a score.
+
+    An edit hands over the version it has just saved, so it isn't written out again to be drawn:
+    with a long score that took as long as a twentieth of the reply.
+    """
+    root = ET.fromstring(saved) if saved is not None else current_root(folder)
+    text = saved
     edit.ensure_note_ids(root)
     marks.ensure_mark_ids(root)
     shown = concert.shown(root)  # The same score at concert pitch, if it's shown that way.
@@ -599,7 +661,7 @@ def describe(folder: Path, status: dict) -> dict:
             "page": found["page"] if found else None,
         })
     view = view_of(folder)
-    pages = render_pages(to_text(shown), view=view)
+    pages = list(drawn_pages(text if text is not None and shown is root else to_text(shown), view))
     return status | {
         "chords": chords,
         "canUndo": len(versions(folder)) > 1,
@@ -621,6 +683,13 @@ def describe(folder: Path, status: dict) -> dict:
         "timeline": timeline(shown),
         "mixer": mixer_of(folder, root),
         "transposing": concert.is_transposing(root),
+        "notes": note_details(shown),
+        "fretted": [board.describe() if board is not None else None for board in fretted.boards(root)],
+        "strings": [list(technique.string_names(root, part)) or None for part in root.findall("part")],
+        # How far each part's first bar sounds from how it's written, known before playback is fetched.
+        "transpositions": [found[0].semitones if (found := concert.transpositions(part)) else 0 for part in root.findall("part")],
+        "fretProblems": fretted.problems(root),
+        "diagrams": diagrams.shown(root),
     } | structure.title_of(root)
 
 
@@ -642,6 +711,7 @@ def create_blank_score(body: BlankScore) -> dict:
     except edit.EditError as error:
         raise HTTPException(422, str(error)) from error
     edit.ensure_note_ids(root)
+    fretted.sync(root)
     marks.ensure_mark_ids(root)
     score_id = uuid.uuid4().hex
     folder = JOB_DIR / score_id
@@ -715,8 +785,12 @@ def mark_checked(score_id: str, body: CheckedMark) -> dict:
     return describe(folder, read_status(folder))
 
 
-def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None]) -> dict:
-    """Run one edit and save it. Anything the edit returns is passed on to the page."""
+def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None], then: Callable[[ET.Element, dict], None] | None = None) -> dict:
+    """Run one edit and save it. Anything the edit returns is passed on to the page.
+
+    `then` finishes the edit once the TAB staves have caught up with it, as written for the player
+    whatever is shown, and is given what the edit returned to add to.
+    """
     folder = job_folder(score_id)
     with edit_lock:
         root = current_root(folder)
@@ -730,8 +804,14 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None])
             raise HTTPException(422, str(error)) from error
         edit.ensure_note_ids(root)
         marks.ensure_mark_ids(root)
-        save_version(folder, root)
-        return describe(folder, read_status(folder)) | (extra or {})
+        fretted.sync(root)  # Every TAB staff shows its standard staff's notes as they now are.
+        extra = extra if isinstance(extra, dict) else {}
+        if then is not None:
+            then(root, extra)
+            marks.ensure_mark_ids(root)
+            fretted.sync(root)
+        text = save_version(folder, root)
+        return describe(folder, read_status(folder), text) | extra
 
 
 @app.post("/api/scores/{score_id}/notes/{note_id}")
@@ -768,10 +848,35 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "tie": lambda root: edit.toggle_tie(root, note_id),
         "close": lambda root: {"cursor": edit.close_gap(root, note_id)},
         "insert": lambda root: {"cursor": edit.insert_rest(root, note_id, body.type, body.dots)},
+        "string": lambda root: fretted.choose_string(root, note_id, body.string or 0),
+        "crossUp": lambda root: technique.cross_staff(root, note_id, -1),
+        "crossDown": lambda root: technique.cross_staff(root, note_id, 1),
     }
     if body.action not in actions:
         raise HTTPException(422, "Unknown note action")
-    return apply_edit(score_id, actions[body.action])
+    on_string = body.string if body.action in ("write", "stack") and body.string else None
+    return apply_edit(score_id, actions[body.action], (lambda root, extra: play_on_string(root, extra, on_string)) if on_string else None)
+
+
+def play_on_string(root: ET.Element, extra: dict, string: int) -> None:
+    """Keep the string a note was played on, on the fretboard or the fingerboard below the score.
+
+    A guitar with tablature plays it there, and a bowed instrument gets the string's number over
+    it. A guitar without tablature has nowhere to keep it. Should the string be busy, the note keeps
+    the one chosen for it, and the page is told why.
+    """
+    note_id = extra.get("written")
+    if not note_id:
+        return
+    part, _ = edit.context_of(root, edit.find_note(root, note_id))
+    board = fretted.boards(root)[root.findall("part").index(part)]
+    try:
+        if board is not None and board.tab:
+            fretted.choose_string(root, note_id, string)
+        elif board is None and technique.family_of(root, part) == technique.BOWED:
+            technique.set_string_number(root, [note_id], string)
+    except edit.EditError as error:
+        extra["message"] = str(error)
 
 
 GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {
@@ -790,6 +895,8 @@ GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {
     "clear": edit.clear_marks,
     "respell": edit.respell_note,
     "flip": edit.flip_stem,
+    "crossUp": lambda root, note: technique.cross_staff(root, note, -1),
+    "crossDown": lambda root, note: technique.cross_staff(root, note, 1),
 }
 
 
@@ -804,8 +911,10 @@ def change_group(score_id: str, body: GroupEdit) -> dict:
     def change(root: ET.Element) -> None:
         done = 0
         with indexed(root):  # Every chosen note is looked up, so they are found in one pass, not one search each.
+            # A note and its fret number on a TAB staff are one note, and moved once.
+            chosen = list(dict.fromkeys(edit.own_ids(root, body.notes)))
             # Respelling a note respells the notes tied to it, so a second one of those would undo it.
-            chosen = edit.one_note_per_tie(root, body.notes) if body.action == "respell" else body.notes
+            chosen = edit.one_note_per_tie(root, chosen) if body.action == "respell" else chosen
             for note_id in chosen:
                 try:
                     GROUP_ACTIONS[body.action](root, note_id)
@@ -839,6 +948,20 @@ MARK_ACTIONS: dict[str, Callable[[ET.Element, MarkEdit], dict | None]] = {
     "grace": lambda root, body: {"written": marks.add_grace(root, first_and_last(body)[0], body.on)},
     "remove": lambda root, body: marks.remove_placed(root, body.id or ""),
     "label": lambda root, body: marks.set_label(root, body.id or "", body.text),
+    # How guitarists, string players and pianists play: see docs/instrument-api.md.
+    "fingering": lambda root, body: technique.set_fingering(root, body.notes, body.text),
+    "pluck": lambda root, body: technique.set_pluck(root, body.notes, body.text or body.name),
+    "stringNumber": lambda root, body: technique.set_string_number(root, body.notes, body.number),
+    "bend": lambda root, body: technique.toggle_bend(root, body.notes, body.name),
+    "harmonic": lambda root, body: technique.toggle_harmonic(root, body.notes, body.name),
+    "deadNote": lambda root, body: technique.toggle_dead_note(root, body.notes),
+    "join": lambda root, body: technique.toggle_pair(root, *first_and_last(body), body.name),
+    "vibrato": lambda root, body: technique.toggle_vibrato(root, *first_and_last(body)),
+    "line": lambda root, body: technique.toggle_named_line(root, *first_and_last(body), body.name),
+    "sul": lambda root, body: technique.toggle_sul(root, *first_and_last(body), body.text or body.name),
+    "pizzicato": lambda root, body: technique.set_pizzicato(root, first_and_last(body)[0], body.on),
+    "position": lambda root, body: technique.set_position(root, first_and_last(body)[0], body.number),
+    "hand": lambda root, body: technique.toggle_hand(root, body.notes, body.name),
 }
 
 
@@ -847,6 +970,31 @@ def change_marks(score_id: str, body: MarkEdit) -> dict:
     if body.action not in MARK_ACTIONS:
         raise HTTPException(422, "Unknown mark")
     return apply_edit(score_id, lambda root: MARK_ACTIONS[body.action](root, body))
+
+
+@app.post("/api/scores/{score_id}/strings")
+def change_strings(score_id: str, body: StringsEdit) -> dict:
+    """Tune a fretted instrument, move its capo, or show or hide its tablature. The notes keep their sound."""
+
+    def change(root: ET.Element) -> None:
+        _, board = fretted.part_and_board(root, body.part)
+        changed = False
+        if body.tab is not None and body.tab != bool(board.tab):
+            fretted.set_tab(root, body.part, body.tab)
+            changed = True
+        if body.tuning is not None or body.strings is not None or body.capo is not None:
+            fretted.set_strings(root, body.part, body.tuning, body.strings, body.capo)
+            changed = True
+        if not changed:
+            raise edit.EditError("That's how this instrument is already set up.")
+
+    return apply_edit(score_id, change)
+
+
+@app.get("/api/tunings")
+def list_tunings() -> dict:
+    """List the tunings a guitar or a bass can be given by name, each string's sound from the lowest up."""
+    return {"guitar": {name: list(strings) for name, strings in fretted.TUNINGS[structure.GUITAR_STRINGS].items()}, "bass": {name: list(strings) for name, strings in fretted.TUNINGS[structure.BASS_STRINGS].items()}, "mostCapo": fretted.MOST_CAPO}
 
 
 @app.post("/api/scores/{score_id}/transpose")
@@ -915,7 +1063,16 @@ def copy_notes(score_id: str, body: Stretch) -> dict:
 
 @app.post("/api/scores/{score_id}/paste")
 def paste_notes(score_id: str, body: Paste) -> dict:
-    return apply_edit(score_id, lambda root: marks.paste_stretch(root, body.at, [item.model_dump() for item in body.events]))
+    """Paste copied music. Guitar notes go back on their strings once the tablature has them."""
+
+    def on_strings(root: ET.Element, extra: dict) -> None:
+        for note_id, string in extra.pop("onStrings", []):
+            try:
+                fretted.choose_string(root, note_id, string)
+            except edit.EditError:
+                pass  # Pasted into an instrument whose strings can't play it so: its string is chosen for it.
+
+    return apply_edit(score_id, lambda root: marks.paste_stretch(root, body.at, [item.model_dump() for item in body.events]), on_strings)
 
 
 @app.post("/api/scores/{score_id}/lyrics/{note_id}")
@@ -1013,6 +1170,12 @@ def change_concert_pitch(score_id: str, body: ConcertPitch) -> dict:
     return apply_edit(score_id, lambda root: concert.set_concert_pitch(root, body.on))
 
 
+@app.post("/api/scores/{score_id}/diagrams")
+def change_diagrams(score_id: str, body: ConcertPitch) -> dict:
+    """Show chord diagrams over the chord symbols, or stop. It's an edit, so it can be undone."""
+    return apply_edit(score_id, lambda root: diagrams.set_shown(root, body.on))
+
+
 @app.post("/api/scores/{score_id}/layout")
 def change_layout(score_id: str, body: PageLayout) -> dict:
     """Set the page and its spacing, as Format ▸ Page settings and Style do. It's an edit, so it can be undone."""
@@ -1049,7 +1212,7 @@ def download_musicxml(score_id: str) -> Response:
     root = current_root(folder)
     if saved_mixer(folder) is not None:
         root = mixer.with_mixer(root, mixer_of(folder, root))
-    text = to_text(root)
+    text = to_text(technique.drawn_on_other_staves(diagrams.with_frames(root)))  # With its chord diagrams, and notes on the staff they're drawn on.
     headers = {"Content-Disposition": 'attachment; filename="score.musicxml"'}
     return Response(text, media_type="application/vnd.recordare.musicxml+xml", headers=headers)
 
@@ -1096,14 +1259,42 @@ def get_thumbnail(score_id: str) -> FileResponse:
         if not path.exists():
             for old in folder.glob("thumbnail_*.svg"):
                 old.unlink(missing_ok=True)
-            write_whole(path, render_pages(to_text(concert.shown(ET.parse(saved[-1]).getroot())))[0])
+            write_whole(path, drawn_pages(to_text(concert.shown(ET.parse(saved[-1]).getroot())), "page")[0])
     return FileResponse(path, media_type="image/svg+xml")
 
 
+GLYPH_CODES = re.compile(r"""["'`]((?:[EF][0-9A-F]{3})(?: [EF][0-9A-F]{3})*)["'`]""")
+
+
+@functools.lru_cache(maxsize=1)
+def window_glyphs(written: tuple[tuple[str, int], ...]) -> tuple[str, str]:
+    """Return the script of the symbols the window draws, and a tag that changes when they do.
+
+    The window names each symbol it draws by its code in its own files, so only those are sent. The
+    whole music font is 352 symbols, and was 40% of everything the window loaded, for the few dozen
+    it uses. Its files are read again whenever one changes.
+    """
+    asked = set()
+    for name, _ in written:
+        for found in GLYPH_CODES.findall((STATIC_DIR / name).read_text(encoding="utf-8")):
+            asked.update(found.split())
+    script = glyph_script(asked)
+    return script, hashlib.sha256(script.encode()).hexdigest()[:20]
+
+
 @app.get("/glyphs.js")
-def music_glyphs() -> Response:
-    """Serve the shapes the pages are engraved with, so the toolbar and palettes show the same symbols."""
-    return Response(glyph_script(), media_type="text/javascript", headers={"Cache-Control": "max-age=86400"})
+def music_glyphs(request: Request) -> Response:
+    """Serve the shapes the pages are engraved with, so the window's buttons show the same symbols.
+
+    The browser asks each time whether it has the latest, as a window updated to draw another
+    symbol can't use a script from before that has it missing.
+    """
+    written = tuple(sorted((path.name, path.stat().st_mtime_ns) for path in [*STATIC_DIR.glob("*.js"), *STATIC_DIR.glob("*.html")]))
+    script, tag = window_glyphs(written)
+    headers = {"ETag": f'"{tag}"', "Cache-Control": "no-cache"}
+    if request.headers.get("if-none-match") == headers["ETag"]:
+        return Response(status_code=304, headers=headers)
+    return Response(script, media_type="text/javascript", headers=headers)
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

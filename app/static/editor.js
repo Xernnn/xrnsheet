@@ -1,5 +1,5 @@
-// Note entry, selection and the note toolbar. This loads last and starts the page.
-// In the order the toolbar shows them, which is MuseScore's: shortest first.
+// Note entry, selection, the note input bar and the keys. This loads last and starts the page.
+// In the order the note input bar shows them: shortest first.
 const LENGTHS = [
   { key: "1", type: "64th", label: "64th note", glyph: "E1DD" },
   { key: "2", type: "32nd", label: "32nd note", glyph: "E1DB" },
@@ -19,7 +19,12 @@ const CHORD_WINDOW_MS = 40; // Keys of a MIDI keyboard pressed this close togeth
 const DRAG_START_PX = 4;
 const CURVE_REACH_PX = 6; // A slur is hair-thin, so a click this close to it counts.
 const CURVE_SAMPLE_PX = 4;
-const MARK_NAMES = { dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin", ottava: "Ottava", pedal: "Pedal" };
+const MARK_NAMES = {
+  dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin", ottava: "Ottava", pedal: "Pedal",
+  textline: "Line", fingering: "Fingering", pluck: "Right-hand finger", string: "String number", bend: "Bend", hammer: "Hammer-on", pull: "Pull-off",
+};
+// Words a mark is known by, where its kind alone doesn't say: a line's, or a position's.
+const MARK_WORDS = [[/^P\.M\.$/, "Palm mute"], [/^let ring$/, "Let ring"], [/^sul (pont\.|tasto)$/, "Sul ponticello or tasto"], [/^sul /, "String to play on"], [/ pos\.$/, "Position"], [/^(pizz\.|arco)$/, "Pizzicato or arco"], [/^[RL]\.H\.$/, "Hand"]];
 const EXPRESSIONS = { staff: "Text, e.g. solo", expression: "Expression, e.g. dolce" };
 const editor = { on: false, type: "quarter", dots: 0, voice: 1, cursor: null, last: null, trail: [], future: [] };
 let range = null; // A selected stretch: { first, last, ids }.
@@ -115,12 +120,14 @@ function updateTools() {
   $("caret").dataset.voice = editor.voice;
   const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
   const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
-  const chosen = mark ? `${MARK_NAMES[mark.kind] ?? "Mark"}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : selection;
-  $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : chosen);
+  const chosen = mark ? `${markName(mark)}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : selection;
+  const practising = currentMode() === "practice" ? "Space plays from the selected note. A and B set the loop's ends there, and Hear and Wait for choose a part or a hand." : null;
+  $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : practising ?? chosen);
   hint = "";
-  drawProperties();
+  drawInspector();
   lightKeys();
   markTimeline();
+  if (dockOpen("instrument")) $("trayNote").textContent = trayNote();
 }
 
 function staffLines(staff) {
@@ -197,9 +204,10 @@ function drawRange() {
   range.ids.forEach(id => markSelected(document.getElementById(id)));
 }
 
+// Measures that don't add up, and notes no string can play, each a chip that goes there.
 function drawBarChecks() {
   const checks = score.barChecks ?? [];
-  $("barChecks").hidden = checks.length === 0;
+  $("barChecks").hidden = checks.length === 0 && !(score.fretProblems ?? []).length;
   const chips = checks.slice(0, 40).map(check => {
     const chip = document.createElement("button");
     chip.className = "chip";
@@ -210,12 +218,17 @@ function drawBarChecks() {
     }));
     return chip;
   });
-  $("barChecks").replaceChildren(...chips);
+  $("barChecks").replaceChildren(...chips, ...fretChips());
 }
 
 function drawTitle() {
   $("scoreName").textContent = score.title || "Untitled score";
   document.title = score.title ? `${score.title} - xrnsheet` : "xrnsheet";
+  const tile = document.querySelector(`#historyList a[data-score="${scoreId}"] .name`);
+  if (tile) tile.textContent = score.title || "Untitled score";
+  // The inspector's fields, unless they're being typed in.
+  if (document.activeElement !== $("scoreTitle")) $("scoreTitle").value = score.title ?? "";
+  if (document.activeElement !== $("scoreComposer")) $("scoreComposer").value = score.composer ?? "";
 }
 
 function moveCursor(id) {
@@ -260,10 +273,13 @@ function writeAt(step) {
   });
 }
 
+// The staff and place a click lands on, while entering notes. A tablature staff's lines are strings,
+// not pitches, so a click there finds the staff above it instead.
 function placeUnder(x, y) {
   let found = null;
   let smallest = Infinity;
   for (const staff of document.querySelectorAll("#pages g.staff")) {
+    if (isTabStaff(staffNumber(staff))) continue;
     const lines = staffLines(staff);
     if (x < lines.left || x > lines.right) continue;
     const gap = Math.max(lines.top - y, y - lines.bottom, 0);
@@ -392,9 +408,15 @@ function deleteBars() {
   });
 }
 
-// A mark with words can be retyped. A jump's words are fixed, and a sign, slur or hairpin has none.
+// A mark with words can be retyped. A jump's words are fixed, a hammer-on's H and a pull-off's P
+// come with them, and a sign, slur or hairpin has none.
 function markEditable(mark) {
-  return Boolean(mark?.text) && mark.kind !== "jump" && mark.kind !== "repeat-sign";
+  return Boolean(mark?.text) && !["jump", "repeat-sign", "hammer", "pull"].includes(mark.kind);
+}
+
+function markName(mark) {
+  if (mark.kind === "text" || mark.kind === "textline") return MARK_WORDS.find(([words]) => words.test(mark.text ?? ""))?.[1] ?? MARK_NAMES[mark.kind];
+  return MARK_NAMES[mark.kind] ?? "Mark";
 }
 
 function selectMark(element) {
@@ -489,7 +511,7 @@ function contextItems() {
     ];
   }
   if (!actionTarget()) {
-    return [...menuItems("File", "Project properties…"), ...menuItems("Format", "Add/remove system breaks…"), null, ...menuItems("View", "Zoom in", "Zoom out")];
+    return [...menuItems("File", "Title and composer…"), ...menuItems("Format", "Measures per line…"), null, ...menuItems("View", "Zoom in", "Zoom out")];
   }
   return [
     ...menuItems("Edit", "Cut", "Copy", "Paste", "Delete"),
@@ -505,7 +527,7 @@ function contextItems() {
 
 // A right-click selects what it's on, unless that's already part of the selection, and opens its menu.
 function openContextMenu(event) {
-  if (publishing) return;
+  if (reading()) return;
   event.preventDefault();
   closeEditor();
   closeMenus();
@@ -878,11 +900,18 @@ function setUpMidi() {
   midiAsked = true;
   navigator.requestMIDIAccess?.().then(access => {
     const listen = input => {
-      input.onmidimessage = ({ data }) => { if ((data[0] & 0xf0) === 0x90 && data[2] > 0) midiKey(data[1]); };
+      input.onmidimessage = ({ data }) => { if ((data[0] & 0xf0) === 0x90 && data[2] > 0) midiNoteOn(data[1]); };
     };
     access.inputs.forEach(listen);
-    access.onstatechange = ({ port }) => { if (port.type === "input" && port.state === "connected") listen(port); };
-  }).catch(() => {});
+    practice.midi = access.inputs.size ? "ready" : "none";
+    drawMidiState();
+    access.onstatechange = ({ port }) => {
+      if (port.type !== "input") return;
+      if (port.state === "connected") listen(port);
+      practice.midi = [...access.inputs.values()].some(input => input.state === "connected") ? "ready" : "none";
+      drawMidiState();
+    };
+  }).catch(() => { practice.midi = "none"; drawMidiState(); });
 }
 
 // Undo and redo also put the cursor back, so entering notes can carry straight on.
@@ -942,7 +971,6 @@ function setUpToolbar() {
     button.addEventListener("click", () => markAction("toggle", { name: button.dataset.mark }));
   });
   $("restButton").addEventListener("click", () => (editor.on ? writeAt(null) : noteAction("delete")));
-  $("slurButton").addEventListener("click", () => markAction("slur"));
   $("pages").addEventListener("pointerdown", startDrag);
   window.addEventListener("pointermove", moveDrag);
   window.addEventListener("pointerup", endDrag);
@@ -956,7 +984,7 @@ function setUpToolbar() {
     stepZoom(event.deltaY < 0 ? 1 : -1);
   }, { passive: false });
   $("pages").addEventListener("dblclick", event => {
-    if (editor.on || publishing) return;
+    if (editor.on || !writing()) return;
     const mark = markAt(event);
     if (mark) openMark(mark);
     else if (event.target.closest("g.pgHead")) openProject();
@@ -968,7 +996,7 @@ function setUpToolbar() {
   $("deleteBar").addEventListener("click", deleteBars);
   $("lyricButton").addEventListener("click", startLyrics);
   // A clicked button keeps the focus, and Space would press it again instead of playing.
-  for (const id of ["noteBar", "side", "mainBar", "statusBar", "pitches", "playPopup", "speedPopup"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
+  for (const id of ["noteBar", "viewTools", "pitches", "playPopup", "speedPopup", "library"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
   $("redo").addEventListener("click", redoEdit);
   window.addEventListener("resize", drawCursor);
   $("pages").addEventListener("mousemove", event => drawGhost(event.clientX, event.clientY));
@@ -985,16 +1013,24 @@ function setUpToolbar() {
 
 const PITCH_KEYS = { "#": "sharp", "+": "sharp", "-": "flat", "=": "natural" };
 const MARK_KEYS = { S: "staccato", V: "accent", N: "tenuto", O: "marcato" };
+// A down-bow and an up-bow, side by side on the keyboard as the strokes follow each other.
+const BOW_KEYS = { "[": "downbow", "]": "upbow" };
+
+// With Ctrl, outside Write, only the keys that change nothing in the score: zoom, copy, select, move
+// about, and undo and redo, which the top bar offers everywhere.
+const LOOKING_KEYS = new Set(["=", "+", "-", "0", "c", "a", "z", "y", "arrowleft", "arrowright", "home", "end"]);
 
 function handleControlKey(event) {
   const key = event.key.toLowerCase();
+  if (event.shiftKey && key === "p") { event.preventDefault(); openCommands(); return; }
+  if (!writing() && !LOOKING_KEYS.has(key)) return;
   if (event.altKey && /^[1-4]$/.test(key)) { event.preventDefault(); chooseVoice(Number(key)); return; }
   const actions = {
     "=": () => stepZoom(1),
     "+": () => stepZoom(1),
     "-": () => stepZoom(-1),
     0: () => setZoom(100),
-    f9: () => { showSide("palettes"); searchPalettes(true); },
+    f9: () => openCommands(),
     b: appendBar,
     k: addChordHere,
     t: () => askForText(EXPRESSIONS.staff, { action: "text", name: "staff" }),
@@ -1007,12 +1043,13 @@ function handleControlKey(event) {
     v: pasteHere,
     a: selectEverything,
     l: startLyrics,
+    f: askForFingers,
     3: () => toggleTuplet(3),
     5: () => toggleTuplet(5),
     6: () => toggleTuplet(6),
     7: () => toggleTuplet(7),
-    arrowup: () => noteAction("octaveUp"),
-    arrowdown: () => noteAction("octaveDown"),
+    arrowup: () => (event.shiftKey ? crossStaff("crossUp") : noteAction("octaveUp")),
+    arrowdown: () => (event.shiftKey ? crossStaff("crossDown") : noteAction("octaveDown")),
     arrowleft: () => moveByMeasure(-1, event.shiftKey),
     arrowright: () => moveByMeasure(1, event.shiftKey),
     home: () => moveToEnd(false, event.shiftKey),
@@ -1023,7 +1060,22 @@ function handleControlKey(event) {
   if (actions[key]) { event.preventDefault(); actions[key](); }
 }
 
-const PANEL_KEYS = { F9: "palettes", F7: "instruments", F8: "properties" };
+// F8 and F9 show the inspector on the selection, where the marks are, and F7 on the score, with its instruments.
+const INSPECTOR_KEYS = { F7: "score", F8: "selection", F9: "selection" };
+const MODE_KEYS = { KeyR: "read", KeyW: "write", KeyP: "practice" };
+
+// Practice keeps the keys for playing and finding a place, and A and B set the loop's ends.
+function practiceKey(event) {
+  const key = event.key;
+  const handled = () => event.preventDefault();
+  if (key === " ") { handled(); togglePlaying(); return; }
+  if (key === "Escape") { closeEditor(); select(null); return; }
+  if (key === "ArrowLeft" || key === "ArrowRight") { handled(); moveAlong(key === "ArrowLeft" ? -1 : 1, event.shiftKey); return; }
+  if (key === "a" || key === "A") { handled(); setLoopEnd("first"); return; }
+  if (key === "b" || key === "B") { handled(); setLoopEnd("last"); return; }
+  if (key === "n" || key === "N") { handled(); setMode("write"); toggleInput(); return; }
+  if (key === "/") { handled(); openCommands(); }
+}
 
 document.addEventListener("keydown", event => {
   const key = event.key;
@@ -1034,22 +1086,32 @@ document.addEventListener("keydown", event => {
   // work, and so does Space on a fader, which has no use for it.
   const control = typing && event.target.tagName === "INPUT" && ["range", "checkbox"].includes(event.target.type);
   const passed = control && (/^F\d+$/.test(key) || (key === " " && event.target.type === "range"));
-  if ((typing && !passed) || $("workspace").hidden || publishing || document.querySelector("dialog[open]")) return;
-  if (event.ctrlKey || event.metaKey) { handleControlKey(event); return; }
+  if ((typing && !passed) || document.querySelector("dialog[open]")) return;
   const handled = () => event.preventDefault();
+  // The command palette and the library are there with or without a score.
+  if ((event.ctrlKey || event.metaKey) && event.shiftKey && key.toLowerCase() === "p") { handled(); openCommands(); return; }
+  if (key === "F6") { handled(); toggleLibrary(); return; }
+  if ($("workspace").hidden) {
+    if (key === "/" && !event.ctrlKey) { handled(); openCommands(); }
+    return;
+  }
+  if (event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey && MODE_KEYS[event.code]) { handled(); setMode(MODE_KEYS[event.code]); return; }
+  if (reading() && !event.ctrlKey && !event.metaKey && !event.altKey && readingKey(event)) return;
+  if (event.ctrlKey || event.metaKey) { handleControlKey(event); return; }
   // A button someone has tabbed to is pressed by Space, so it mustn't also start playing.
   if (key === " " && event.target.tagName === "BUTTON") return;
-  if (PANEL_KEYS[key]) { handled(); toggleSide(PANEL_KEYS[key]); return; }
+  if (INSPECTOR_KEYS[key]) { handled(); toggleInspector(INSPECTOR_KEYS[key]); return; }
   if (key === "F10") { handled(); toggleDock("mixer"); return; }
   if (key === "F12") { handled(); toggleDock("timeline"); return; }
-  if ((key === "p" || key === "P") && !event.shiftKey) { handled(); toggleDock("piano"); return; }
+  if ((key === "p" || key === "P") && !event.shiftKey && !event.altKey) { handled(); toggleDock("instrument"); return; }
+  if (!writing()) { if (!event.altKey) practiceKey(event); return; }
   if (key === "Insert") { handled(); barAction("insert"); return; }
   if (event.altKey && event.shiftKey && key.toLowerCase() === "t") { handled(); askForTempo(); return; }
   if (event.altKey && event.shiftKey && key === "ArrowUp") { handled(); noteAction("up"); return; }
   if (event.altKey && event.shiftKey && key === "ArrowDown") { handled(); noteAction("down"); return; }
   if (event.altKey && /^[2-9]$/.test(key)) { handled(); noteAction("interval", { interval: Number(key) }); return; }
   if (event.altKey) return;
-  if (key === "i" || key === "I") { handled(); showSide("instruments"); openAddPart(); return; }
+  if (key === "i" || key === "I") { handled(); showInspector(true, "score"); openAddPart(); return; }
 
   if (key === "Escape") {
     closeEditor();
@@ -1062,10 +1124,12 @@ document.addEventListener("keydown", event => {
   }
   if (key === " ") { handled(); togglePlaying(); return; }
   if (MARK_KEYS[key]) { handled(); markAction("toggle", { name: MARK_KEYS[key] }); return; }
+  if (BOW_KEYS[key]) { handled(); markAction("toggle", { name: BOW_KEYS[key] }); return; }
   if (key === "s") { handled(); markAction("slur"); return; }
   if (key === "<") { handled(); markAction("hairpin", { name: "crescendo" }); return; }
   if (key === ">") { handled(); markAction("hairpin", { name: "diminuendo" }); return; }
-  if (key === "/") { handled(); addGrace(); return; }
+  // A grace note goes before the chosen note. With none chosen, / finds a command instead.
+  if (key === "/") { handled(); if (actionTarget()) addGrace(); else openCommands(); return; }
   if (key === "r") { handled(); repeatSelection(); return; }
   if (key === "j") { handled(); noteAction("respell"); return; }
   if (key === "x") { handled(); noteAction("flip"); return; }
@@ -1099,6 +1163,12 @@ setUpPage();
 setUpShell();
 setUpPlayback();
 setUpDock();
+setUpInstruments();
+setUpInspector();
+setUpPractice();
+setUpTechnique();
 setUpToolbar();
+setUpWorkspace();
 updateTools();
-if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); } else drawHistory();
+if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); }
+drawHistory();
