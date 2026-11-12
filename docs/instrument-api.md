@@ -50,6 +50,21 @@ copy's rests aren't drawn and aren't clickable.
 
 Notes on a TAB staff are never played: playback and MIDI only sound the standard staff.
 
+**Tablature on its own** is a part of one staff, a TAB staff that is the music itself:
+`guitar-tab-only` ("Guitar, tablature only") and `bass-guitar-tab-only` in `GET /api/instruments`.
+Its notes carry their own `<string>` and `<fret>`, it's played, and it's drawn with its rhythm:
+stems, beams and rests, which have their notes' ids in the drawing (`<g id="note7" class="rest">`) as
+on any other staff. `fretted` says `"tab": true, "tabStaff": 1`, and `fretProblems` lists its notes
+no string can play. `{"tab": false}` on `/strings` turns it into a standard staff in the
+instrument's own clef, each note keeping its string (below).
+
+**A guitar without tablature** keeps a string chosen for a note on the note itself, as a
+`<technical>` holding its `<string>` and `<fret>` (a `<string>` with no `<fret>` beside it is a
+circled string number, a mark). It isn't drawn, but `notes` gives it as `{"string": 2, "fret": 5}`
+as for a guitar with tablature. A new pitch forgets it, a new tuning or capo moves its fret while
+the string can still play the note, tablature turned on plays the note there, and tablature taken
+away leaves each note's string on the note.
+
 New instruments for the chooser (`GET /api/instruments`), each with `"family": "Strings - Plucked"`:
 `guitar-tab` ("Guitar + tablature"), `acoustic-guitar-tab`, `electric-guitar-tab` and
 `bass-guitar-tab` (four strings, E1 A1 D2 G2). The plain `guitar`, `bass-guitar` and the rest are
@@ -90,14 +105,26 @@ The named tunings, each string from the lowest up:
 Plays the note on that string (1 is the highest), and its fret follows. Notes tied to it move with
 it. The choice holds until the note's pitch changes. Refused with the reason when the string can't
 play the note ("String 1 can't play C4: the lowest it plays is E4."), when it would be past the last
-fret, when another note sounding at that moment is on that string, or when the instrument has no
-tablature yet.
+fret, or when another note sounding at that moment is on that string. A guitar without tablature
+keeps it on the note (above).
 
 A note written or stacked (`"action": "write"` or `"stack"`) can carry `"string": 2`, as a fret
-clicked on the fretboard does. On a guitar with tablature the note is played on that string in the
-same edit, so one undo takes both back; on a bowed instrument it gets that string number. If the
-string is busy the note is still written, on a string of its own, and the reply's `message` says
-why. A guitar without tablature has nowhere to keep it.
+clicked on the fretboard does. On a guitar the note is played on that string in the same edit, so
+one undo takes both back; on a bowed instrument it gets that string number. If the string is busy
+the note is still written, on a string of its own, and the reply's `message` says why.
+
+### A fret typed on the tablature: `POST /api/scores/{id}/notes/{note_id}`
+
+```json
+{"action": "fret", "fret": 7}
+```
+
+Makes the note the sound of that fret (counted from the capo) on the string it's played on now, or
+on `"string": 3` if one is given, and plays it there: the standard staff follows, spelled as the key
+spells the sound, and the notes tied to it change with it. `note_id` is the fret number's `-tab` id
+or a note of tablature on its own. Refused with the reason for a rest, a fret past the
+instrument's last, or a note no string plays yet. The page types two-digit frets itself, waiting a
+moment after a first digit that could begin one.
 
 Strings are otherwise chosen automatically for every new or changed note: a string that's free at
 that moment, near where the hand already is, open strings while the hand is low on the neck, and

@@ -3331,6 +3331,121 @@ def test_techniques_copied_and_the_capo(page, base: str, shots: Path | None, cre
     page.keyboard.press("Escape")
 
 
+def tab_point(page, event_id: str, string: int) -> tuple[float, float]:
+    """Where a string of the tablature is, at a note or rest of the staff it's linked under."""
+    return tuple(page.evaluate("""([id, string]) => {
+        const element = document.getElementById(id);
+        element.scrollIntoView({ block: 'center' });
+        const lines = stringLines(tabStaffFor(element));
+        const box = headBox(element);
+        return [box.left + box.width / 2, lines.top + (string - 1) * lines.gap];
+    }""", [event_id, string]))
+
+
+def test_tablature_editing(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """Fret numbers are clicked, retyped and moved to other strings; notes are written on the tablature itself."""
+    score_id = open_blank(page, base, created, bars=2, staff="guitar-tab")
+    page.keyboard.type("ec", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    first, second = [note.get("id") for note in own_notes(saved_score(base, score_id))]
+    click_on(page, page.locator(f"[id='{first}-tab']"))
+    settle(page)
+    check("a fret number on the tablature is selected by a click", page.evaluate("() => selected") == f"{first}-tab" and page.locator(f"[id='{first}-tab'].selected").count() == 1)
+    check("and the inspector says how to change it", "Type a fret number" in page.inner_text("#stringInfo"), page.inner_text("#stringInfo"))
+    page.keyboard.press("5")
+    page.wait_for_timeout(800)
+    settle(page)
+    root = saved_score(base, score_id)
+    check("a fret typed on it plays the note there, and the staff above follows", (own_notes(root)[0].findtext("pitch/step"), string_and_fret(root, first)) == ("A", ("1", "5")), (own_notes(root)[0].findtext("pitch/step"), string_and_fret(root, first)))
+    click_on(page, page.locator(f"[id='{first}-tab']"))
+    settle(page)
+    page.keyboard.type("12", delay=60)
+    page.wait_for_timeout(800)
+    settle(page)
+    root = saved_score(base, score_id)
+    check("two digits typed together are one fret", (own_notes(root)[0].findtext("pitch/octave"), string_and_fret(root, first)) == ("5", ("1", "12")), string_and_fret(root, first))
+    press(page, "Control+z")
+    check("and one undo", string_and_fret(saved_score(base, score_id), first) == ("1", "5"))
+    click_on(page, page.locator(f"[id='{first}-tab']"))
+    settle(page)
+    press(page, "Control+ArrowDown")
+    root = saved_score(base, score_id)
+    check("Ctrl+down moves a fret number to the string below, keeping its sound", (own_notes(root)[0].findtext("pitch/step"), string_and_fret(root, first)) == ("A", ("2", "10")), string_and_fret(root, first))
+    click_on(page, page.locator(f"[id='{first}-tab']"))
+    settle(page)
+    page.keyboard.press("Shift+Digit6")
+    settle(page)
+    check("Shift and a digit choose its length, as the digits are frets", own_notes(saved_score(base, score_id))[0].findtext("type") == "half")
+    press(page, "Control+z")
+
+    # Writing on the tablature: a click on a string writes it open, and a digit the next fret on that string.
+    page.keyboard.press("Escape")
+    rest = next(note.get("id") for note in saved_score(base, score_id).find("part").findall("measure")[1].iter("note") if (note.findtext("staff") or "1") == "1")
+    page.keyboard.press("n")
+    x, y = tab_point(page, rest, 3)
+    page.mouse.move(x, y)
+    check("the ghost on the tablature is a box on a string", page.locator("#ghost.onTab:not([hidden])").count() == 1)
+    page.mouse.click(x, y)
+    settle(page)
+    check("the cursor is a box on the string clicked", page.locator("#caret.onTab:not([hidden])").count() == 1 and page.evaluate("() => editor.string") == 3)
+    page.keyboard.press("2")
+    settle(page)
+    page.keyboard.press("ArrowUp")
+    page.keyboard.press("3")
+    settle(page)
+    root = saved_score(base, score_id)
+    written = [(note.findtext("pitch/step"), note.findtext("pitch/octave"), string_and_fret(root, note.get("id"))) for note in own_notes(root)[2:]]
+    check("a click writes the open string, and digits frets on the cursor's string", written == [("G", "3", ("3", "0")), ("A", "3", ("3", "2")), ("D", "4", ("2", "3"))], written)
+    if shots:
+        page.screenshot(path=str(shots / "tab-editing.png"))
+    page.keyboard.press("Escape")
+    settle(page)
+
+    # A guitar without tablature keeps a string chosen on the fretboard or in the inspector.
+    plain = open_blank(page, base, created, bars=1, staff="guitar")
+    show_instrument(page)
+    page.locator('#fretboard .spot[data-string="2"][data-stop="5"]').click()
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    note = own_notes(saved_score(base, plain))[0].get("id")
+    page.wait_for_function("id => playState.data?.events?.[id]", arg=note)
+    click_on(page, page.locator(f"[id='{note}']"))
+    settle(page)
+    check("a guitar without tablature keeps the string a note was played on", spots(page, "fretboard", "chosen") == [[2, 5]] and page.inner_text("#stringInfo") == "String 2, fret 5", (spots(page, "fretboard", "chosen"), page.inner_text("#stringInfo")))
+    page.click('#stringButtons [data-string="3"]')
+    settle(page)
+    check("and another can be chosen in the inspector", spots(page, "fretboard", "chosen") == [[3, 9]])
+
+    # Tablature on its own, chosen for a new score, with its rhythm drawn on it.
+    alone = open_blank(page, base, created, bars=2, staff="guitar-tab-only")
+    data = score_data(base, alone)
+    check("tablature on its own is a guitar of one staff", data["partStaves"] == [1] and data["fretted"][0]["tabStaff"] == 1)
+    check("its rests are drawn", page.locator("#pages g.mRest, #pages g.rest").count() >= 2)
+    page.keyboard.press("Shift+Digit4")
+    page.keyboard.type("eg", delay=0)
+    page.keyboard.press("Shift+Digit5")
+    page.keyboard.press("7")
+    settle(page)
+    root = saved_score(base, alone)
+    notes = [(note.findtext("pitch/step"), note.findtext("type"), fretted_place(note)) for note in own_notes(root)]
+    check("letters and frets are written on it, at the length chosen", notes == [("E", "eighth", ("1", "0")), ("G", "eighth", ("1", "3")), ("B", "quarter", ("1", "7"))], notes)
+    check("with stems and beams", page.locator("#pages g.stem").count() >= 3 and page.locator("#pages g.beam").count() >= 1)
+    if shots:
+        page.screenshot(path=str(shots / "tab-only.png"))
+    page.keyboard.press("Escape")
+    settle(page)
+
+
+def fretted_place(note: ET.Element) -> tuple | None:
+    for technical in note.iterfind("notations/technical"):
+        if technical.find("fret") is not None:
+            return (technical.findtext("string"), technical.findtext("fret"))
+    return None
+
+
 def test_practice(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()
     page.add_init_script("""
@@ -3583,6 +3698,7 @@ def main() -> None:
             test_every_technique_mark(page, base, arguments.shots, created)
             test_techniques_at_concert_pitch(page, base, arguments.shots, created)
             test_techniques_copied_and_the_capo(page, base, arguments.shots, created)
+            test_tablature_editing(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)

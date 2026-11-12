@@ -162,15 +162,20 @@ def boards_of(root: ET.Element, part: ET.Element) -> Fretboard | None:
 
 
 def group_end(svg: str, start: int) -> int:
-    """Return where the <g> opening at this point closes, just after its </g>."""
+    """Return where the <g> opening at this point closes, just after its </g>.
+
+    Verovio writes some empty groups as one tag, <g ... />, which opens nothing.
+    """
     depth, position = 0, start
     while True:
         opening, closing = svg.find("<g", position), svg.find("</g>", position)
         if closing < 0:
             return len(svg)
         if 0 <= opening < closing:
-            depth += 1
-            position = opening + 2
+            tag_end = svg.find(">", opening)
+            if svg[tag_end - 1] != "/":
+                depth += 1
+            position = tag_end + 1
         else:
             depth -= 1
             position = closing + 4
@@ -307,10 +312,55 @@ def name_capo(svg: str, root: ET.Element) -> str:
     return DRAWN_DIRECTION.sub(lambda found: found.group(0).replace('class="dir"', 'class="xrn-capo"', 1) if found.group(1) in wanted else found.group(0), svg, count=len(wanted))
 
 
+REST_GROUP = re.compile(r'<g id="([^"]+)" class="(?:rest|mRest)"')
+STAFF_GROUP = re.compile(r'<g id="[^"]+" class="staff">')
+
+
+def name_tab_rests(svg: str, root: ET.Element) -> str:
+    """Give the rests of tablature on its own the score's ids, as Verovio makes up its own there.
+
+    A click on one, or the cursor on one while entering notes, then finds it as it finds any rest.
+    They're matched in the order each measure draws them, and left as they are where the counts differ.
+    """
+    alone = []
+    first = 0
+    for part, board in zip(root.findall("part"), boards(root)):
+        staves = int(part.findtext("measure/attributes/staves") or 1)
+        if board is not None and board.tab and not board.linked:
+            alone.extend((first + int(staff) - 1, part, staff) for staff in board.tab)
+        first += staves
+    if not alone:
+        return svg
+    bars = {measure.get("id"): index for index, measure in enumerate(root.find("part").findall("measure"))}
+    renamed = []
+    for match in MEASURE_GROUP.finditer(svg):
+        index = bars.get(match.group(1))
+        if index is None:
+            continue
+        end = group_end(svg, match.start())
+        staves = []
+        position = match.end()
+        while (found := STAFF_GROUP.search(svg, position, end)) is not None:
+            staves.append((found.start(), group_end(svg, found.start())))
+            position = staves[-1][1]
+        for number, part, staff in alone:
+            measures = part.findall("measure")
+            if number >= len(staves) or index >= len(measures):
+                continue
+            wanted = [note.get("id") for note in measures[index].iter("note") if note.find("rest") is not None and (note.findtext("staff") or "1") == staff and note.get("print-object") != "no" and note.get("id")]
+            drawn = list(REST_GROUP.finditer(svg, *staves[number]))
+            if len(drawn) == len(wanted):
+                renamed.extend(zip(drawn, wanted))
+    for found, note_id in sorted(renamed, key=lambda item: item[0].start(), reverse=True):
+        svg = svg[: found.start(1)] + escape(note_id) + svg[found.end(1):]
+    return svg
+
+
 def decorate(svg: str, root: ET.Element, space: float) -> str:
     """Draw a page's guitar and string marks that Verovio left out. `space` is a staff space in the drawing's units."""
     if "<g" not in svg:
         return svg
+    svg = name_tab_rests(svg, root)
     svg = name_capo(svg, root)
     svg, texts = tag_fingerings(svg, root)
     places = drawn_notes(svg)

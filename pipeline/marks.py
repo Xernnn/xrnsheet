@@ -727,7 +727,7 @@ def relabel_note_mark(root: ET.Element, mark_id: str, text: str) -> bool:
 
                 part = next(found for found in root.findall("part") if any(member is note for member in found.iter("note")))
                 board = fretted.boards(root)[root.findall("part").index(part)]
-                if board is not None and board.tab:
+                if board is not None:
                     fretted.choose_string(root, note.get("id"), int(text))
         else:
             raise EditError("This mark can only be removed.")
@@ -837,7 +837,7 @@ def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
             item["pitches"] = [pitch for index, pitch in enumerate(item["pitches"]) if index not in touching]
             members = [member for index, member in enumerate(spot.event.notes) if index not in touching]
             item["techniques"] = [technique.techniques_of(member) for member in members]
-            if board is not None and board.linked:
+            if board is not None:
                 carriers = [fretted.copy_of(root, start.part, board, member) for member in members]
                 item["strings"] = [fretted.string_of(carrier) if carrier is not None else None for carrier in carriers]
             # A join that stops here ends one from before, or, starting here too, is a vibrato over this note alone.

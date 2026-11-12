@@ -176,6 +176,7 @@ class NoteEdit(BaseModel):
     actual: int = 3  # How many notes a tuplet holds.
     interval: int = 0  # A third is 3. Below the note if it's negative.
     string: int | None = None  # Which string plays it, numbered from 1 for the highest.
+    fret: int | None = None  # A fret typed for it on the tablature, counted from the capo.
 
 
 class GroupEdit(BaseModel):
@@ -807,7 +808,10 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None],
         fretted.sync(root)  # Every TAB staff shows its standard staff's notes as they now are.
         extra = extra if isinstance(extra, dict) else {}
         if then is not None:
-            then(root, extra)
+            try:
+                then(root, extra)
+            except edit.EditError as error:
+                raise HTTPException(422, str(error)) from error
             marks.ensure_mark_ids(root)
             fretted.sync(root)
         text = save_version(folder, root)
@@ -849,11 +853,15 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "close": lambda root: {"cursor": edit.close_gap(root, note_id)},
         "insert": lambda root: {"cursor": edit.insert_rest(root, note_id, body.type, body.dots)},
         "string": lambda root: fretted.choose_string(root, note_id, body.string or 0),
+        "fret": lambda root: {"onString": fretted.play_at_fret(root, note_id, body.fret if body.fret is not None else -1, body.string)},
         "crossUp": lambda root: technique.cross_staff(root, note_id, -1),
         "crossDown": lambda root: technique.cross_staff(root, note_id, 1),
     }
     if body.action not in actions:
         raise HTTPException(422, "Unknown note action")
+    if body.action == "fret":
+        # The note has its new pitch once the tablature has caught up, and is then put on its string.
+        return apply_edit(score_id, actions["fret"], lambda root, extra: fretted.choose_string(root, note_id, extra.pop("onString")))
     on_string = body.string if body.action in ("write", "stack") and body.string else None
     return apply_edit(score_id, actions[body.action], (lambda root, extra: play_on_string(root, extra, on_string)) if on_string else None)
 
@@ -861,9 +869,9 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
 def play_on_string(root: ET.Element, extra: dict, string: int) -> None:
     """Keep the string a note was played on, on the fretboard or the fingerboard below the score.
 
-    A guitar with tablature plays it there, and a bowed instrument gets the string's number over
-    it. A guitar without tablature has nowhere to keep it. Should the string be busy, the note keeps
-    the one chosen for it, and the page is told why.
+    A guitar plays it there, on its tablature or, without one, kept on the note, and a bowed
+    instrument gets the string's number over it. Should the string be busy, the note keeps the
+    one chosen for it, and the page is told why.
     """
     note_id = extra.get("written")
     if not note_id:
@@ -871,7 +879,7 @@ def play_on_string(root: ET.Element, extra: dict, string: int) -> None:
     part, _ = edit.context_of(root, edit.find_note(root, note_id))
     board = fretted.boards(root)[root.findall("part").index(part)]
     try:
-        if board is not None and board.tab:
+        if board is not None:
             fretted.choose_string(root, note_id, string)
         elif board is None and technique.family_of(root, part) == technique.BOWED:
             technique.set_string_number(root, [note_id], string)

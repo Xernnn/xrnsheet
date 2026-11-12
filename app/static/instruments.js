@@ -439,14 +439,13 @@ function pressKey(midi, addToChord, where = null) {
   return where;
 }
 
-// A guitar with tablature keeps whichever string was played. Without tablature there's nowhere to
-// keep it, and its notes are shown where they're most easily played. A violin's note gets the string
-// played as its number, but only where that isn't the string it would be shown on anyway, as a
-// violinist marks only the strings that aren't the obvious ones.
+// A guitar keeps whichever string was played, on its tablature or, without one, on the note. A
+// violin's note gets the string played as its number, but only where that isn't the string it would
+// be shown on anyway, as a violinist marks only the strings that aren't the obvious ones.
 function stringToKeep(part, sounding, where) {
   if (!where?.string) return {};
   const kind = kindOfPart(part);
-  if (kind === "guitar") return score?.fretted?.[part]?.tab ? { string: where.string } : {};
+  if (kind === "guitar") return score?.fretted?.[part] ? { string: where.string } : {};
   if (kind === "violin") return fingering(neckOf(part, kind), [sounding])[0]?.string === where.string ? {} : { string: where.string };
   return {};
 }

@@ -70,9 +70,15 @@ def pitched(root: ET.Element, note_ids: list[str]) -> list[ET.Element]:
     return list(found.values())
 
 
-def technical_of(note: ET.Element) -> ET.Element:
+def holds_marks(technical: ET.Element, tag: str) -> bool:
+    """Say whether a <technical> can hold marks of this kind. A <string> beside a <fret> is where the
+    note is played (see fretted.py), not a string number to read."""
+    return tag != "string" or technical.find("fret") is None
+
+
+def technical_of(note: ET.Element, tag: str = "") -> ET.Element:
     notations = notations_of(note)
-    technical = notations.find("technical")
+    technical = next((found for found in notations.findall("technical") if holds_marks(found, tag)), None)
     if technical is None:
         technical = ET.SubElement(notations, "technical")
     return technical
@@ -81,6 +87,8 @@ def technical_of(note: ET.Element) -> ET.Element:
 def drop_technical(note: ET.Element, tag: str) -> None:
     """Take every mark of one kind out of a note, and the <technical> holding it once it's empty."""
     for technical in note.findall("notations/technical"):
+        if not holds_marks(technical, tag):
+            continue
         for found in technical.findall(tag):
             technical.remove(found)
         if len(technical) == 0:
@@ -89,7 +97,7 @@ def drop_technical(note: ET.Element, tag: str) -> None:
 
 
 def marks_of(note: ET.Element, tag: str) -> list[str]:
-    return [(found.text or "").strip() for found in note.iterfind(f"notations/technical/{tag}")]
+    return [(found.text or "").strip() for technical in note.iterfind("notations/technical") if holds_marks(technical, tag) for found in technical.findall(tag)]
 
 
 def set_text_mark(notes: list[ET.Element], tag: str, values: list[str], placements: list[str | None] | None = None) -> None:
@@ -103,7 +111,7 @@ def set_text_mark(notes: list[ET.Element], tag: str, values: list[str], placemen
         mark = element_with_text(tag, value)
         if placement:
             mark.set("placement", placement)
-        technical_of(note).append(mark)
+        technical_of(note, tag).append(mark)
 
 
 def set_fingering(root: ET.Element, note_ids: list[str], text: str) -> None:
@@ -151,8 +159,8 @@ def string_names(root: ET.Element, part: ET.Element) -> tuple[str, ...]:
 def set_string_number(root: ET.Element, note_ids: list[str], number: int) -> None:
     """Say which string plays each note, in a circle on a guitar and as a Roman numeral on a violin.
 
-    On a guitar with tablature, the tablature moves to that string too. Without a number, a guitar's
-    notes are marked with the strings its tablature has them on.
+    A guitar plays the note on that string too, on its tablature or kept on the note. Without a
+    number, a guitar's notes are marked with the strings they're played on.
     """
     notes = pitched(root, note_ids)
     values = []
@@ -163,7 +171,7 @@ def set_string_number(root: ET.Element, note_ids: list[str], number: int) -> Non
         if not strings:
             raise EditError("Only a string instrument's notes have string numbers.")
         chosen = number
-        if not chosen and board is not None and board.tab:
+        if not chosen and board is not None:
             carrier = fretted.copy_of(root, part, board, note)
             chosen = fretted.string_of(carrier) if carrier is not None else None
         if not chosen or not 1 <= chosen <= len(strings):
@@ -179,7 +187,7 @@ def set_string_number(root: ET.Element, note_ids: list[str], number: int) -> Non
         for note, value in zip(notes, values):
             part, _ = context_of(root, note)
             board = fretted.boards(root)[root.findall("part").index(part)]
-            if board is not None and board.tab:
+            if board is not None:
                 fretted.choose_string(root, note.get("id"), int(value))
 
 
@@ -613,7 +621,8 @@ def sul_lines(part: ET.Element) -> list[tuple[tuple[int, Fraction], tuple[int, F
 def how_played(root: ET.Element) -> dict[str, dict]:
     """Say how each note is played, by its id, where the score says: for the inspector and the instrument below.
 
-    A guitar's string and fret come from its tablature, counted from the capo. A string number, a
+    A guitar's string and fret come from its tablature, counted from the capo, or without one from
+    the note, where a string was chosen for it. A string number, a
     finger, a pluck, a bend, a harmonic, a dead note and a note drawn on another staff come from the
     note. A bowed instrument's notes also have the position in force and a "sul G" over them.
     """
@@ -628,21 +637,21 @@ def how_played(root: ET.Element) -> dict[str, dict]:
         for context in contexts(part):
             timeline = read_measure(context.measure, context.divisions)
             for key, line in timeline.lines.items():
-                if board is not None and key[0] in board.tab:
-                    continue
+                if board is not None and key[0] == board.linked:
+                    continue  # Fret numbers copying the staff above, which says how they're played.
                 for event in line:
                     for note in [*event.grace, *event.notes]:
                         if note.find("pitch") is None or not note.get("id"):
                             continue
                         details: dict = {}
-                        carrier = copies.get(note.get("id") + TAB_COPY)
-                        if carrier is not None and fretted.string_of(carrier) is not None:
-                            details["string"] = fretted.string_of(carrier)
-                            details["fret"] = int(carrier.findtext("notations/technical/fret") or 0)
+                        carrier = (copies.get(note.get("id") + TAB_COPY) if board.linked else note) if board is not None else None
+                        played_at = fretted.place_of(carrier) if carrier is not None else None
+                        if played_at is not None:
+                            details["string"], details["fret"] = played_at
                         for tag, name in (("fingering", "finger"), ("pluck", "pluck")):
                             if marks_of(note, tag):
                                 details[name] = marks_of(note, tag)[0]
-                        marked = fretted.string_of(note)
+                        marked = fretted.string_number(note)
                         if marked is not None:
                             details["mark"] = marked
                         bend = note.findtext("notations/technical/bend/bend-alter")

@@ -224,6 +224,8 @@ body.inputting #pages { cursor: crosshair; }
 #caret[data-voice="4"] { background: color-mix(in srgb, var(--voice4) 20%, transparent); border-left-color: var(--voice4); }
 .rangeBox { position: absolute; border: 1.5px solid var(--voice1); border-radius: 3px; background: color-mix(in srgb, var(--voice1) 7%, transparent); pointer-events: none; }
 #ghost { position: absolute; border-radius: 50%; background: var(--voice1); opacity: .45; pointer-events: none; transform: rotate(-20deg); }
+#ghost.onTab { border-radius: 3px; transform: none; }
+#caret.onTab { border-radius: 3px; border: 1.5px solid var(--voice1); }
 #lyricInput { position: absolute; z-index: 2; width: 110px; min-height: 0; padding: 2px 6px; border: 1px solid var(--voice1); background: #fff; color: #000; }
 .loopMarker { position: absolute; width: 0; border-left: 2px solid var(--playing); pointer-events: none; }
 .loopMarker::before { content: ""; position: absolute; top: 0; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }

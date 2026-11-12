@@ -46,13 +46,55 @@ function bowedStrings(part) {
   return kindOfPart(part) === "violin" ? score?.strings?.[part] ?? ["G3", "D4", "A4", "E5"] : null;
 }
 
-// Whether a staff on the page is a tablature staff, which takes no clicked notes.
+// Whether a staff on the page is a tablature staff, whose lines are strings.
 function isTabStaff(staff) {
   const part = partOfStaff(staff);
   const board = part === null ? null : frettedOf(part);
   if (!board?.tabStaff) return false;
-  const first = (score.partStaves ?? []).slice(0, part).reduce((total, count) => total + count, 0);
-  return staff - first === board.tabStaff - 1;
+  return staff - firstStaffOf(part) === board.tabStaff - 1;
+}
+
+function firstStaffOf(part) {
+  return (score?.partStaves ?? []).slice(0, part).reduce((total, count) => total + count, 0);
+}
+
+function onTab(element) {
+  return Boolean(element) && isTabStaff(staffNumber(element));
+}
+
+// The tablature a note or rest is on, or the one linked under its staff, in the same measure.
+function tabStaffFor(element) {
+  if (!element) return null;
+  if (onTab(element)) return element.closest("g.staff");
+  const part = partOfStaff(staffNumber(element));
+  const board = part === null ? null : frettedOf(part);
+  if (!board?.tabStaff) return null;
+  const staves = [...(element.closest("g.measure")?.children ?? [])].filter(child => child.classList.contains("staff"));
+  return staves[firstStaffOf(part) + board.tabStaff - 1] ?? null;
+}
+
+// The notes and rests a tablature staff's place in time is read from: its own on its own, or the
+// standard staff's it's linked under, as it doesn't draw its rests.
+function eventsBeside(tabStaff) {
+  const part = partOfStaff(staffNumber(tabStaff));
+  if ((score.partStaves?.[part] ?? 1) < 2) return [...tabStaff.querySelectorAll(EVENTS)];
+  const staves = [...tabStaff.parentElement.children].filter(child => child.classList.contains("staff"));
+  const source = staves.find(staff => partOfStaff(staffNumber(staff)) === part && !isTabStaff(staffNumber(staff)));
+  return [...(source ?? tabStaff).querySelectorAll(EVENTS)];
+}
+
+// Where each string of a tablature staff is drawn: string 1, the highest, on its top line.
+function stringLines(tabStaff) {
+  const part = partOfStaff(staffNumber(tabStaff));
+  const count = frettedOf(part)?.strings?.length ?? 6;
+  const lines = staffLines(tabStaff);
+  return { ...lines, count, part, gap: (lines.bottom - lines.top) / Math.max(count - 1, 1) };
+}
+
+// The pitch the staff shows for a fret on a string of a part's neck.
+function pitchAtFret(part, string, fret) {
+  const board = frettedOf(part);
+  return shownPitch(midiOfName(board.strings[board.strings.length - string]) + (board.capo ?? 0) + fret, part);
 }
 
 // Small pictures for the cells.
@@ -195,8 +237,8 @@ function drawStringChoice(element, part, played) {
   const buttons = $("stringButtons");
   const info = $("stringInfo");
   const note = element?.matches("g.note") && !range;
-  buttons.hidden = !board?.tab || !note;
-  if (!board?.tab) { info.textContent = "Turn tablature on to choose each note's string and fret."; return; }
+  buttons.hidden = !board || !note;
+  if (!board) { info.textContent = ""; return; }
   if (!note) { info.textContent = range ? "Select one note to choose its string." : ""; return; }
   const names = [...board.strings].reverse();
   const pitch = soundOfNote(element.id);
@@ -220,7 +262,9 @@ function drawStringChoice(element, part, played) {
     button.classList.toggle("cannot", !playable);
     button.title = playable ? `Play it on string ${index + 1}, ${letterOf(names[index])}, at fret ${fret}` : `String ${index + 1} can't play this note`;
   });
-  info.textContent = played.string ? `String ${played.string}, fret ${played.fret}${board.capo ? ` from the capo on fret ${board.capo}` : ""}` : "No string can play this note.";
+  const where = `String ${played.string}, fret ${played.fret}${board.capo ? ` from the capo on fret ${board.capo}` : ""}`;
+  const unchosen = board.tab ? "No string can play this note." : "Choose a string to keep it there. Until then the fretboard shows it where it's easiest to play.";
+  info.textContent = played.string ? `${where}${onTab(element) ? ". Type a fret number to change it" : ""}` : unchosen;
 }
 
 // What a selected note sounds, from its name as the page shows it, which is at concert pitch when

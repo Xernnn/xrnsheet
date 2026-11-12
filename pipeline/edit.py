@@ -1388,6 +1388,13 @@ def clear_marks(root: ET.Element, note_id: str) -> None:
     if notations is not None:
         for tag in ("fermata", "ornaments", "articulations", "technical", "arpeggiate"):
             for child in notations.findall(tag):
+                if tag == "technical" and child.find("fret") is not None:
+                    # The string and fret a guitar's note is played at aren't marks.
+                    marks = [mark for mark in child if mark.tag not in ("string", "fret")]
+                    for mark in marks:
+                        child.remove(mark)
+                    removed += len(marks)
+                    continue
                 notations.remove(child)
                 removed += 1
     if not removed:
