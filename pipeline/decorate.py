@@ -206,7 +206,8 @@ def tag_fingerings(svg: str, root: ET.Element) -> tuple[str, dict[str, str]]:
     for part in root.findall("part"):
         for index, measure in enumerate(part.findall("measure")):
             if index < len(top):
-                expected.setdefault(top[index], []).extend(measure.iter("fingering"))
+                # A chord diagram's dots can carry fingers too, which Verovio doesn't draw.
+                expected.setdefault(top[index], []).extend(found for note in measure.iter("note") for found in note.iter("fingering"))
     starts = [(match.start(), match.group(1)) for match in MEASURE_GROUP.finditer(svg)]
     drawn: dict[str, list[re.Match]] = {}
     for match in FING_GROUP.finditer(svg):
@@ -305,27 +306,49 @@ def harmonic_text(note: ET.Element, copy: ET.Element) -> str | None:
 
 
 CAPO_WORDS = "Capo {}"
+CAPO_LABELS = "xrn-capos"  # How many "Capo 2" words the drawing was given, kept on the score for after it's drawn.
 DRAWN_DIRECTION = re.compile(r'<g id="[^"]+" class="dir">(?:(?!</g>).)*?>(Capo \d+)</', re.S)
 
 
 def say_capo(root: ET.Element) -> None:
-    """Put "Capo 2" over the start of a guitar with a capo, as words Verovio leaves room for."""
+    """Put "Capo 2" over the start of a guitar with a capo, as words Verovio leaves room for.
+
+    The words are counted on the score, as the tablature's capo is taken out of the drawing before
+    the words are named (see name_capo).
+    """
+    said = 0
     for part, board in zip(root.findall("part"), boards(root)):
         measure = part.find("measure")
         if board is None or not board.capo or measure is None:
             continue
+        said += 1
         direction = ET.Element("direction", placement="above")
         ET.SubElement(ET.SubElement(direction, "direction-type"), "words").text = CAPO_WORDS.format(board.capo)
         if board.staves > 1:
             ET.SubElement(direction, "staff").text = board.source or "1"
         first = next((index for index, child in enumerate(measure) if child.tag == "note"), len(measure))
         measure.insert(first, direction)
+    if said:
+        root.set(CAPO_LABELS, str(said))
 
 
 def name_capo(svg: str, root: ET.Element) -> str:
-    """Name each "Capo 2" as the app's own words, so the page doesn't take it for one of the score's marks."""
-    wanted = {CAPO_WORDS.format(board.capo) for board in boards(root) if board is not None and board.capo}
-    return DRAWN_DIRECTION.sub(lambda found: found.group(0).replace('class="dir"', 'class="xrn-capo"', 1) if found.group(1) in wanted else found.group(0), svg, count=len(wanted))
+    """Name each "Capo 2" as the app's own words, so the page doesn't take it for one of the score's marks.
+
+    Every guitar with a capo has its own, and they're the first such words drawn.
+    """
+    left = int(root.get(CAPO_LABELS) or 0)
+    if not left:
+        return svg
+
+    def renamed(found: re.Match) -> str:
+        nonlocal left
+        if not left:
+            return found.group(0)
+        left -= 1
+        return found.group(0).replace('class="dir"', 'class="xrn-capo"', 1)
+
+    return DRAWN_DIRECTION.sub(renamed, svg)
 
 
 REST_GROUP = re.compile(r'<g id="([^"]+)" class="(?:rest|mRest)"')

@@ -929,3 +929,37 @@ def test_a_hammer_on_to_a_note_the_tablature_leaves_out_keeps_its_letter_on_the_
     technique.toggle_pair(root, ids[0], ids[1], "hammerOn")
     finished(root)
     assert re.search(r'class="xrn-joined"[^>]*><text [^>]*>H</text>', svg_of(root))
+
+
+def test_every_capo_is_named_as_the_apps_own_words():
+    plain, ids = score("guitar", 1, 64)
+    fretted.set_strings(plain, 0, capo=2)
+    marks.add_text(plain, ids[0], "Hello")
+    finished(plain)
+    svg = svg_of(plain)
+    assert svg.count('class="xrn-capo"') == 1 and svg.count('class="dir"') == 1, "a guitar without tablature too: only Hello is the score's"
+    two = finished(structure.blank_score(clef="guitar-tab", measures=1))
+    structure.add_part(two, "guitar-tab")
+    finished(two)
+    fretted.set_strings(two, 0, capo=2)
+    fretted.set_strings(two, 1, capo=2)
+    finished(two)
+    drawn = svg_of(two)
+    assert drawn.count('class="xrn-capo"') == 2 and 'class="dir"' not in drawn
+
+
+def test_a_chord_diagrams_fingers_leave_the_bars_fingerings_named():
+    root, ids = score("guitar-tab", 1, 64, 67)
+    technique.set_fingering(root, ids[:1], "2")
+    edit.add_chord(root, ids[0], "C")
+    finished(root)
+    harmony = next(root.iter("harmony"))
+    frame = ET.SubElement(harmony, "frame")
+    ET.SubElement(frame, "frame-strings").text = "6"
+    ET.SubElement(frame, "frame-frets").text = "4"
+    dot = ET.SubElement(frame, "frame-note")
+    ET.SubElement(dot, "string").text = "5"
+    ET.SubElement(dot, "fret").text = "3"
+    ET.SubElement(dot, "fingering").text = "3"
+    finger = next(item["id"] for item in marks.list_marks(root) if item["kind"] == "fingering")
+    assert f'data-mark="{finger}"' in svg_of(root)
