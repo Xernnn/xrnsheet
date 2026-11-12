@@ -249,6 +249,7 @@ function draw() {
   drawPracticeChoices();
   drawPageCount();
   drawCursor();
+  drawStickyStart();
   updateTools();
   refreshPosition();
 }

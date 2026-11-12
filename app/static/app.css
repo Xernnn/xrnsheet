@@ -525,3 +525,9 @@ body[data-mode="read"] #pages { gap: 16px; justify-content: center; }
 #chordShapes button { padding: 4px 5px; color: var(--ink); }
 #chordShapes button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
 #chordShapes svg { display: block; }
+
+/* The start of the line, kept in sight in the one-line view. */
+#stickyStart { position: absolute; overflow: hidden; pointer-events: none; background: var(--paper); color: var(--notes); z-index: 2; box-shadow: 6px 0 8px -6px var(--shadow); border-right: 1px solid color-mix(in srgb, var(--notes) 12%, transparent); }
+#stickyStart svg { display: block; }
+#stickyStart path, #stickyStart ellipse, #stickyStart rect, #stickyStart polygon, #stickyStart polyline { stroke: currentColor; }
+#stickyStart g.placeholder { visibility: hidden; }

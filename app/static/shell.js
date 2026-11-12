@@ -409,6 +409,7 @@ function setZoom(value) {
   if (![...choice.options].some(option => option.value === zoom)) choice.append(new Option(`${zoom}%`, zoom));
   choice.value = zoom;
   drawCursor();
+  if (score) drawStickyStart();
 }
 
 function stepZoom(by) {

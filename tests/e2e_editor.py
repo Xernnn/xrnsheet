@@ -1796,6 +1796,49 @@ def test_continuous_view(page, base: str, shots: Path | None, created: list[str]
     check("and goes back to page view", systems() > 1 and page.locator("#pages g.pgHead").count() == 1)
 
 
+def post_json(base: str, path: str, body: dict) -> dict:
+    request = urllib.request.Request(f"{base}{path}", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(request) as response:
+        return json.loads(response.read())
+
+
+def test_one_line_keeps_its_start_in_sight(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """The one-line view keeps the names, braces, clefs and keys at the left as it scrolls, as they are there."""
+    score_id = open_blank(page, base, created, bars=40, staff="piano")
+    page.keyboard.press("Escape")
+    settle(page)
+    post_json(base, f"/api/scores/{score_id}/parts", {"action": "add", "names": ["violin"]})
+    measures = saved_score(base, score_id).find("part").findall("measure")
+    bass_rest = next(note.get("id") for note in measures[2].iter("note") if note.findtext("staff") == "2")
+    post_json(base, f"/api/scores/{score_id}/bars", {"action": "clef", "note": bass_rest, "clef": "treble"})
+    post_json(base, f"/api/scores/{score_id}/bars", {"action": "key", "note": next(measures[3].iter("note")).get("id"), "fifths": -1})
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    page.click('#modeSwitch [data-mode="write"]')
+    page.select_option("#viewMode", "horizontal")
+    settle(page)
+    page.evaluate("() => { $('desk').scrollLeft = 0; }")
+    page.wait_for_timeout(100)
+    check("at the start of the line its own names and clefs are there", page.evaluate("() => $('stickyStart').hidden"))
+    page.evaluate("() => { $('desk').scrollLeft = $('desk').scrollWidth; }")
+    page.wait_for_timeout(200)
+    shown = page.evaluate("""() => {
+        const host = $('stickyStart');
+        const glyphs = selector => [...host.querySelectorAll(selector)].map(use => use.getAttribute('xlink:href').slice(1, 5));
+        return { hidden: host.hidden, left: host.getBoundingClientRect().left - $('desk').getBoundingClientRect().left,
+                 names: host.textContent.trim(), clefs: glyphs('g.clef use'), keys: glyphs('g.keySig use') };
+    }""")
+    check("scrolled along, the start of the line stays at the left", not shown["hidden"] and abs(shown["left"]) < 2 and "Violin" in shown["names"], shown)
+    check("with the clefs in force there, the left hand's changed to treble", shown["clefs"] == ["E050", "E050", "E050"], shown["clefs"])
+    check("and the key, one flat", shown["keys"].count("E260") == 3, shown["keys"])
+    if shots:
+        page.screenshot(path=str(shots / "one-line-start.png"))
+    page.evaluate("() => { $('desk').scrollLeft = 0; }")
+    page.select_option("#viewMode", "page")
+    settle(page)
+    check("and in pages it's not there", page.evaluate("() => $('stickyStart').hidden"))
+
+
 def test_page_settings(page, base: str, shots: Path | None, created: list[str]) -> None:
     score_id = written_melody(page, base, created, bars=24, tune="cdefgabc")
     width = lambda: page.evaluate("() => document.querySelector('#pages .page').getBoundingClientRect().width")
@@ -3929,6 +3972,7 @@ def main() -> None:
             test_instruments_and_layout(page, base, arguments.shots, created)
             test_concert_pitch(page, base, arguments.shots, created)
             test_continuous_view(page, base, arguments.shots, created)
+            test_one_line_keeps_its_start_in_sight(page, base, arguments.shots, created)
             test_page_settings(page, base, arguments.shots, created)
             test_more_clefs_and_instruments(page, base, arguments.shots, created)
             test_quick_entry(page, base, created)

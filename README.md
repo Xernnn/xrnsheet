@@ -142,7 +142,7 @@ F8 shows or hides the inspector on the selection, F7 on the score. On a narrow w
 
 **Instruments and parts.** The inspector's Score tab adds and removes instruments, and a transposing instrument gets its own key: the key chosen for a new score is the one it sounds in, so a B♭ trumpet in concert C reads D major. "Parts" opens one instrument alone as a PDF.
 
-**Views.** The buttons at the bottom right of the score show it as pages, as one line across, without the title, or as one long page down, and zoom it. Selecting, entering notes and every key work the same in each, and the score keeps its view, which isn't an edit to undo. Printing and PDFs are always in pages. The one-line view doesn't keep the instrument names and clefs in sight as it scrolls.
+**Views.** The buttons at the bottom right of the score show it as pages, as one line across, without the title, or as one long page down, and zoom it. Selecting, entering notes and every key work the same in each, and the score keeps its view, which isn't an edit to undo. Printing and PDFs are always in pages. The one-line view keeps the instruments' names, brackets, clefs and key signatures in sight at the left as it scrolls, as MuseScore's continuous view does, showing the clef and key in force where the window begins.
 
 **Concert pitch.** The inspector's Concert pitch button, or View ▸ Concert pitch, shows transposing instruments as they sound instead of as their players read them. An instrument written an octave from how it sounds, such as a bass guitar or a tenor saxophone, keeps its notes in place and takes a clef with an 8 below. Notes, chords and keys entered at concert pitch are the ones that sound, and the score keeps them written for the player. A bass guitar's tablature, its fingerings and the rest of a player's marks stay as they are, and its fretboard shows and writes the same strings and frets. The choice is saved with the score and can be undone. Printing and PDFs follow it, while MusicXML is always written for the players, and MIDI and audio always sound the same. A key signature chosen for a transposing staff is the key that staff shows, and notes copied from one instrument and pasted into another sound the same.
 
@@ -232,7 +232,7 @@ Click a chord symbol to change or remove it. With chord diagrams shown, the insp
 
 **Speed.** Only the pages an edit changes are drawn again, the server keeps its last few drawings, so going back to a score, undoing and redoing are quick, and the window is sent only the music symbols it draws. `bench/editor_speed.py` measures how long a score takes to open and an edit to show, and what the window loads.
 
-What MuseScore has and this editor doesn't yet: unpitched percussion such as a drum kit, the rest of MuseScore's Style dialog beyond the page's spacing, and in the one-line view instrument names and clefs that stay in sight as it scrolls.
+What MuseScore has and this editor doesn't yet: unpitched percussion such as a drum kit, and the rest of MuseScore's Style dialog beyond the page's spacing.
 
 To recognize a sheet without the app:
 
