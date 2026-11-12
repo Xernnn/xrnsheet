@@ -292,6 +292,25 @@ def test_note_marks_can_be_clicked_and_removed_by_their_ids():
     assert not technical(root, ids[0], "hammer-on") and not technical(root, ids[1], "hammer-on"), "a hammer-on goes with its other end"
 
 
+def test_a_clicked_fingering_or_bend_can_be_retyped():
+    root, ids = score("guitar-tab", 1, 64, 67)
+    technique.set_fingering(root, ids[:1], "2")
+    technique.toggle_bend(root, ids[1:], "half")
+    technique.toggle_pair(root, ids[0], ids[1], "hammerOn")
+    finished(root)
+    listed = {item["kind"]: item["id"] for item in marks.list_marks(root)}
+    marks.set_label(root, listed["fingering"], "3")
+    marks.set_label(root, listed["bend"], "full")
+    assert technical(root, ids[0], "fingering")[0].text == "3"
+    assert technical(root, ids[1], "bend")[0].findtext("bend-alter") == "2"
+    with pytest.raises(EditError):
+        marks.set_label(root, listed["fingering"], "mf")
+    with pytest.raises(EditError, match="only be removed"):
+        marks.set_label(root, listed["hammer"], "P")
+    marks.set_label(root, listed["fingering"], "")
+    assert not technical(root, ids[0], "fingering")
+
+
 def test_clearing_a_notes_marks_takes_a_hammer_on_with_it():
     root, ids = score("guitar-tab", 1, 64, 67)
     technique.toggle_pair(root, ids[0], ids[1], "hammerOn")

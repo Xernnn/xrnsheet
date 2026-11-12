@@ -29,7 +29,6 @@ from pipeline.rhythm import NATURAL_SEMITONES, TAB_COPY, EditError, Event, conte
 from pipeline.structure import (
     BASS_STRINGS,
     GUITAR_STRINGS,
-    INSTRUMENTS,
     VOICES_PER_STAFF,
     at_sounding_pitch,
     ensure_attributes,

@@ -26,7 +26,7 @@ from pipeline import fretted
 from pipeline.concert import transposition_at
 from pipeline.edit import Spot, context_of, events_between, find_note, locate, next_note_id
 from pipeline.marks import add_at, drop_if_empty, free_number, make_direction, notations_of, several_staves
-from pipeline.rhythm import EditError, contexts, place, read_measure, repair_lines, repair_slurs, respell
+from pipeline.rhythm import EditError, place, read_measure, repair_lines, repair_slurs, respell
 from pipeline.structure import element_with_text, instrument_of, pitch_of_name
 from pipeline.transpose import Interval, move_pitch
 

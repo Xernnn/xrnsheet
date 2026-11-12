@@ -143,8 +143,9 @@ and asking for something else of the same kind replaces it.
   `data-mark="<id>"` (a `g.fing` for fingerings, plucks and string numbers, `g.xrn-bend`, and the
   hammer-on's `g.slur` and its `g.xrn-joined` letter). Don't match these up by order.
 
-Removing a hammer-on or pull-off removes both its ends. "Clear marks" on a note removes all its
-techniques too.
+Removing a hammer-on or pull-off removes both its ends. `{"action": "label", "id": ..., "text": "3"}`
+retypes a clicked fingering, pluck or string number, and a bend as `½`, `full` or `1½`; an empty text
+removes it. "Clear marks" on a note removes all its techniques too.
 
 ### How they're drawn
 

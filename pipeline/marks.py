@@ -699,10 +699,37 @@ def remove_placed(root: ET.Element, mark_id: str) -> None:
     measure.remove(direction)
 
 
+RELABELLED = {"fingering": re.compile(r"[0-5T]{1,3}"), "pluck": re.compile(r"[pimac]"), "string": re.compile(r"[1-9]|10")}
+BEND_ALTERS = {name: alter for alter, name in BEND_NAMES.items()}
+
+
+def relabel_note_mark(root: ET.Element, mark_id: str, text: str) -> bool:
+    """Change a fingering, a pluck, a string number or a bend someone clicked on, if that's what it is."""
+    for technical in root.iter("technical"):
+        mark = next((found for found in technical if found.get("id") == mark_id), None)
+        if mark is None:
+            continue
+        text = text.strip()
+        if mark.tag == "bend":
+            if text not in BEND_ALTERS:
+                raise EditError("A bend is ½, full or 1½.")
+            mark.find("bend-alter").text = BEND_ALTERS[text]
+        elif mark.tag in RELABELLED:
+            if RELABELLED[mark.tag].fullmatch(text) is None:
+                raise EditError("That isn't a finger or a string.")
+            mark.text = text
+        else:
+            raise EditError("This mark can only be removed.")
+        return True
+    return False
+
+
 def set_label(root: ET.Element, mark_id: str, text: str) -> None:
     """Change what a mark says. Clearing it removes the mark."""
     if not text.strip():
         remove_placed(root, mark_id)
+        return
+    if relabel_note_mark(root, mark_id, text):
         return
     _, measure, direction = find_direction(root, mark_id)
     kind = direction_kind(direction)
