@@ -2,8 +2,7 @@
 const $ = id => document.getElementById(id);
 const UNSURE_BELOW = 0.8;
 let scoreId = null, score = null, selected = null, editing = null;
-let publishing = false; // The Publish tab shows the same pages with other tools above them.
-let sheets = []; // What the Home tab lists.
+let sheets = []; // What the library lists.
 let queue = Promise.resolve();
 const UNITS_PER_SPACE = 250; // The music font's outlines count 1000 to four staff spaces.
 
@@ -40,28 +39,25 @@ function enqueue(task) {
   return queue;
 }
 
+// The window is the library while no score is open, the score once one is, and says it's busy while
+// a sheet is being read.
 function show(view) {
   const open = Boolean(score && scoreId);
-  $("start").hidden = view !== "start";
   $("busy").hidden = view !== "busy";
   $("workspace").hidden = view !== "workspace";
   document.body.classList.toggle("atHome", view !== "workspace");
+  document.body.classList.toggle("busy", view === "busy");
   document.body.classList.toggle("hasScore", open);
-  document.body.classList.toggle("publishing", view === "workspace" && publishing);
-  const tab = view !== "workspace" ? "homeTab" : publishing ? "publishTab" : "scoreTab";
-  for (const id of ["homeTab", "scoreTab", "publishTab"]) {
-    $(id).setAttribute("aria-selected", String(id === tab));
-    if (id !== "homeTab") $(id).disabled = !open;
-  }
   if (view === "workspace") {
     $("original").hidden = score.blank || originalHidden();
     // A zoom that fits the page depends on how much room the pages have, which is only known now.
-    if (zoom === "width" || zoom === "page") setZoom(zoom);
+    if (fittedZoom()) setZoom(zoom);
     drawCursor();
   } else {
     stopPlaying();
     setInput(false);
   }
+  drawDock();
   if (view === "start") drawHistory();
 }
 
@@ -69,12 +65,16 @@ function tileFor(sheet) {
   const link = document.createElement("a");
   link.className = "tile";
   link.href = `#${sheet.id}`;
-  link.addEventListener("click", event => { event.preventDefault(); openScore(sheet.id); });
+  link.dataset.score = sheet.id;
+  link.setAttribute("role", "listitem");
+  if (sheet.id === scoreId) link.setAttribute("aria-current", "true");
+  link.addEventListener("click", event => { event.preventDefault(); if (sheet.id !== scoreId) openScore(sheet.id); closeDrawers(); });
   const picture = document.createElement("span");
   picture.className = "sheet";
   const image = new Image();
   image.alt = "";
   image.loading = "lazy";
+  image.decoding = "async";
   image.src = `/api/scores/${sheet.id}/thumbnail.svg?${sheet.saved}`;
   picture.append(image);
   const when = new Date(sheet.saved * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
@@ -83,8 +83,9 @@ function tileFor(sheet) {
   name.textContent = sheet.title || "Untitled score";
   const state = document.createElement("span");
   state.className = "state";
-  const made = sheet.blank ? "written from scratch" : `${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.chords} ${sheet.chords === 1 ? "chord" : "chords"}, ${sheet.checked ? "checked" : "not checked"}`;
-  state.textContent = `${when}, ${made}`;
+  const made = sheet.blank ? "written here" : `read from ${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.checked ? "checked" : "not checked"}`;
+  state.textContent = `${when} · ${made}`;
+  link.title = `${name.textContent}, ${state.textContent}`;
   link.append(picture, name, state);
   return link;
 }
@@ -94,10 +95,11 @@ function drawTiles() {
   const create = document.createElement("button");
   create.className = "tile";
   create.id = "newTile";
-  create.innerHTML = `<span class="sheet">${icon("plus")}</span><span class="name">New score</span>`;
+  create.innerHTML = `<span class="sheet">${icon("plus")}</span><span class="name">New score</span><span class="state">Piano, guitar, violin or anything</span>`;
   create.addEventListener("click", openNewScore);
   const shown = sheets.filter(sheet => !wanted || (sheet.title || "Untitled score").toLowerCase().includes(wanted));
   $("historyList").replaceChildren(...(wanted ? [] : [create]), ...shown.map(tileFor));
+  $("libraryEmpty").hidden = sheets.length > 0;
 }
 
 async function drawHistory() {
@@ -117,12 +119,13 @@ function openScore(id) {
   scoreId = id;
   score = null;
   selected = null;
-  publishing = false;
+  chosenPart = null;
   location.hash = id;
+  document.querySelectorAll("#historyList .tile").forEach(tile => tile.toggleAttribute("aria-current", tile.dataset.score === id));
   return poll();
 }
 
-// The score stays where it is, as it's saved with every edit, and the Home tab lists it.
+// The score stays where it is, as it's saved with every edit, and the library lists it.
 function closeScore() {
   forgetPlayback();
   history.replaceState(null, "", " ");
@@ -163,8 +166,11 @@ async function poll() {
   $("midi").href = `/api/scores/${scoreId}/score.mid`;
   $("pdf").href = $("pdfSave").href = `/api/scores/${scoreId}/score.pdf`;
   $("pdf").target = "_blank";
+  const opening = $("workspace").hidden;
   show("workspace");
   draw();
+  // The library beside it lists it, and says it's the one open.
+  if (opening && libraryShown()) drawHistory();
 }
 
 function draw() {
@@ -172,7 +178,7 @@ function draw() {
   $("pages").innerHTML = score.pages.map((page, index) => `<div class="page" style="width: calc(${score.pageSizes?.[index]?.[0] ?? 210}mm * var(--zoom))">${page}</div>`).join("");
   $("viewMode").value = score.view ?? "page";
   document.body.dataset.view = score.view ?? "page";
-  if (zoom === "width" || zoom === "page") setZoom(zoom);
+  if (fittedZoom()) setZoom(zoom);
   $("undo").disabled = !score.canUndo;
   $("concertPitch").setAttribute("aria-pressed", String(Boolean(score.concertPitch)));
   $("redo").disabled = !score.canRedo;
@@ -201,8 +207,11 @@ function draw() {
     if (!pieces.length) selectedMark = null;
   }
   drawRange();
-  if (dock.active === "mixer" && !$("dock").hidden) drawMixer();
-  if (dock.active === "timeline" && !$("dock").hidden) drawTimeline();
+  if (dockOpen("mixer")) drawMixer();
+  if (dockOpen("timeline")) drawTimeline();
+  drawPartSwitch();
+  drawPracticeChoices();
+  drawPageCount();
   drawCursor();
   updateTools();
   refreshPosition();
@@ -366,7 +375,7 @@ function nearest(selector, x, y, reach) {
 }
 
 function clickPages(event) {
-  if (publishing) return;
+  if (reading()) return;
   if (dragged) { dragged = false; return; }
   if (editor.on) {
     const spot = placeUnder(event.clientX, event.clientY);
@@ -424,10 +433,11 @@ function setUpPage() {
     // Cleared afterwards, so choosing the same file again still counts as a choice.
     $(id).addEventListener("change", event => { upload(event.target.files[0]); event.target.value = ""; });
   }
-  const drop = $("start");
-  for (const name of ["dragenter", "dragover"]) drop.addEventListener(name, event => { event.preventDefault(); drop.classList.add("over"); });
-  for (const name of ["dragleave", "drop"]) drop.addEventListener(name, event => { event.preventDefault(); drop.classList.remove("over"); });
-  drop.addEventListener("drop", event => upload(event.dataTransfer.files[0]));
+  // A file dropped anywhere opens, as Open does.
+  const carriesFile = event => [...(event.dataTransfer?.types ?? [])].includes("Files");
+  for (const name of ["dragenter", "dragover"]) document.addEventListener(name, event => { if (!carriesFile(event)) return; event.preventDefault(); document.body.classList.add("dropping"); });
+  for (const name of ["dragleave", "drop"]) document.addEventListener(name, event => { if (!carriesFile(event)) return; event.preventDefault(); document.body.classList.remove("dropping"); });
+  document.addEventListener("drop", event => { if (carriesFile(event)) upload(event.dataTransfer.files[0]); });
   document.querySelectorAll("label.button").forEach(label => {
     label.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); } });
   });

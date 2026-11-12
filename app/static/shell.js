@@ -1,4 +1,4 @@
-// The window around the score: tabs, menus, panels, dialogs, zoom and theme.
+// The window around the score: its menu, dialogs, zoom and theme, and the icons everything draws.
 const ICONS = {
   play: `<path d="M8 5l11 7-11 7z"/>`,
   stop: `<rect x="6.5" y="6.5" width="11" height="11" rx="1"/>`,
@@ -24,10 +24,25 @@ const ICONS = {
   tuplet: `<path d="M3.5 8V5h5M20.5 8V5h-5"/><text x="12" y="8" font-size="8" text-anchor="middle" fill="currentColor" stroke="none" font-family="serif" font-style="italic" font-weight="700">3</text><path d="M6.5 19v-8h12v8M12.5 19v-8" stroke-width="1.2"/><ellipse cx="4.6" cy="19" rx="2.2" ry="1.6" fill="currentColor" stroke="none"/><ellipse cx="10.6" cy="19" rx="2.2" ry="1.6" fill="currentColor" stroke="none"/><ellipse cx="16.6" cy="19" rx="2.2" ry="1.6" fill="currentColor" stroke="none"/>`,
   fork: `<path d="M9 3v7a3 3 0 006 0V3M12 13v8"/>`,
   flip: `<path d="M17 4v16M14 7l3-3 3 3M14 17l3 3 3-3"/><ellipse cx="7" cy="15" rx="3.2" ry="2.3" fill="currentColor" stroke="none" transform="rotate(-20 7 15)"/><path d="M10 14.5V5"/>`,
+  library: `<path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 4.5l3.6 1-3.9 14.8-3.6-1"/>`,
+  inspector: `<rect x="3.5" y="4" width="17" height="16" rx="2.5"/><path d="M14.5 4v16M17 8h1.5M17 11h1.5"/>`,
+  collapse: `<path d="M14 6l-6 6 6 6M19 6v12"/>`,
+  expand: `<path d="M10 6l6 6-6 6M5 6v12"/>`,
+  dots: `<circle cx="5.5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="18.5" cy="12" r="1.3" fill="currentColor"/>`,
+  read: `<path d="M3 6.5c3-1.5 6-1.5 9 .5 3-2 6-2 9-.5V19c-3-1.5-6-1.5-9 .5-3-2-6-2-9-.5zM12 7v12.5"/>`,
+  target: `<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".8" fill="currentColor"/>`,
+  folder: `<path d="M3.5 7.5a2 2 0 012-2h4l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2h-13a2 2 0 01-2-2z"/>`,
+  camera: `<path d="M4 8.5a2 2 0 012-2h2l1.5-2h5L16 6.5h2a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2z"/><circle cx="12" cy="13" r="3.5"/>`,
+  up: `<path d="M6 15l6-6 6 6"/>`,
+  down: `<path d="M6 9l6 6 6-6"/>`,
+  piano: `<rect x="3.5" y="5" width="17" height="14" rx="1.5"/><path d="M8 5v14M12 5v14M16 5v14"/><path d="M6.5 5v7h3V5M14.5 5v7h3V5" fill="currentColor"/>`,
+  guitar: `<path d="M14 10l6.5-6.5M18.5 3.5l2 2"/><path d="M14 10c-1.5-1.5-4-1.2-5 .4-.5.8-1.6 1-2.6 1.1-2.5.3-3.6 3.6-1.4 5.8 2.2 2.2 5.5 1.1 5.8-1.4.1-1 .3-2.1 1.1-2.6 1.6-1 1.9-3.5.4-5z"/><circle cx="9.5" cy="14.5" r="1.3"/>`,
+  violin: `<path d="M12 2.5v4M10.5 6.5h3"/><path d="M12 6.5c-2.5 0-3.5 1.6-3.2 3.3.2 1-.8 1.4-1.3 2.1-1.2 1.7-.6 4.4 1 5.6 1.7 1.3 5.3 1.3 7 0 1.6-1.2 2.2-3.9 1-5.6-.5-.7-1.5-1.1-1.3-2.1.3-1.7-.7-3.3-3.2-3.3z"/><path d="M10.5 12.5c.6.4.6 1.1 0 1.5M13.5 12.5c-.6.4-.6 1.1 0 1.5M12 9v11"/>`,
+  sound: `<path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9a4 4 0 010 6M18 6.5a7.5 7.5 0 010 11"/>`,
 };
 const ZOOMS = [25, 50, 75, 100, 125, 150, 200, 300, 400];
 const PAGE_WIDTH_MM = 210, PAGE_HEIGHT_MM = 297, MM_TO_PX = 96 / 25.4;
-const VIEW_NAMES = { page: "Page view", horizontal: "Continuous view (horizontal)", vertical: "Continuous view (vertical)" };
+const VIEW_NAMES = { page: "Pages", horizontal: "One line", vertical: "One long page" };
 const DESK_PADDING_PX = 48;
 const FAMILIES = ["Woodwinds", "Free Reed", "Brass", "Percussion - Pitched", "Vocals", "Keyboards", "Strings - Plucked", "Strings - Bowed", "Plain staves"];
 const SHORTCUTS = [
@@ -70,10 +85,15 @@ const SHORTCUTS = [
   ["Ctrl+T, Ctrl+E, Ctrl+M", "Staff text, expression text, rehearsal mark"],
   ["Alt+Shift+T", "Tempo marking"],
   ["Space", "Play or stop"],
-  ["F9, F7, F8", "Show or hide Palettes, Instruments, Properties"],
+  ["Ctrl+Shift+P", "Find any action by name, with its key. / also opens it when no note is chosen"],
+  ["Alt+R, Alt+W, Alt+P", "Read, Write or Practice"],
+  ["F6", "Show or hide the library"],
+  ["F8, F9", "Show or hide the inspector, on what's selected"],
+  ["F7", "The inspector, on the score: its title, instruments and pages"],
   ["F10", "Show or hide the mixer"],
   ["F12", "Show or hide the timeline"],
-  ["P", "Show or hide the piano keyboard. In note input a key writes its note, and Shift adds it to the chord"],
+  ["P", "Show or hide the instrument: keyboard, fretboard or fingerboard. In note input it writes the note played, and Shift adds it to the chord"],
+  ["Space, Page Down, →", "In Read, the next page. Shift+Space, Page Up and ← go back"],
   ["Ctrl+=, Ctrl+-, Ctrl+0", "Zoom in, zoom out, 100%"],
   ["Drag a selected note", "Move it up or down"],
   ["Click a dynamic, slur or text", "Select it. Del removes it, and a double-click or F2 changes it"],
@@ -85,8 +105,7 @@ const SHORTCUTS = [
 let openMenus = [];
 let instruments = [];
 let zoom = readSetting("zoom", "100");
-let sidePanel = "palettes";
-let chosenPart = null; // Which instrument the Instruments panel has selected.
+let chosenPart = null; // The instrument being worked with: the panel below shows it, and practice follows it.
 
 function icon(name) {
   return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -162,7 +181,9 @@ function openMenu(owner, items, beside = false) {
   }
   document.body.append(menu);
   const at = owner.getBoundingClientRect();
-  const left = beside ? at.right - 2 : at.left;
+  // A menu beside another opens to its left when there's no room on its right.
+  const roomRight = at.right + menu.offsetWidth < innerWidth - 4;
+  const left = beside ? (roomRight ? at.right - 2 : at.left - menu.offsetWidth + 2) : Math.min(at.left, at.right - menu.offsetWidth);
   const top = beside ? at.top - 4 : at.bottom + 2;
   menu.style.left = `${Math.max(4, Math.min(left, innerWidth - menu.offsetWidth - 4))}px`;
   menu.style.top = `${Math.max(4, Math.min(top, innerHeight - menu.offsetHeight - 4))}px`;
@@ -228,14 +249,13 @@ function menuList() {
   const open = Boolean(score) && !$("workspace").hidden;
   const target = open && Boolean(actionTarget());
   const theme = readSetting("theme", "system");
-  const sideShown = name => open && !document.body.classList.contains("sideHidden") && sidePanel === name;
   return [
     { label: "File", items: [
       { label: "New…", run: openNewScore },
       { label: "Open…", run: () => $("file").click() },
       { label: "Close", enabled: open, run: closeScore },
       null,
-      { label: "Project properties…", enabled: open, run: openProject },
+      { label: "Title and composer…", enabled: open, run: openProject },
       { label: "Parts…", enabled: open, run: openParts },
       null,
       { label: "Export", enabled: open, items: [
@@ -259,12 +279,13 @@ function menuList() {
       { label: "Delete selected measures", enabled: target, run: deleteBars },
     ] },
     { label: "View", items: [
-      { label: "Palettes", keys: "F9", checked: sideShown("palettes"), enabled: open, run: () => toggleSide("palettes") },
-      { label: "Instruments", keys: "F7", checked: sideShown("instruments"), enabled: open, run: () => toggleSide("instruments") },
-      { label: "Properties", keys: "F8", checked: sideShown("properties"), enabled: open, run: () => toggleSide("properties") },
+      ...Object.entries(MODES).map(([name, mode]) => ({ label: `${mode.label} mode`, keys: mode.keys, checked: open && currentMode() === name, enabled: open, run: () => setMode(name) })),
+      null,
+      { label: "Library", keys: "F6", checked: libraryShown(), run: toggleLibrary },
+      { label: "Inspector", keys: "F8", checked: open && inspectorShown(), enabled: open, run: () => toggleInspector() },
       { label: "Original sheet", checked: open && !$("original").hidden, enabled: open && !score.blank, run: () => showOriginal($("original").hidden) },
+      { label: instrumentLabel(), keys: "P", checked: open && dockOpen("instrument"), enabled: open, run: () => toggleDock("instrument") },
       { label: "Mixer", keys: "F10", checked: open && dockOpen("mixer"), enabled: open, run: () => toggleDock("mixer") },
-      { label: "Piano keyboard", keys: "P", checked: open && dockOpen("piano"), enabled: open, run: () => toggleDock("piano") },
       { label: "Timeline", keys: "F12", checked: open && dockOpen("timeline"), enabled: open, run: () => toggleDock("timeline") },
       null,
       { label: "Concert pitch", checked: open && Boolean(score.concertPitch), enabled: open, run: toggleConcertPitch },
@@ -282,10 +303,10 @@ function menuList() {
     ] },
     { label: "Add", enabled: open, items: open ? addItems() : [] },
     { label: "Format", enabled: open, items: [
-      { label: "Style…", run: openStyle },
       { label: "Page settings…", run: openPageSettings },
+      { label: "Spacing…", run: openStyle },
       null,
-      { label: "Add/remove system breaks…", run: openBreaks },
+      { label: "Measures per line…", run: openBreaks },
     ] },
     { label: "Tools", enabled: open, items: [
       { label: "Transpose…", run: openTranspose },
@@ -299,6 +320,7 @@ function menuList() {
       { label: "Remove articulations and ornaments", enabled: target, run: () => noteAction("clear") },
     ] },
     { label: "Help", items: [
+      { label: "Find a command…", keys: "Ctrl+Shift+P", run: () => openCommands() },
       { label: "Keyboard shortcuts…", run: () => $("keysDialog").showModal() },
       { label: "About xrnsheet…", run: () => $("aboutDialog").showModal() },
     ] },
@@ -306,21 +328,12 @@ function menuList() {
 }
 
 function setUpMenus() {
-  const bar = $("menuBar");
-  bar.replaceChildren(...menuList().map((menu, index) => {
-    const button = document.createElement("button");
-    button.textContent = menu.label;
-    button.setAttribute("role", "menuitem");
-    button.setAttribute("aria-haspopup", "menu");
-    button.dataset.menu = menu.label;
-    const open = () => openMenu(button, menuList()[index].items);
-    button.addEventListener("click", () => {
-      if (button.getAttribute("aria-expanded") === "true") closeMenus();
-      else if (menuList()[index].enabled !== false) open();
-    });
-    button.addEventListener("mouseenter", () => { if (openMenus.length && openMenus[0].owner.parentElement === bar && openMenus[0].owner !== button && menuList()[index].enabled !== false) open(); });
-    return button;
-  }));
+  // The whole menu, from one button: each of its menus opens beside it.
+  $("mainMenu").addEventListener("click", event => {
+    const owner = event.currentTarget;
+    if (owner.getAttribute("aria-expanded") === "true") { closeMenus(); return; }
+    openMenu(owner, menuList().map(item => (item.enabled === false ? { ...item, items: undefined, run: () => {} } : item)));
+  });
   document.addEventListener("pointerdown", event => {
     if (!openMenus.length || event.target.closest(".menu")) return;
     if (openMenus.some(open => open.owner.contains(event.target))) return;
@@ -350,27 +363,6 @@ function canPaste() {
   return Boolean(clipboard) && Boolean(editor.on ? editor.cursor : selected);
 }
 
-// The panel on the left.
-function showSide(name) {
-  sidePanel = name;
-  document.body.classList.remove("sideHidden");
-  document.body.classList.add("sideOpen");
-  $("side").hidden = false;
-  for (const tab of document.querySelectorAll("#sideTabs button")) tab.setAttribute("aria-selected", String(tab.dataset.panel === name));
-  for (const panel of ["palettes", "instruments", "properties"]) $(`${panel}Panel`).hidden = panel !== name;
-  drawCursor();
-}
-
-// What F9, F7 and F8 do: show that panel, or put the whole side away if it's the one showing.
-function toggleSide(name) {
-  const showing = !$("side").hidden && sidePanel === name && (innerWidth > 860 || document.body.classList.contains("sideOpen"));
-  if (!showing) { showSide(name); return; }
-  document.body.classList.add("sideHidden");
-  document.body.classList.remove("sideOpen");
-  $("side").hidden = true;
-  drawCursor();
-}
-
 // Pages as pages, or one long system across, or one long page down, as MuseScore's views are.
 function setView(view) {
   return enqueue(() => send("view", { view }));
@@ -388,10 +380,24 @@ function fitZoom(kind) {
   return Math.max(0.1, kind === "width" ? wide : Math.min(wide, tall));
 }
 
+// Read keeps a zoom of its own, which starts with the whole page in view, or its width on a phone.
+function zoomSetting() {
+  return reading() ? "readZoom" : "zoom";
+}
+
+function usualZoom() {
+  if (!reading()) return "100";
+  return innerWidth < 760 ? "width" : "page";
+}
+
+function fittedZoom() {
+  return zoom === "width" || zoom === "page";
+}
+
 function setZoom(value) {
   zoom = String(value);
-  keepSetting("zoom", zoom);
-  const factor = zoom === "width" || zoom === "page" ? fitZoom(zoom) : Number(zoom) / 100;
+  keepSetting(zoomSetting(), zoom);
+  const factor = fittedZoom() ? fitZoom(zoom) : Number(zoom) / 100;
   document.documentElement.style.setProperty("--zoom", String(factor));
   const choice = $("zoomChoice");
   if (![...choice.options].some(option => option.value === zoom)) choice.append(new Option(`${zoom}%`, zoom));
@@ -410,7 +416,7 @@ function setUpZoom() {
   $("zoomChoice").addEventListener("change", event => { setZoom(event.target.value); event.target.blur(); });
   $("zoomIn").addEventListener("click", () => stepZoom(1));
   $("zoomOut").addEventListener("click", () => stepZoom(-1));
-  window.addEventListener("resize", () => { if (zoom === "width" || zoom === "page") setZoom(zoom); });
+  window.addEventListener("resize", () => { if (fittedZoom()) setZoom(zoom); });
   setZoom(zoom);
 }
 
@@ -458,6 +464,7 @@ function makeChooser(holder, onChange) {
   // Enter in the search box would otherwise press the dialog's main button.
   holder.querySelector("input").addEventListener("keydown", event => { if (event.key === "Enter") event.preventDefault(); });
   state.reset = () => { state.picked = []; state.chosen = null; state.wanted = holder.querySelector("input").value = ""; state.family = FAMILIES[0]; draw(); onChange(state.picked); };
+  state.add = add;
   draw();
   return state;
 }
@@ -507,8 +514,21 @@ async function createScore() {
   setInput(true);
 }
 
+// The instruments xrnsheet is made for, a click away at the top of the New score dialog.
+const QUICK_INSTRUMENTS = [["piano", "Piano", "piano"], ["guitar", "Guitar", "guitar"], ["violin", "Violin", "violin"]];
+
 function setUpNewScore() {
   $("blankOpen").addEventListener("click", openNewScore);
+  $("quickStart").replaceChildren(...QUICK_INSTRUMENTS.map(([id, label, drawn]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.quick = id;
+    button.innerHTML = `${icon(drawn)}<span></span>`;
+    button.lastChild.textContent = label;
+    button.title = `Add a ${label.toLowerCase()} to the score`;
+    button.addEventListener("click", () => newChooser?.add(id));
+    return button;
+  }));
   $("blankCancel").addEventListener("click", () => $("newDialog").close());
   $("blankNext").addEventListener("click", () => showNewPage(true));
   $("blankBack").addEventListener("click", () => showNewPage(false));
@@ -526,21 +546,6 @@ function partOfStaff(staff) {
     if (staff < seen) return part;
   }
   return null;
-}
-
-function drawParts() {
-  const names = score?.parts ?? [];
-  if (chosenPart !== null && chosenPart >= names.length) chosenPart = null;
-  $("partList").replaceChildren(...names.map((name, index) => {
-    const row = document.createElement("li");
-    row.setAttribute("role", "option");
-    row.setAttribute("aria-selected", String(index === chosenPart));
-    row.innerHTML = "<span></span>";
-    row.firstChild.textContent = name || `Instrument ${index + 1}`;
-    row.addEventListener("click", () => { chosenPart = index; drawParts(); });
-    return row;
-  }));
-  $("partRemove").disabled = chosenPart === null || names.length < 2;
 }
 
 async function openAddPart() {
@@ -663,25 +668,6 @@ function openBreaks() {
   $("breaksDialog").showModal();
 }
 
-// Which sections of Properties apply depends on what's selected, as in MuseScore.
-function drawProperties() {
-  const target = score ? actionTarget() : null;
-  const element = target && document.getElementById(target);
-  const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
-  $("propMark").hidden = !mark;
-  if (mark) {
-    $("propMarkKind").textContent = MARK_NAMES[mark.kind] ?? "Mark";
-    $("markEdit").hidden = !markEditable(mark);
-  }
-  $("propScore").hidden = Boolean(element) || Boolean(mark);
-  $("propNote").hidden = $("propBeats").hidden = !element;
-  if (element) $("propKind").textContent = range ? "Range" : element.matches("g.note") ? "Note" : "Rest";
-  if (!editor.on && element) {
-    const part = partOfStaff(staffNumber(element));
-    if (part !== null && part !== chosenPart) { chosenPart = part; drawParts(); }
-  }
-}
-
 // "Ctrl+Shift+Z, Ctrl+Y" becomes keys drawn as keys, with what joins them left as words.
 function keysHtml(keys) {
   const cap = key => `<kbd>${key.replace("<", "&lt;").replace(">", "&gt;")}</kbd>`;
@@ -698,13 +684,13 @@ function setUpShell() {
   setUpMenus();
   setUpZoom();
   setUpNewScore();
-  $("homeTab").addEventListener("click", () => show("start"));
-  $("scoreTab").addEventListener("click", () => { publishing = false; show("workspace"); });
-  $("publishTab").addEventListener("click", () => { publishing = true; show("workspace"); });
-  $("closeScore").addEventListener("click", closeScore);
   $("originalClose").addEventListener("click", () => showOriginal(false));
-  for (const tab of document.querySelectorAll("#sideTabs button")) tab.addEventListener("click", () => showSide(tab.dataset.panel));
+  $("originalShow").addEventListener("click", () => showOriginal($("original").hidden));
   $("partsButton").addEventListener("click", openParts);
+  $("scoreName").addEventListener("click", openProject);
+  $("pageOpen").addEventListener("click", openPageSettings);
+  $("styleOpen").addEventListener("click", openStyle);
+  $("transposeOpen").addEventListener("click", openTranspose);
   $("concertPitch").addEventListener("click", toggleConcertPitch);
   $("viewMode").addEventListener("change", event => { setView(event.target.value); event.target.blur(); });
   $("partAdd").addEventListener("click", openAddPart);
@@ -723,7 +709,6 @@ function setUpShell() {
   document.querySelectorAll("dialog").forEach(dialog => dialog.addEventListener("close", () => {
     if (dialog.contains(document.activeElement)) document.activeElement.blur();
   }));
-  $("projectOpen").addEventListener("click", openProject);
   $("markEdit").addEventListener("click", openSelectedMark);
   $("markDelete").addEventListener("click", removeMark);
   $("projectDialog").querySelector("form").addEventListener("submit", () => {
@@ -753,5 +738,4 @@ function setUpShell() {
     event.target.blur();
   });
   setUpPageSettings();
-  setUpPalettes();
 }

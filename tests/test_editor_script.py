@@ -85,7 +85,7 @@ def run_script(program: str) -> object:
 
 
 def test_the_page_loads_the_scripts_these_tests_read():
-    assert page_scripts() == ["page.js", "palettes.js", "shell.js", "playback.js", "dock.js", "editor.js"]
+    assert page_scripts() == ["page.js", "palettes.js", "shell.js", "playback.js", "dock.js", "instruments.js", "inspector.js", "practice.js", "workspace.js", "editor.js"]
 
 
 def playback_program(body: str) -> str:
@@ -153,9 +153,14 @@ def palettes() -> list[dict]:
     return run_script(program)
 
 
-def test_the_palettes_musescore_shows_at_first_come_in_its_order():
-    usual = [palette["name"] for palette in palettes() if palette.get("usual")]
-    assert usual == ["Clefs", "Key signatures", "Time signatures", "Tempo", "Accidentals", "Dynamics", "Articulations", "Text", "Repeats & jumps", "Barlines", "Layout"]
+def test_the_inspector_shows_each_group_of_marks_where_it_applies():
+    """A note's marks with a note, a measure's with a measure, and the key and time with the score too."""
+    where = {palette["name"]: palette["contexts"] for palette in palettes()}
+    assert [name for name, shown in where.items() if "note" in shown] == ["Dynamics", "Articulations", "Text", "Ornaments", "Breaths & pauses", "Arpeggios & glissandos", "Lines"]
+    assert [name for name, shown in where.items() if "measure" in shown] == ["Clefs", "Key signatures", "Time signatures", "Tempo", "Repeats & jumps", "Barlines"]
+    assert [name for name, shown in where.items() if "score" in shown] == ["Key signatures", "Time signatures"]
+    # The rest have buttons of their own beside the note, and the command palette finds every cell.
+    assert [name for name, shown in where.items() if not shown] == ["Accidentals", "Layout", "Grace notes"]
 
 
 def test_every_palette_cell_is_named_drawn_and_does_something():

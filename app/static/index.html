@@ -7,203 +7,232 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="app.css">
 </head>
-<body class="atHome">
-<div id="menuBar" role="menubar" aria-label="Menus"></div>
-<div id="mainBar">
-  <nav id="tabs" role="tablist" aria-label="Views">
-    <button id="homeTab" role="tab" aria-selected="true">Home</button>
-    <button id="scoreTab" role="tab" aria-selected="false" disabled>Score</button>
-    <button id="publishTab" role="tab" aria-selected="false" disabled>Publish</button>
-  </nav>
-  <div id="centreTools" class="scoreOnly">
-    <button id="partsButton" title="Open or print one instrument's part"><span data-icon="parts"></span><span>Parts</span></button>
+<body class="atHome" data-mode="write">
+<header id="topBar">
+  <button id="libraryToggle" class="flat scoreOnly" aria-label="Library" aria-pressed="true" aria-controls="library" title="Show or hide the library (F6)"><span data-icon="library"></span></button>
+  <img id="brand" src="icon.svg" alt="" width="26" height="26">
+  <button id="scoreName" class="flat scoreOnly" title="Change the title and composer"></button>
+  <div id="modeSwitch" class="segmented scoreOnly" role="radiogroup" aria-label="Mode">
+    <button role="radio" data-mode="read" aria-checked="false" title="Read: the score large and clean, pages turned with Space or a click (Alt+R)"><span data-icon="read"></span><span>Read</span></button>
+    <button role="radio" data-mode="write" aria-checked="true" title="Write: enter and change notes (Alt+W)"><span data-icon="pen"></span><span>Write</span></button>
+    <button role="radio" data-mode="practice" aria-checked="false" title="Practice: loop, slow down, count in, one hand alone, wait for you (Alt+P)"><span data-icon="target"></span><span>Practice</span></button>
   </div>
-  <div id="playTools" class="scoreOnly" role="toolbar" aria-label="Playback">
+  <button id="partSwitch" class="scoreOnly" aria-haspopup="menu" title="Which instrument the panel below shows, and practice follows"><span id="partKind"></span><span id="partName"></span><span class="caret">▾</span></button>
+  <div id="transport" class="scoreOnly" role="toolbar" aria-label="Playback">
     <button id="rewind" class="flat" aria-label="Rewind" title="Rewind to the start, or to the start of the loop"><span data-icon="rewind"></span></button>
     <button id="play" class="flat" aria-label="Play" aria-pressed="false" title="Play from the selected note, or stop (Space)"><span data-icon="play"></span></button>
     <button id="loop" class="flat" aria-label="Loop playback" aria-pressed="false" title="Loop playback over the selection"><span data-icon="loop"></span></button>
     <button id="metronome" class="flat" aria-label="Metronome" aria-pressed="false" title="Metronome"><span data-icon="metronome"></span></button>
-    <button id="playSettings" class="flat" aria-label="Playback settings" title="Playback settings"><span data-icon="cog"></span></button>
-    <span class="divider"></span>
-    <input id="timeCounter" class="readout counter" aria-label="Playback time" title="Playback time. Type a time to go there" value="00:00:00.0" autocomplete="off" spellcheck="false">
-    <input id="beatCounter" class="readout counter" aria-label="Measure and beat" title="Measure and beat. Type one, such as 5.1, to go there" value="1.1" autocomplete="off" spellcheck="false">
     <button id="tempoButton" class="flat readout" aria-label="Playback speed" title="Playback speed" aria-haspopup="dialog"><span class="tempoNote"></span>&nbsp;=&nbsp;<span id="tempoValue">100</span></button>
+    <span id="position">
+      <input id="beatCounter" class="counter" aria-label="Measure and beat" title="Measure and beat. Type one, such as 5.1, to go there" value="1.1" autocomplete="off" spellcheck="false">
+      <input id="timeCounter" class="counter" aria-label="Playback time" title="Playback time. Type a time to go there" value="00:00:00.0" autocomplete="off" spellcheck="false">
+    </span>
+    <button id="playSettings" class="flat" aria-label="Playback settings" title="Playback settings"><span data-icon="cog"></span></button>
   </div>
   <div id="undoTools" class="scoreOnly">
     <button id="undo" class="flat" aria-label="Undo" title="Undo (Ctrl+Z)" disabled><span data-icon="undo"></span></button>
     <button id="redo" class="flat" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled><span data-icon="redo"></span></button>
   </div>
-</div>
+  <button id="commandOpen" title="Find any action and its key (Ctrl+Shift+P)"><span data-icon="search"></span><span class="words">Type a command</span><kbd>Ctrl+Shift+P</kbd></button>
+  <button id="mainMenu" class="flat" aria-label="Menu" aria-haspopup="menu" title="Menu"><span data-icon="dots"></span></button>
+  <button id="inspectorToggle" class="flat scoreOnly" aria-label="Inspector" aria-pressed="true" aria-controls="inspector" title="Show or hide the inspector (F8)"><span data-icon="inspector"></span></button>
+</header>
 <div id="message" role="status" hidden></div>
 
-<div id="start">
-  <nav id="homeSide" aria-label="Home"><button aria-current="page"><span data-icon="music"></span>Scores</button></nav>
-  <div id="homeMain">
-    <div id="homeHead"><h2>Scores</h2><input id="homeSearch" type="search" placeholder="Search" aria-label="Search your scores"></div>
-    <div id="homeSub"><span>New &amp; recent</span></div>
-    <div id="homeScroll"><div id="historyList"></div></div>
-    <div id="homeFoot">
-      <span class="hint">Open a photo, a PDF or a MusicXML file, or drop one here. Notes and chord symbols in a photo are read for you.</span>
-      <label class="button" tabindex="0">Take a photo<input id="camera" type="file" accept="image/*" capture="environment" hidden></label>
-      <button id="blankOpen">New</button>
-      <label class="button" tabindex="0">Open other…<input id="file" type="file" accept="image/*,.pdf,.musicxml,.xml,.mxl" hidden></label>
+<div id="body">
+  <aside id="library" aria-label="Library">
+    <div class="libraryHead">
+      <h2>Library</h2>
+      <button id="libraryClose" class="flat" aria-label="Hide the library" title="Hide the library (F6)"><span data-icon="collapse"></span></button>
     </div>
-  </div>
-</div>
-<div id="busy" hidden><div class="spinner"></div><div id="busyText">Reading your sheet. This usually takes under a minute.</div></div>
+    <input id="homeSearch" type="search" placeholder="Search your scores" aria-label="Search your scores">
+    <div class="libraryActions">
+      <button id="blankOpen" class="primary"><span data-icon="plus"></span>New</button>
+      <label class="button" tabindex="0" title="A photo, a PDF or a MusicXML file. Notes and chord symbols in a photo are read for you"><span data-icon="folder"></span>Open…<input id="file" type="file" accept="image/*,.pdf,.musicxml,.xml,.mxl" hidden></label>
+      <label class="button" tabindex="0" title="Use the camera, on a phone"><span data-icon="camera"></span>Take a photo<input id="camera" type="file" accept="image/*" capture="environment" hidden></label>
+    </div>
+    <div id="homeScroll"><div id="historyList" role="list"></div>
+      <div id="libraryEmpty" hidden>
+        <h3>Sheet music, ready to play</h3>
+        <p>Read a photo or a PDF into notes you can change, or write a new score for piano, guitar or violin.</p>
+      </div>
+    </div>
+    <p class="libraryFoot">Drop a photo, PDF or MusicXML file anywhere to open it.</p>
+  </aside>
 
-<div id="workspace" hidden>
-  <div id="noteBar" role="toolbar" aria-label="Note input">
-    <button id="inputToggle" class="flat" title="Note input (N)" aria-label="Note input" aria-pressed="false"><span data-icon="pen"></span></button>
-    <span id="lengths" role="group" aria-label="Duration"></span>
-    <span class="divider"></span>
-    <button id="dotButton" class="flat" title="Augmentation dot (.)" aria-label="Augmentation dot" aria-pressed="false"><span data-glyph="E1E7" data-space="7"></span></button>
-    <button id="restButton" class="flat" data-needs="note" title="Rest (0)" aria-label="Rest"><span data-glyph="E4E5" data-space="4.5"></span></button>
-    <span class="divider"></span>
-    <button class="flat" data-action="doubleFlat" data-needs="note" title="Double flat" aria-label="Double flat"><span data-glyph="E264" data-space="5.5"></span></button>
-    <button class="flat" data-action="flat" data-needs="note" title="Flat (-)" aria-label="Flat"><span data-glyph="E260" data-space="5.5"></span></button>
-    <button class="flat" data-action="natural" data-needs="note" title="Natural (=)" aria-label="Natural"><span data-glyph="E261" data-space="5.5"></span></button>
-    <button class="flat" data-action="sharp" data-needs="note" title="Sharp (+)" aria-label="Sharp"><span data-glyph="E262" data-space="5.5"></span></button>
-    <button class="flat" data-action="doubleSharp" data-needs="note" title="Double sharp" aria-label="Double sharp"><span data-glyph="E263" data-space="5.5"></span></button>
-    <span class="divider"></span>
-    <button class="flat" data-action="tie" data-needs="note" title="Tie (T)" aria-label="Tie"><span data-icon="tie"></span></button>
-    <button id="slurButton" class="flat" data-needs="note" title="Slur (S)" aria-label="Slur"><span data-icon="slur"></span></button>
-    <span class="divider"></span>
-    <button class="flat" data-mark="marcato" data-needs="note" title="Marcato (Shift+O)" aria-label="Marcato"><span data-glyph="E4AC" data-space="7.5"></span></button>
-    <button class="flat" data-mark="accent" data-needs="note" title="Accent (Shift+V)" aria-label="Accent"><span data-glyph="E4A0" data-space="7.5"></span></button>
-    <button class="flat" data-mark="tenuto" data-needs="note" title="Tenuto (Shift+N)" aria-label="Tenuto"><span data-glyph="E4A4" data-space="7.5"></span></button>
-    <button class="flat" data-mark="staccato" data-needs="note" title="Staccato (Shift+S)" aria-label="Staccato"><span data-glyph="E4A2" data-space="7.5"></span></button>
-    <span class="divider"></span>
-    <button id="tripletButton" class="flat" data-needs="note" title="Triplet (Ctrl+3)" aria-label="Triplet"><span data-icon="tuplet"></span></button>
-    <button class="flat" data-action="flip" data-needs="note" title="Flip direction (X)" aria-label="Flip direction"><span data-icon="flip"></span></button>
-    <span class="divider"></span>
-    <span id="voices" role="group" aria-label="Voice"></span>
-    <span class="divider"></span>
-    <button id="addButton" class="flat" title="Add" aria-label="Add" aria-haspopup="menu"><span data-icon="plus"></span></button>
-  </div>
-  <div id="pitches"></div>
-  <div id="publishBar" role="toolbar" aria-label="Publish">
-    <a id="pdf" class="button primary" title="Open the score as a PDF, to print or save">Print</a>
-    <a id="pdfSave" class="button" download="score.pdf">Export PDF</a>
-    <a id="xml" class="button">Export MusicXML</a>
-    <a id="midi" class="button">Export MIDI</a>
-    <button id="audio">Export audio</button>
-  </div>
-  <div id="scoreBody">
-    <aside id="side" aria-label="Panels">
-      <div id="sideTabs" role="tablist">
-        <button role="tab" data-panel="palettes" aria-selected="true">Palettes</button>
-        <button role="tab" data-panel="instruments" aria-selected="false">Instruments</button>
-        <button role="tab" data-panel="properties" aria-selected="false">Properties</button>
+  <main id="centre">
+    <div id="start" hidden></div>
+    <div id="busy" hidden><div class="spinner"></div><div id="busyText">Reading your sheet. This usually takes under a minute.</div></div>
+
+    <div id="workspace" hidden>
+      <div id="noteBar" role="toolbar" aria-label="Note input">
+        <button id="inputToggle" class="flat" title="Note input (N)" aria-label="Note input" aria-pressed="false"><span data-icon="pen"></span></button>
+        <span id="lengths" role="group" aria-label="Duration"></span>
+        <button id="dotButton" class="flat" title="Augmentation dot (.)" aria-label="Augmentation dot" aria-pressed="false"><span data-glyph="E1E7" data-space="7"></span></button>
+        <button id="restButton" class="flat" data-needs="note" title="Rest (0)" aria-label="Rest"><span data-glyph="E4E5" data-space="4.5"></span></button>
+        <span class="divider"></span>
+        <span class="set" role="group" aria-label="Accidental">
+          <button class="flat" data-action="doubleFlat" data-needs="note" title="Double flat" aria-label="Double flat"><span data-glyph="E264" data-space="5.5"></span></button>
+          <button class="flat" data-action="flat" data-needs="note" title="Flat (-)" aria-label="Flat"><span data-glyph="E260" data-space="5.5"></span></button>
+          <button class="flat" data-action="natural" data-needs="note" title="Natural (=)" aria-label="Natural"><span data-glyph="E261" data-space="5.5"></span></button>
+          <button class="flat" data-action="sharp" data-needs="note" title="Sharp (+)" aria-label="Sharp"><span data-glyph="E262" data-space="5.5"></span></button>
+          <button class="flat" data-action="doubleSharp" data-needs="note" title="Double sharp" aria-label="Double sharp"><span data-glyph="E263" data-space="5.5"></span></button>
+        </span>
+        <span class="divider"></span>
+        <button class="flat" data-action="tie" data-needs="note" title="Tie (T)" aria-label="Tie"><span data-icon="tie"></span></button>
+        <button id="tripletButton" class="flat" data-needs="note" title="Triplet (Ctrl+3)" aria-label="Triplet"><span data-icon="tuplet"></span></button>
+        <span class="divider"></span>
+        <span id="voices" role="group" aria-label="Voice"></span>
+        <span class="divider"></span>
+        <button id="addButton" class="flat" title="Add a mark, text, line or measure" aria-label="Add" aria-haspopup="menu"><span data-icon="plus"></span></button>
       </div>
-      <div id="palettesPanel" class="sidePanel" role="tabpanel">
-        <div class="top">
-          <button id="addPalettes" aria-haspopup="menu">Add Palettes</button>
-          <button id="paletteSearchOpen" aria-label="Search palettes" title="Search palettes (Ctrl+F9)"><span data-icon="search"></span></button>
-        </div>
-        <div class="top" id="paletteSearchRow" hidden><input id="paletteSearch" type="search" placeholder="Search" aria-label="Search palettes"></div>
-        <div id="paletteTree"></div>
-      </div>
-      <div id="instrumentsPanel" class="sidePanel" role="tabpanel" hidden>
-        <div class="top">
-          <button id="partAdd" title="Add instruments (I)">Add</button>
-          <button id="partRemove" aria-label="Remove the selected instrument" title="Remove the selected instrument" disabled><span data-icon="trash"></span></button>
-        </div>
-        <ul id="partList" role="listbox" aria-label="Instruments in this score"></ul>
-      </div>
-      <div id="propertiesPanel" class="sidePanel" role="tabpanel" hidden>
-        <section id="propScore">
-          <h3>Score</h3>
-          <div class="fields">
-            <button id="projectOpen">Project properties…</button>
-            <button id="breaksOpen">Add/remove system breaks…</button>
-          </div>
-        </section>
-        <section id="propMark" hidden>
-          <h3 id="propMarkKind">Mark</h3>
-          <div class="fields">
-            <div class="pair">
-              <button id="markEdit" title="Change what it says (F2, or double-click it)">Edit text</button>
-              <button id="markDelete" title="Remove it from the score (Del)">Delete</button>
-            </div>
-          </div>
-        </section>
-        <section id="propNote">
-          <h3 id="propKind">Note</h3>
-          <div class="fields">
-            <div class="pair">
-              <button data-action="semitoneUp" data-needs="note" title="Up a semitone (↑)">Pitch up</button>
-              <button data-action="semitoneDown" data-needs="note" title="Down a semitone (↓)">Pitch down</button>
-            </div>
-            <div class="pair">
-              <button data-action="respell" data-needs="note" title="Write the same note under its other name (J)">Respell</button>
-              <button data-action="clear" data-needs="note" title="Remove a fermata, ornament or articulation from this note">Clear marks</button>
-            </div>
-            <div class="pair">
-              <button id="addChord" data-needs="note" title="Chord symbol (Ctrl+K)">Chord symbol</button>
-              <button id="lyricButton" data-needs="note" title="Lyrics (Ctrl+L)">Lyrics</button>
-            </div>
-          </div>
-        </section>
-        <section id="propMeasure">
-          <h3>Measure</h3>
-          <div class="fields">
-            <div class="pair">
-              <button id="addBar" title="Insert a measure before the selected one, or at the end (Ins)">Insert measure</button>
-              <button id="deleteBar" data-needs="note" title="Delete the selected measures (Ctrl+Del with whole measures selected)">Delete measure</button>
-            </div>
-            <label class="field">Pickup at the start
-              <select id="pickupChoice"><option value="">Choose…</option><option value="2">An eighth note</option><option value="4">A quarter note</option><option value="8">A half note</option><option value="12">Three quarter notes</option><option value="0">No pickup</option></select>
-            </label>
-          </div>
-        </section>
-        <section id="propBeats">
-          <h3>Beats in this measure</h3>
-          <div class="fields">
-            <div class="pair">
-              <button data-action="close" data-needs="note" title="Remove this and pull later notes in. Fixes a measure with too many beats (Ctrl+Del)">Remove beat</button>
-              <button data-action="insert" data-needs="note" title="Open a gap here. Fixes a measure with too few beats">Insert beat</button>
-            </div>
-          </div>
-        </section>
-      </div>
-    </aside>
-    <div id="stage">
-      <div id="scoreTabs"><div class="tab"><span id="scoreName"></span><button id="closeScore" class="flat" aria-label="Close this score" title="Close"><span data-icon="close"></span></button></div></div>
+      <div id="practiceBar" role="toolbar" aria-label="Practice"></div>
+      <div id="pitches"></div>
       <div id="barChecks" hidden></div>
-      <div id="desk">
-        <div id="pagesFrame">
-          <div id="pages"></div>
-          <div id="caret" hidden></div>
-          <div id="ghost" hidden></div>
-          <input id="lyricInput" aria-label="Lyric" hidden autocomplete="off" spellcheck="false">
+      <div id="scoreArea">
+        <div id="desk">
+          <div id="pagesFrame">
+            <div id="pages"></div>
+            <div id="caret" hidden></div>
+            <div id="ghost" hidden></div>
+            <input id="lyricInput" aria-label="Lyric" hidden autocomplete="off" spellcheck="false">
+          </div>
         </div>
+        <div id="viewTools">
+          <span id="pageCount" aria-live="polite"></span>
+          <select id="viewMode" aria-label="View" title="Pages, or the score as one long line or one long page"><option value="page">Pages</option><option value="horizontal">One line</option><option value="vertical">One long page</option></select>
+          <button id="zoomOut" class="flat" aria-label="Zoom out" title="Zoom out (Ctrl+-)"><span data-icon="zoomOut"></span></button>
+          <select id="zoomChoice" aria-label="Zoom"></select>
+          <button id="zoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+=)"><span data-icon="zoomIn"></span></button>
+        </div>
+        <aside id="original" aria-label="Your original sheet">
+          <header><span>Original sheet</span>
+            <button id="checked" title="Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.">Mark as checked</button>
+            <button id="originalClose" class="flat" aria-label="Hide the original sheet" title="Hide"><span data-icon="close"></span></button>
+          </header>
+          <div id="images"></div>
+          <div id="checks" hidden><span class="label">Please check:</span></div>
+        </aside>
       </div>
+      <div id="hintBar"><span id="toolLabel"></span></div>
     </div>
-    <aside id="original" aria-label="Your original sheet">
-      <header><span>Original sheet</span>
-        <button id="checked" title="Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.">Mark as checked</button>
-        <button id="originalClose" class="flat" aria-label="Hide the original sheet" title="Hide"><span data-icon="close"></span></button>
-      </header>
-      <div id="images"></div>
-      <div id="checks" hidden><span class="label">Please check:</span></div>
-    </aside>
-  </div>
-  <section id="dock" aria-label="Panels below the score" hidden>
-    <div id="dockHead"><div id="dockTabs" role="tablist"></div><button id="dockClose" class="flat" aria-label="Close this panel" title="Close"><span data-icon="close"></span></button></div>
-    <div id="mixerPanel" class="dockPanel" role="tabpanel" aria-label="Mixer" hidden><div id="mixerStrips"></div></div>
-    <div id="pianoPanel" class="dockPanel" role="tabpanel" aria-label="Piano keyboard" hidden><div id="pianoKeys"></div></div>
-    <div id="timelinePanel" class="dockPanel" role="tabpanel" aria-label="Timeline" hidden><div id="timelineGrid"></div></div>
-  </section>
-  <div id="statusBar">
-    <span id="toolLabel"></span>
-    <button id="concertPitch" class="flat toggle" aria-pressed="false" aria-label="Concert pitch" title="Show transposing instruments at the pitch they sound"><span data-icon="fork"></span><span>Concert pitch</span></button>
-    <select id="viewMode" aria-label="View" title="Page view or continuous view"><option value="page">Page view</option><option value="horizontal">Continuous view (horizontal)</option><option value="vertical">Continuous view (vertical)</option></select>
-    <button id="zoomOut" class="flat" aria-label="Zoom out" title="Zoom out (Ctrl+-)"><span data-icon="zoomOut"></span></button>
-    <button id="zoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+=)"><span data-icon="zoomIn"></span></button>
-    <select id="zoomChoice" aria-label="Zoom"></select>
-  </div>
+  </main>
+
+  <aside id="inspector" aria-label="Inspector">
+    <div id="inspectorHead">
+      <div class="segmented" id="inspectorTabs" role="tablist">
+        <button role="tab" data-pane="selection" aria-selected="false">Selection</button>
+        <button role="tab" data-pane="score" aria-selected="true">Score</button>
+      </div>
+      <button id="inspectorClose" class="flat" aria-label="Hide the inspector" title="Hide the inspector (F8)"><span data-icon="expand"></span></button>
+    </div>
+    <div id="inspectorBody">
+      <section id="propMark" hidden>
+        <h3 id="propMarkKind">Mark</h3>
+        <p id="propMarkText" class="sub"></p>
+        <div class="row">
+          <button id="markEdit" title="Change what it says (F2, or double-click it)">Edit text</button>
+          <button id="markDelete" title="Remove it from the score (Del)">Delete</button>
+        </div>
+      </section>
+      <section id="propNote" hidden>
+        <h3 id="propKind">Note</h3>
+        <p id="propWhat" class="sub"></p>
+        <div class="field"><span class="label">Pitch</span><div class="row tight" id="pitchRow">
+          <button class="flat" data-action="semitoneDown" data-needs="note" title="Down a semitone (↓)" aria-label="Down a semitone"><span data-icon="down"></span></button>
+          <button class="flat" data-action="semitoneUp" data-needs="note" title="Up a semitone (↑)" aria-label="Up a semitone"><span data-icon="up"></span></button>
+          <button data-action="octaveDown" data-needs="note" title="Down an octave (Ctrl+↓)">−8ve</button>
+          <button data-action="octaveUp" data-needs="note" title="Up an octave (Ctrl+↑)">+8ve</button>
+          <button data-action="respell" data-needs="note" title="Write the same note under its other name (J)">Respell</button>
+        </div></div>
+        <div class="field"><span class="label">Duration</span><div class="row tight" id="lengthRow"></div></div>
+        <div class="field"><span class="label">Accidental</span><div class="row tight" id="accidentalRow"></div></div>
+        <div class="field"><span class="label">Voice</span><div class="row tight" id="voiceRow"></div></div>
+        <div class="field"><span class="label">Note</span><div class="row tight">
+          <button data-action="tie" data-needs="note" title="Tie to the next note (T)">Tie</button>
+          <button data-action="flip" data-needs="note" title="Flip the stem (X)">Flip stem</button>
+          <button id="graceButton" data-needs="note" title="A grace note before this one (/)">Grace note</button>
+          <button data-action="clear" data-needs="note" title="Remove a fermata, ornament or articulation from this note">Clear marks</button>
+        </div></div>
+        <div class="field"><span class="label">Words</span><div class="row tight">
+          <button id="addChord" data-needs="note" title="Chord symbol (Ctrl+K)">Chord symbol</button>
+          <button id="lyricButton" data-needs="note" title="Lyrics (Ctrl+L)">Lyrics</button>
+          <button id="staffTextButton" data-needs="note" title="Staff text (Ctrl+T)">Text</button>
+        </div></div>
+        <div id="propInstrument" class="instrumentMarks" hidden>
+          <h4 id="propInstrumentName"></h4>
+          <div id="instrumentCells" class="cells"></div>
+          <!-- Fingering, hand, string and fret, and bowing go here, by the instrument's kind. -->
+          <div id="instrumentSlots"></div>
+        </div>
+        <div id="noteGroups" class="groups"></div>
+      </section>
+      <section id="propMeasure" hidden>
+        <h3 id="propMeasureName">Measure</h3>
+        <div id="measureGroups" class="groups"></div>
+        <div class="field"><span class="label">Measures</span><div class="row">
+          <button id="addBar" title="Insert a measure before the selected one, or at the end (Ins)">Insert</button>
+          <button id="deleteBar" data-needs="note" title="Delete the selected measures (Ctrl+Del with whole measures selected)">Delete</button>
+          <button id="breakButton" data-needs="note" title="Start a new line at this measure (Enter)">New line here</button>
+        </div></div>
+        <div class="field" id="propBeats"><span class="label">Beats</span><div class="row">
+          <button data-action="close" data-needs="note" title="Remove this and pull later notes in. Fixes a measure with too many beats (Ctrl+Del)">Remove beat</button>
+          <button data-action="insert" data-needs="note" title="Open a gap here. Fixes a measure with too few beats">Insert beat</button>
+        </div></div>
+        <label class="field"><span class="label">Pickup at the start</span>
+          <select id="pickupChoice"><option value="">Choose…</option><option value="2">An eighth note</option><option value="4">A quarter note</option><option value="8">A half note</option><option value="12">Three quarter notes</option><option value="0">No pickup</option></select>
+        </label>
+      </section>
+      <section id="propScore">
+        <h3>Score</h3>
+        <label class="field"><span class="label">Title</span><input id="scoreTitle" maxlength="200" placeholder="Untitled score"></label>
+        <label class="field"><span class="label">Composer</span><input id="scoreComposer" maxlength="200"></label>
+        <div class="field"><span class="label">Instruments</span>
+          <ul id="partList" role="listbox" aria-label="Instruments in this score"></ul>
+          <div class="row">
+            <button id="partAdd" title="Add instruments (I)"><span data-icon="plus"></span>Add</button>
+            <button id="partRemove" title="Remove the selected instrument" disabled><span data-icon="trash"></span>Remove</button>
+            <button id="partsButton" title="Open or print one instrument's part"><span data-icon="parts"></span>Parts</button>
+          </div>
+        </div>
+        <div id="scoreGroups" class="groups"></div>
+        <div class="field"><span class="label">Show</span><div class="row">
+          <button id="concertPitch" class="toggle" aria-pressed="false" title="Show transposing instruments at the pitch they sound"><span data-icon="fork"></span>Concert pitch</button>
+          <button id="originalShow" class="toggle" aria-pressed="false" title="The photo or PDF this score was read from">Original sheet</button>
+        </div></div>
+        <div class="field"><span class="label">Page</span><div class="row">
+          <button id="pageOpen">Page settings…</button>
+          <button id="styleOpen">Spacing…</button>
+          <button id="breaksOpen">Measures per line…</button>
+        </div></div>
+        <div class="field"><span class="label">Change</span><div class="row">
+          <button id="transposeOpen">Transpose…</button>
+        </div></div>
+        <div class="field"><span class="label">Share</span><div class="row" id="publishBar">
+          <a id="pdf" class="button" title="Open the score as a PDF, to print or save">Print</a>
+          <a id="pdfSave" class="button" download="score.pdf">PDF</a>
+          <a id="xml" class="button">MusicXML</a>
+          <a id="midi" class="button">MIDI</a>
+          <button id="audio">Audio</button>
+        </div></div>
+      </section>
+    </div>
+  </aside>
 </div>
+
+<section id="dock" aria-label="Instrument, mixer and timeline" hidden>
+  <div id="dockHead">
+    <div id="dockTabs" class="segmented" role="tablist"></div>
+    <span id="trayNote"></span>
+    <button id="dockClose" class="flat" aria-label="Put the panel away" title="Put the panel away"><span data-icon="close"></span></button>
+  </div>
+  <div id="pianoPanel" class="dockPanel" role="tabpanel" aria-label="Piano keyboard" hidden><div id="pianoKeys"></div></div>
+  <div id="fretboardPanel" class="dockPanel" role="tabpanel" aria-label="Guitar fretboard" hidden><div id="fretboard"></div></div>
+  <div id="fingerboardPanel" class="dockPanel" role="tabpanel" aria-label="Violin fingerboard" hidden><div id="fingerboard"></div></div>
+  <div id="mixerPanel" class="dockPanel" role="tabpanel" aria-label="Mixer" hidden><div id="mixerStrips"></div></div>
+  <div id="timelinePanel" class="dockPanel" role="tabpanel" aria-label="Timeline" hidden><div id="timelineGrid"></div></div>
+</section>
 
 <div id="editor" hidden>
   <input id="chordInput" aria-label="Chord symbol" autocomplete="off" spellcheck="false" placeholder="e.g. Bbmaj7">
@@ -213,19 +242,28 @@
 </div>
 <div id="playPopup" class="popup" hidden>
   <label class="check"><input type="checkbox" id="playChords" checked> Play chord symbols</label>
-  <button id="loopLeft">Set loop marker left</button>
-  <button id="loopRight">Set loop marker right</button>
+  <button id="loopLeft">Start the loop at the selection</button>
+  <button id="loopRight">End the loop at the selection</button>
 </div>
 <div id="speedPopup" class="popup" hidden>
   <label>Speed <input id="speedValue" type="number" min="10" max="300" step="1" value="100" aria-label="Playback speed in percent"> %</label>
   <input id="speed" type="range" min="10" max="300" step="5" value="100" aria-label="Playback speed">
-  <button id="speedReset">Reset to the written tempo</button>
+  <button id="speedReset">Back to the written tempo</button>
 </div>
+
+<dialog id="commandDialog" aria-label="Commands">
+  <form method="dialog">
+    <div class="commandField"><span data-icon="search"></span><input id="commandInput" placeholder="Type a command, such as staccato, key D or practice" autocomplete="off" spellcheck="false" aria-label="Command" role="combobox" aria-controls="commandList" aria-expanded="true"></div>
+    <ul id="commandList" role="listbox" aria-label="Commands"></ul>
+    <div class="commandFoot"><kbd>↑</kbd><kbd>↓</kbd> to choose, <kbd>Enter</kbd> to run, <kbd>Esc</kbd> to close</div>
+  </form>
+</dialog>
 
 <dialog id="newDialog" aria-labelledby="newTitle">
   <form id="blankForm" method="dialog">
     <h2 id="newTitle">New score</h2>
     <div class="content" id="newInstruments">
+      <div id="quickStart" class="quickStart"></div>
       <div class="columns" id="newChooser"></div>
     </div>
     <div class="content" id="newDetails" hidden>
@@ -258,9 +296,9 @@
 
 <dialog id="partDialog" aria-labelledby="partTitle">
   <form method="dialog">
-    <h2 id="partTitle">Instruments</h2>
+    <h2 id="partTitle">Add instruments</h2>
     <div class="content"><div class="columns" id="partChooser"></div></div>
-    <div class="buttons"><button type="button" data-close>Cancel</button><button type="submit" id="partOk" class="primary" disabled>OK</button></div>
+    <div class="buttons"><button type="button" data-close>Cancel</button><button type="submit" id="partOk" class="primary" disabled>Add</button></div>
   </form>
 </dialog>
 
@@ -274,9 +312,9 @@
 
 <dialog id="projectDialog" aria-labelledby="projectTitle">
   <form method="dialog">
-    <h2 id="projectTitle">Project properties</h2>
+    <h2 id="projectTitle">Title and composer</h2>
     <div class="content">
-      <label class="field">Work title<input id="titleInput" maxlength="200"></label>
+      <label class="field">Title<input id="titleInput" maxlength="200"></label>
       <label class="field">Composer<input id="composerInput" maxlength="200"></label>
     </div>
     <div class="buttons"><button type="button" data-close>Cancel</button><button type="submit" class="primary">OK</button></div>
@@ -303,10 +341,10 @@
 
 <dialog id="breaksDialog" aria-labelledby="breaksTitle">
   <form method="dialog">
-    <h2 id="breaksTitle">Add/remove system breaks</h2>
+    <h2 id="breaksTitle">Measures per line</h2>
     <div class="content">
       <fieldset>
-        <label><input type="radio" name="breaksMode" value="every" checked> Break systems every <input id="breaksCount" type="number" min="1" max="16" value="4" style="width: 70px"> measures</label>
+        <label><input type="radio" name="breaksMode" value="every" checked> Start a new line every <input id="breaksCount" type="number" min="1" max="16" value="4" style="width: 70px"> measures</label>
         <label><input type="radio" name="breaksMode" value="fit"> Fit the measures to the page</label>
       </fieldset>
     </div>
@@ -352,10 +390,10 @@
 
 <dialog id="styleDialog" aria-labelledby="styleTitle">
   <form method="dialog">
-    <h2 id="styleTitle">Style</h2>
+    <h2 id="styleTitle">Spacing</h2>
     <div class="content">
       <fieldset>
-        <legend>Page</legend>
+        <legend>Between staves</legend>
         <label class="field">Staff distance (sp)<input id="staffDistance" type="number" min="0" max="24" step="0.1"></label>
         <label class="field">Min. system distance (sp)<input id="systemDistance" type="number" min="0" max="24" step="0.1"></label>
       </fieldset>
@@ -376,8 +414,8 @@
   <form method="dialog">
     <h2 id="aboutTitle">About xrnsheet</h2>
     <div class="content" style="max-width: 460px">
-      <div>xrnsheet reads a photo or PDF of sheet music into a score you can edit, play and print.</div>
-      <div>Its window, shortcuts and page layout follow MuseScore Studio, so what you know from there works here. It is a separate program and shares no code with it.</div>
+      <div>xrnsheet reads a photo or PDF of sheet music into a score you can edit, play, practise and print.</div>
+      <div>It's made for piano, guitar and violin players: Read shows the score large and clean, Write enters notes from the keyboard, fretboard or fingerboard below it, and Practice loops, slows down, counts in, plays one hand alone and waits for you.</div>
       <div>Pages are engraved by Verovio in the Leland music font (SIL Open Font Licence).</div>
     </div>
     <div class="buttons"><button type="submit" class="primary">Close</button></div>
@@ -390,6 +428,10 @@
 <script src="shell.js"></script>
 <script src="playback.js"></script>
 <script src="dock.js"></script>
+<script src="instruments.js"></script>
+<script src="inspector.js"></script>
+<script src="practice.js"></script>
+<script src="workspace.js"></script>
 <script src="editor.js"></script>
 </body>
 </html>

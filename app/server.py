@@ -581,6 +581,22 @@ def view_of(folder: Path) -> str:
     return found if found in VIEWS else "page"
 
 
+def note_details(root: ET.Element) -> dict[str, list]:
+    """Say what each note and rest is, by its id, for the inspector to name it as it's shown.
+
+    A note has its step, alteration and octave, then its written type and dots; a rest has no pitch.
+    Reading them from the score is far quicker than having the engraver write them into the pages.
+    """
+    found = {}
+    for note in root.iter("note"):
+        if not note.get("id"):
+            continue
+        pitch = note.find("pitch")
+        named = [pitch.findtext("step") or "", round(float(pitch.findtext("alter") or 0)), int(pitch.findtext("octave") or 0)] if pitch is not None else ["", 0, 0]
+        found[note.get("id")] = [*named, note.findtext("type") or "", len(note.findall("dot"))]
+    return found
+
+
 def describe(folder: Path, status: dict) -> dict:
     root = current_root(folder)
     edit.ensure_note_ids(root)
@@ -621,6 +637,7 @@ def describe(folder: Path, status: dict) -> dict:
         "timeline": timeline(shown),
         "mixer": mixer_of(folder, root),
         "transposing": concert.is_transposing(root),
+        "notes": note_details(shown),
     } | structure.title_of(root)
 
 

@@ -1213,3 +1213,18 @@ def test_the_printable_score_and_parts_show_where_they_open(client, ready_score)
         disposition = answer.headers["content-disposition"]
         assert disposition.startswith("inline;"), disposition
         assert 'filename="score.pdf"' in disposition or 'filename="part_1.pdf"' in disposition
+
+
+def test_each_note_is_named_as_it_is_shown(client):
+    """The inspector names a selected note from these: its pitch as the page shows it, and its length."""
+    score_id = blank(client, clef="trumpet", measures=1)
+    first = client.get(f"/api/scores/{score_id}").json()["notes"]
+    rest_id = next(iter(first))
+    assert first[rest_id] == ["", 0, 0, "", 0], "a whole-bar rest has no pitch and no written type"
+    written = client.post(f"/api/scores/{score_id}/notes/{rest_id}", json={"action": "write", "type": "quarter", "dots": 1, "step": "F"}).json()
+    named = written["notes"][written["written"]]
+    assert named[0] == "F" and named[3:] == ["quarter", 1], named
+    client.post(f"/api/scores/{score_id}/notes/{written['written']}", json={"action": "sharp"})
+    client.post(f"/api/scores/{score_id}/concert", json={"on": True})
+    shown = client.get(f"/api/scores/{score_id}").json()["notes"][written["written"]]
+    assert shown[:2] == ["E", 0] and shown[2] == named[2], "a trumpet's F sharp sounds as E, a step lower"

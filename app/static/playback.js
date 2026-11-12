@@ -1,5 +1,5 @@
-// Playback: the toolbar beside the tabs, as MuseScore has it, with rewind, play, loop, metronome,
-// the position as a time and a measure and beat, and the speed. Audio export is made by the same code.
+// Playback: rewind, play, loop, the metronome, the position as a measure and beat and as a time, and
+// the speed, in the top bar. Audio export is made by the same code, and Practice adds to it.
 const AUDIO_RATE = 44100;
 const AUDIO_TAIL_SECONDS = 0.5;
 const START_DELAY = 0.1; // Seconds between pressing Play and the first note, so nothing is cut short.
@@ -164,7 +164,7 @@ function schedule(audio, data, from, zero, speed = 1, until = Infinity, options 
   const clock = clockFor(data, speed);
   const at = place => zero + clock(place) - clock(from);
   const nodes = options.nodes ?? mixerNodes(audio, options.mixer);
-  const notes = data.notes.filter(note => note.start >= from && note.start < until);
+  const notes = data.notes.filter(note => note.start >= from && note.start < until && (!options.only || options.only(note)));
   for (const note of notes) {
     const { wave, level } = soundOf(data, note);
     const ends = Math.min(note.start + note.length, until);
@@ -273,18 +273,22 @@ function playingPlace() {
 }
 
 // One time through: to the end of the score, or round the loop, which then goes round again.
+// A note starts: it's shown on the page, which follows it, and on the instrument if it's that part's.
+function showSounding(data, note, at, until) {
+  clearPlaying();
+  const element = document.getElementById(note.id);
+  element?.classList.add("playing");
+  followNote(element);
+  const timers = player?.timers ?? practice.follower?.timers;
+  if (timers && instrumentShown() && (note.part ?? 0) === activePart()) timers.push(soundKey(note.midi, at(Math.min(note.start + note.length, until)) - at(note.start)));
+}
+
 function playCycle(from, until, zero) {
   const { audio, data, speed } = player;
-  const { notes, chords, at } = schedule(audio, data, from, zero, speed, until, { metronome: playState.metronome, chords: playState.chords, nodes: player.nodes });
+  const { notes, chords, at } = schedule(audio, data, from, zero, speed, until, { metronome: playState.metronome, chords: playState.chords, nodes: player.nodes, only: hearing() });
   player.cycles.push({ from, until, zero });
   for (const note of notes) {
-    player.timers.push(setTimeout(() => {
-      clearPlaying();
-      const element = document.getElementById(note.id);
-      element?.classList.add("playing");
-      element?.scrollIntoView({ block: "nearest", inline: "nearest" });
-      if (dockOpen("piano")) player?.timers.push(soundKey(keyOfSound(data, note.midi, note.part ?? 0), at(Math.min(note.start + note.length, until)) - at(note.start)));
-    }, (at(note.start) - audio.currentTime) * 1000));
+    player.timers.push(setTimeout(() => showSounding(data, note, at, until), (at(note.start) - audio.currentTime) * 1000));
   }
   if (player.cycles.length === 1) {
     $("play").dataset.notes = notes.length;
@@ -328,13 +332,16 @@ async function startPlaying(place = null) {
   const audio = new (window.AudioContext || window.webkitAudioContext)();
   const nodes = mixerNodes(audio, mixerForPlayback());
   player = { audio, data, nodes, speed: playState.speed, clock: clockFor(data, playState.speed), timers: [], cycles: [], loop };
-  playCycle(from, loop ? loop.end : data.total, audio.currentTime + START_DELAY);
+  // In Practice a bar or two can be counted in first.
+  const lead = countIn(audio, data, from, audio.currentTime + START_DELAY, nodes);
+  playCycle(from, loop ? loop.end : data.total, audio.currentTime + START_DELAY + lead);
   showPlaying(true);
   followPlaying();
 }
 
 // Stopping keeps the place, so Play carries on from there. Coming to the end goes back to the start.
 function stopPlaying(finished = false) {
+  if (practice.follower) { stopFollowing(finished); return; }
   if (!player) return;
   playState.place = finished ? 0 : playingPlace();
   player.timers.forEach(clearTimeout);
@@ -347,13 +354,20 @@ function stopPlaying(finished = false) {
   drawPosition(playState.place);
 }
 
+// In Practice, with someone's notes to wait for, playback waits for you to play them.
 function togglePlaying() {
-  return player ? stopPlaying() : startPlaying();
+  if (player || practice.follower) return stopPlaying();
+  return practising() && practice.waitFor !== "off" ? startFollowing() : startPlaying();
 }
 
 // Go to a place: at once if playing, or ready for the next Play.
 function playFrom(place) {
   playState.chosen = null;
+  if (practice.follower) {
+    stopPlaying();
+    startFollowing(place);
+    return;
+  }
   if (!player) {
     playState.place = place;
     drawPosition(place);
@@ -374,7 +388,7 @@ function toggleLoop() {
     const first = range?.first ?? actionTarget(), last = range?.last ?? first;
     if (first || !playState.loop) playState.loop = { first: first ?? null, last: last ?? null };
   }
-  $("loop").setAttribute("aria-pressed", String(playState.looping));
+  drawPracticeState();
   drawLoopMarkers();
   if (player) playFrom(playingPlace());
 }
@@ -385,14 +399,14 @@ function setLoopEnd(side) {
   if (!id) { message("Select a note or rest for the loop to start or end at."); return; }
   playState.loop = { first: playState.loop?.first ?? id, last: playState.loop?.last ?? id, [side]: id };
   playState.looping = true;
-  $("loop").setAttribute("aria-pressed", "true");
+  drawPracticeState();
   drawLoopMarkers();
 }
 
 function toggleMetronome() {
   playState.metronome = !playState.metronome;
   keepSetting("metronome", playState.metronome ? "on" : "off");
-  $("metronome").setAttribute("aria-pressed", String(playState.metronome));
+  drawPracticeState();
   if (player) playFrom(playingPlace());
 }
 
@@ -401,6 +415,7 @@ function setSpeed(percent) {
   playState.speed = value / 100;
   $("speed").value = value;
   $("speedValue").value = value;
+  drawPracticeState();
   drawPosition(player ? playingPlace() : playState.place);
   if (player) playFrom(playingPlace());
 }
@@ -449,11 +464,12 @@ function refreshPosition() {
   if (!scoreId) return;
   clearTimeout(playState.wanted);
   playState.wanted = setTimeout(async () => {
-    if (!scoreId || player) return;
+    if (!scoreId || player || practice.follower) return;
     const data = await fetchPlayback();
-    if (data && !player) {
+    if (data && !player && !practice.follower) {
       playState.place = Math.min(playState.place, data.total);
       drawPosition(playState.place);
+      refreshKinds();
       lightKeys();
     }
   }, 400);
@@ -496,7 +512,7 @@ function popupFor(buttonId, popupId) {
 function forgetPlayback() {
   stopPlaying();
   Object.assign(playState, { place: 0, looping: false, loop: null, data: null, chosen: null });
-  $("loop").setAttribute("aria-pressed", "false");
+  drawPracticeState();
   $("timeCounter").value = timeText(0);
   $("beatCounter").value = "1.1";
 }
@@ -507,7 +523,6 @@ function setUpPlayback() {
   $("rewind").addEventListener("click", rewind);
   $("loop").addEventListener("click", toggleLoop);
   $("metronome").addEventListener("click", toggleMetronome);
-  $("metronome").setAttribute("aria-pressed", String(playState.metronome));
   $("audio").addEventListener("click", saveAudio);
   popupFor("playSettings", "playPopup");
   popupFor("tempoButton", "speedPopup");
