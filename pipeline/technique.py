@@ -114,6 +114,28 @@ def set_text_mark(notes: list[ET.Element], tag: str, values: list[str], placemen
         technical_of(note, tag).append(mark)
 
 
+def check_finger(root: ET.Element, note: ET.Element, finger: str) -> None:
+    """Refuse a finger the note's instrument doesn't number, as a piano's 0 or a violin's 5."""
+    allowed = FINGERS.get(family_of(root, context_of(root, note)[0]), ANY_FINGER)
+    if finger.isdigit() and finger not in allowed:
+        raise EditError(f"Fingers here are numbered {allowed[0]} to {allowed[-1]}.")
+
+
+def check_string(root: ET.Element, note: ET.Element, chosen: int) -> None:
+    """Refuse a string number the note's instrument hasn't, or a string that can't play the note."""
+    part, context = context_of(root, note)
+    strings = string_names(root, part)
+    board = fretted.boards(root)[root.findall("part").index(part)]
+    if not strings:
+        raise EditError("Only a string instrument's notes have string numbers.")
+    if not 1 <= chosen <= len(strings):
+        raise EditError(f"This instrument has strings 1 to {len(strings)}.")
+    midi = fretted.note_midi(note) + transposition_at(part, context.index).semitones
+    lowest = fretted.midi_of(*pitch_of_name(strings[len(strings) - chosen]))
+    if (board is not None and board.fret(chosen, midi) is None) or (board is None and midi < lowest):
+        raise EditError(f"String {chosen} can't play {fretted.name_of(midi)}.")
+
+
 def set_fingering(root: ET.Element, note_ids: list[str], text: str) -> None:
     """Finger the chosen notes: one finger for them all, or a finger for each in turn, as "1 2 3" or "123".
 
@@ -130,9 +152,9 @@ def set_fingering(root: ET.Element, note_ids: list[str], text: str) -> None:
     placements = []
     for note, finger in zip(notes, fingers):
         family = family_of(root, context_of(root, note)[0])
-        allowed = FINGERS.get(family, ANY_FINGER)
-        if finger not in allowed:
-            raise EditError(f"Fingers here are numbered {allowed[0]} to {allowed[-1]}.")
+        if finger not in FINGERS.get(family, ANY_FINGER):
+            check_finger(root, note, finger)
+            raise EditError("That isn't a finger.")
         placements.append(("below" if (note.findtext("staff") or "1") != "1" else "above") if family == KEYBOARDS else None)
     set_text_mark(notes, "fingering", fingers, placements)
 
@@ -165,7 +187,7 @@ def set_string_number(root: ET.Element, note_ids: list[str], number: int) -> Non
     notes = pitched(root, note_ids)
     values = []
     for note in notes:
-        part, context = context_of(root, note)
+        part, _ = context_of(root, note)
         strings = string_names(root, part)
         board = fretted.boards(root)[root.findall("part").index(part)]
         if not strings:
@@ -174,12 +196,7 @@ def set_string_number(root: ET.Element, note_ids: list[str], number: int) -> Non
         if not chosen and board is not None:
             carrier = fretted.copy_of(root, part, board, note)
             chosen = fretted.string_of(carrier) if carrier is not None else None
-        if not chosen or not 1 <= chosen <= len(strings):
-            raise EditError(f"This instrument has strings 1 to {len(strings)}.")
-        midi = fretted.note_midi(note) + transposition_at(part, context.index).semitones
-        lowest = fretted.midi_of(*pitch_of_name(strings[len(strings) - chosen]))
-        if (board is not None and board.fret(chosen, midi) is None) or (board is None and midi < lowest):
-            raise EditError(f"String {chosen} can't play {fretted.name_of(midi)}.")
+        check_string(root, note, chosen or 0)
         values.append(str(chosen))
     marked = all(marks_of(note, "string") == [value] for note, value in zip(notes, values))
     set_text_mark(notes, "string", values)
@@ -218,9 +235,15 @@ def harmonic_kind(note: ET.Element) -> tuple[str | None, str | None]:
 
 
 def touching_note(root: ET.Element, note: ET.Element) -> ET.Element | None:
-    """Return the diamond a fourth above a violin's artificial harmonic, which is in the same chord."""
+    """Return the diamond a fourth above a violin's artificial harmonic, which is in the same chord.
+
+    In a double stop with a harmonic on each note, it's the one a fourth above this note.
+    """
     event = locate(root, note.get("id")).event
-    return next((other for other in event.notes if harmonic_kind(other) == ("artificial", "touching-pitch")), None)
+    wanted = move_pitch(note.findtext("pitch/step"), round(float(note.findtext("pitch/alter") or 0)), int(note.findtext("pitch/octave")), TOUCHED_ABOVE)
+    diamonds = [other for other in event.notes if harmonic_kind(other) == ("artificial", "touching-pitch")]
+    pitch = lambda other: (other.findtext("pitch/step"), round(float(other.findtext("pitch/alter") or 0)), int(other.findtext("pitch/octave")))
+    return next((other for other in diamonds if pitch(other) == tuple(wanted)), diamonds[0] if len(diamonds) == 1 else None)
 
 
 def write_harmonic(note: ET.Element, kind: str, which: str | None = None) -> None:
@@ -356,7 +379,7 @@ def toggle_pair(root: ET.Element, first_id: str, last_id: str, name: str) -> Non
     for (first_context, first), (second_context, second) in pairs:
         if pair_number(first, second, group, tag):
             continue
-        number = str(free_number(start.part, tag, first_context.index, second_context.index))
+        number = str(free_number(start.part, tag, first_context.index, second_context.index, (first, second)))
         begin = ET.Element(tag, {"type": "start", "number": number})
         if group:
             begin.text = look
@@ -391,7 +414,7 @@ def toggle_vibrato(root: ET.Element, first_id: str, last_id: str) -> None:
                 note.find("notations").remove(ornaments)
             drop_if_empty(note)
         return
-    number = str(free_number(start.part, "wavy-line", first_context.index, last_context.index))
+    number = str(free_number(start.part, "wavy-line", first_context.index, last_context.index, (first, last)))
     for note, kind in ((first, "start"), (last, "stop")):
         ornaments = notations_of(note).find("ornaments")
         if ornaments is None:
@@ -519,11 +542,20 @@ def is_hand_mark(direction: ET.Element) -> bool:
     return words_of(direction) in HANDS.values()
 
 
+def event_key(spot: Spot) -> tuple:
+    """What tells one chord or rest from another: its part, bar, staff and voice, and its moment."""
+    return (spot.part.get("id"), spot.context.index, spot.key, spot.event.onset)
+
+
 def toggle_hand(root: ET.Element, note_ids: list[str], hand: str, keep: bool = False) -> None:
     """Mark which hand plays the chosen notes, as "R.H." or "L.H." over them."""
     if hand not in HANDS:
         raise EditError("A hand is RH or LH.")
+    # The words go over each chord once, however many of its notes are chosen.
+    heads = {}
     for note in pitched(root, note_ids):
+        heads.setdefault(event_key(locate(root, note.get("id"))), note)
+    for note in heads.values():
         toggle_words(root, note.get("id"), HANDS[hand], is_hand_mark, keep=keep)
 
 
@@ -793,6 +825,11 @@ def stopped_here(note: ET.Element) -> list[tuple[str, str]]:
     return found
 
 
+# The instruments each of a player's techniques belongs to, which a paste gives them to.
+TECHNIQUE_FAMILIES = {"pluck": {PLUCKED}, "bend": {PLUCKED}, "dead": {PLUCKED}, "harmonic": {PLUCKED, BOWED}, "string": {PLUCKED, BOWED}}
+JOIN_FAMILIES = {"hammerOn": {PLUCKED}, "pullOff": {PLUCKED}, "slide": {PLUCKED, BOWED}, "vibrato": {PLUCKED, BOWED}}
+
+
 def give_techniques(root: ET.Element, note_id: str, found: dict) -> None:
     """Give a pasted note what its copy carried, as far as its instrument allows: a guitar's pluck has no place on a piano."""
     setters = {
@@ -804,7 +841,7 @@ def give_techniques(root: ET.Element, note_id: str, found: dict) -> None:
         "dead": lambda value: toggle_dead_note(root, [note_id]),
     }
     for name, value in found.items():
-        if name not in setters:
+        if name not in setters or (name in TECHNIQUE_FAMILIES and not fits(root, note_id, TECHNIQUE_FAMILIES[name])):
             continue
         try:
             setters[name](value)
@@ -813,7 +850,9 @@ def give_techniques(root: ET.Element, note_id: str, found: dict) -> None:
 
 
 def join(root: ET.Element, first_id: str, last_id: str, name: str) -> None:
-    """Join two pasted notes as their copies were, unless they're joined already."""
+    """Join two pasted notes as their copies were, unless they're joined already or the instrument has no such join."""
+    if name in JOIN_FAMILIES and not fits(root, first_id, JOIN_FAMILIES[name]):
+        return
     try:
         if name == "vibrato":
             toggle_vibrato(root, first_id, last_id)

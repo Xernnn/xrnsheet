@@ -227,8 +227,34 @@ def spanner_numbers(part: ET.Element, tag: str, first: int, last: int) -> set[in
     return taken
 
 
-def free_number(part: ET.Element, tag: str, first: int, last: int) -> int:
-    taken = spanner_numbers(part, tag, first, last)
+def overlapping_numbers(part: ET.Element, tag: str, start: ET.Element, stop: ET.Element) -> set[int]:
+    """Return the numbers of this kind of mark open anywhere between two notes, in the file's order.
+
+    That's the order its ends are paired in, so a number free again after its stop can be used
+    again, and a run of hammer-ons in one bar isn't held to six.
+    """
+    order = {id(element): position for position, element in enumerate(part.iter())}
+    low, high = sorted((order.get(id(start), 0), order.get(id(stop), 0)))
+    opened: dict[int, int] = {}
+    taken: set[int] = set()
+    for element in part.iter(tag):
+        number, at = int(element.get("number", "1")), order[id(element)]
+        if element.get("type") == "stop":
+            began = opened.pop(number, None)
+            if began is not None and began <= high and at >= low:
+                taken.add(number)
+        elif element.get("type") == "start":
+            opened[number] = at
+    taken |= {number for number, began in opened.items() if began <= high}
+    return taken
+
+
+def free_number(part: ET.Element, tag: str, first: int, last: int, ends: tuple[ET.Element, ET.Element] | None = None) -> int:
+    """Hand out a number for a new mark of this kind: one no other open over the same stretch has.
+
+    Marks between two notes are judged by the notes they join; the rest by the bars they cross.
+    """
+    taken = overlapping_numbers(part, tag, *ends) if ends else spanner_numbers(part, tag, first, last)
     found = next((number for number in range(1, MOST_SPANNERS + 1) if number not in taken), None)
     if found is None:
         raise EditError("Too many of these overlap here already.")
@@ -759,6 +785,13 @@ def relabel_note_mark(root: ET.Element, mark_id: str, text: str) -> bool:
         elif mark.tag in RELABELLED:
             if RELABELLED[mark.tag].fullmatch(text) is None:
                 raise EditError("That isn't a finger or a string.")
+            from pipeline import technique  # It builds on this module.
+
+            if mark.tag == "fingering":
+                for finger in text:
+                    technique.check_finger(root, note, finger)
+            elif mark.tag == "string":
+                technique.check_string(root, note, int(text))
             mark.text = text
             if mark.tag == "string":
                 from pipeline import fretted  # It needs nothing from here.

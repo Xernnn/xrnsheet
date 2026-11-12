@@ -936,6 +936,15 @@ def change_group(score_id: str, body: GroupEdit) -> dict:
             chosen = list(dict.fromkeys(edit.own_ids(root, body.notes)))
             # Respelling a note respells the notes tied to it, so a second one of those would undo it.
             chosen = edit.one_note_per_tie(root, chosen) if body.action == "respell" else chosen
+            if body.action in ("crossUp", "crossDown"):
+                # A chord moves to another staff as one, so a second of its notes would move it again.
+                events = {}
+                for note_id in chosen:
+                    try:
+                        events.setdefault(technique.event_key(edit.locate(root, note_id)), note_id)
+                    except edit.EditError:
+                        events.setdefault(note_id, note_id)
+                chosen = list(events.values())
             for note_id in chosen:
                 try:
                     GROUP_ACTIONS[body.action](root, note_id)
@@ -1000,14 +1009,11 @@ def change_strings(score_id: str, body: StringsEdit) -> dict:
     def change(root: ET.Element) -> None:
         _, board = fretted.part_and_board(root, body.part)
         shown_for = diagrams.board_for(root)  # The chord diagrams' guitar, before it changes.
-        changed = False
         if body.tab is not None and body.tab != bool(board.tab):
             fretted.set_tab(root, body.part, body.tab)
-            changed = True
         if body.tuning is not None or body.strings is not None or body.capo is not None:
             fretted.set_strings(root, body.part, body.tuning, body.strings, body.capo)
-            changed = True
-        if not changed:
+        if fretted.boards(root)[body.part].describe() == board.describe():
             raise edit.EditError("That's how this instrument is already set up.")
         diagrams.refit(root, shown_for)
 

@@ -1073,6 +1073,10 @@ def delete_note(root: ET.Element, note_id: str) -> None:
     if note.find("pitch") is None:
         delete_extra_rest(root, note_id)
         return
+    from pipeline.technique import harmonic_kind, remove_harmonic  # It builds on this module.
+
+    if harmonic_kind(note) == ("artificial", "base-pitch"):
+        remove_harmonic(root, note)  # The diamond touched above it goes with it.
     part, context = context_of(root, note)
     if note.find("grace") is not None:
         context.measure.remove(note)

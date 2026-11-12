@@ -978,3 +978,10 @@ def test_a_string_chosen_for_a_note_is_the_apps_own_and_left_out_of_a_file():
     synced(root)
     assert copy_of(root, note).get(fretted.CHOSEN) == "yes"
     assert fretted.CHOSEN not in to_text(technique.drawn_on_other_staves(copy.deepcopy(root)))
+
+
+def test_a_tuning_or_capo_asked_for_again_is_not_an_edit(client):
+    url = new_score(client)
+    for unchanged in ({"part": 0, "capo": 0}, {"part": 0, "tuning": "standard"}, {"part": 0, "strings": list(structure.GUITAR_STRINGS)}):
+        assert client.post(f"{url}/strings", json=unchanged).status_code == 422
+    assert client.get(url).json()["canUndo"] is False

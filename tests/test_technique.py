@@ -747,7 +747,7 @@ def test_techniques_an_instrument_hasnt_got_are_left_off_a_paste(client):
     assert done.status_code == 200, done.json()
     pasted = [found for found in saved(client, piano).iter("note") if found.find("pitch") is not None]
     assert len(pasted) == 2 and not any(found.find("notations/technical/fingering") is not None for found in pasted), "a pianist has no finger 0"
-    assert all(found.findtext("notations/technical/pluck") == "p" for found in pasted)
+    assert not any(found.find("notations/technical/pluck") is not None for found in pasted), "nor a guitarist's right-hand fingers"
 
 
 def test_a_guitars_string_number_retyped_moves_its_tablature(client):
@@ -963,3 +963,73 @@ def test_a_chord_diagrams_fingers_leave_the_bars_fingerings_named():
     ET.SubElement(dot, "fingering").text = "3"
     finger = next(item["id"] for item in marks.list_marks(root) if item["kind"] == "fingering")
     assert f'data-mark="{finger}"' in svg_of(root)
+
+
+def test_a_run_of_hammer_ons_in_one_bar_is_not_held_to_six():
+    root, ids = score("guitar-tab", 1, 64, 66, 67, 69, 71, 72, 74, 76, length="eighth")
+    technique.toggle_pair(root, ids[0], ids[-1], "hammerOn")
+    finished(root)
+    assert len([mark for mark in root.iter("hammer-on") if mark.get("type") == "start"]) == 7
+    assert len(re.findall(r'class="xrn-joined"', svg_of(root))) == 7
+
+
+def test_hands_over_a_chord_are_put_once():
+    root, ids = score("piano", 1, 60)
+    edit.add_pitch(root, ids[0], "", midi=64)
+    finished(root)
+    chord = [note.get("id") for note in edit.locate(root, ids[0]).event.notes]
+    technique.toggle_hand(root, chord, "RH")
+    assert [technique.words_of(found) for found in root.iter("direction") if technique.words_of(found)] == ["R.H."]
+
+
+def test_retyping_a_mark_is_held_to_what_the_instrument_has():
+    violin, notes = score("violin", 1, 67)
+    technique.set_fingering(violin, notes, "1")
+    technique.set_string_number(violin, notes, 4)
+    finished(violin)
+    listed = {item["kind"]: item["id"] for item in marks.list_marks(violin)}
+    for kind, text, reason in [("fingering", "5", "numbered 0 to 4"), ("string", "9", "strings 1 to 4"), ("string", "1", "String 1 can't play")]:
+        with pytest.raises(EditError, match=reason):
+            marks.set_label(violin, listed[kind], text)
+
+
+def test_a_double_stops_harmonics_keep_their_own_diamonds():
+    root, ids = score("violin", 1, 67)
+    edit.add_pitch(root, ids[0], "", midi=74)
+    finished(root)
+    lower, upper = [note.get("id") for note in edit.locate(root, ids[0]).event.notes]
+    technique.toggle_harmonic(root, [lower, upper], "artificial")
+    finished(root)
+    technique.toggle_harmonic(root, [upper], "artificial")
+    finished(root)
+    left = [note for note in edit.locate(root, lower).event.notes if technique.harmonic_kind(note)[1] == "touching-pitch"]
+    assert len(left) == 1 and (left[0].findtext("pitch/step"), left[0].findtext("pitch/octave")) == ("C", "5"), "the lower note's diamond, a fourth above G4, stays"
+
+
+def test_deleting_a_violins_stopped_note_takes_its_diamond():
+    root, ids = score("violin", 1, 67)
+    technique.toggle_harmonic(root, ids, "artificial")
+    finished(root)
+    edit.delete_note(root, ids[0])
+    finished(root)
+    assert not [note for note in root.iter("note") if note.find("pitch") is not None]
+
+
+def test_a_pasted_string_number_plays_its_note_on_that_string(client):
+    plain, notes = written_through(client, "guitar", 59)
+    client.post(f"{plain}/marks", json={"action": "stringNumber", "notes": notes, "number": 3})
+    copied = client.post(f"{plain}/copy", json={"first": notes[0], "last": notes[0]}).json()["events"]
+    copied[0]["strings"] = []  # As a copy from a guitar without a string kept for it.
+    url, _ = written_through(client, "guitar-tab")
+    at = next(found.get("id") for found in saved(client, url).iter("note"))
+    done = client.post(f"{url}/paste", json={"at": at, "events": copied}).json()
+    pasted = next(found for found in saved(client, url).iter("note") if found.find("pitch") is not None and (found.findtext("staff") or "1") == "1")
+    assert done["notes"][pasted.get("id")][5]["string"] == 3
+
+
+def test_a_chord_drawn_on_another_staff_moves_once_however_many_of_its_notes_are_chosen(client):
+    url, ids = written_through(client, "organ", 60)
+    client.post(f"{url}/notes/{ids[0]}", json={"action": "stack", "midi": 64})
+    chord = [note.get("id") for note in saved(client, url).iter("note") if note.find("pitch") is not None]
+    done = client.post(f"{url}/group", json={"action": "crossDown", "notes": chord}).json()
+    assert {done["notes"][note_id][5]["cross"] for note_id in chord} == {2}, "to the staff below, not two below"
