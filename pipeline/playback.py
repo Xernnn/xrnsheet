@@ -536,6 +536,11 @@ def event_places(root: ET.Element) -> dict[str, list]:
     return found
 
 
+def staff_of_notes(part: ET.Element) -> dict[str, int]:
+    """Say which of its part's staves each note is on, counted from 1, so a piano's hands can be heard alone."""
+    return {note.get("id"): int(note.findtext("staff") or 1) for note in part.iter("note") if note.get("id")}
+
+
 def playback(root: ET.Element) -> dict:
     """Return notes and chords, timed in quarter notes from the start of the score.
 
@@ -554,7 +559,8 @@ def playback(root: ET.Element) -> dict:
         bars, end = laid_out(part, order)
         total = max(total, end)
         played = sustained(play_part(bars, transposed_bars(part), swings, holds), pedal_spans(bars, end))
-        notes.extend(item | {"part": part_number} for item in played)
+        staves = staff_of_notes(part)
+        notes.extend(item | {"part": part_number, "staff": staves.get(item["id"], 1)} for item in played)
         if part_number == 0:
             for _, timeline, start in bars:
                 for mark in sorted(timeline.marks, key=lambda mark: mark.onset):

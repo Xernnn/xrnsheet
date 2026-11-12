@@ -49,3 +49,19 @@ def test_each_part_says_how_far_it_sounds_from_how_it_is_written():
     root = score(1, clef="trumpet")
     structure.add_part(root, "bass-guitar")
     assert playback(root)["transpositions"] == [-2, -12]
+
+
+def test_each_note_says_which_staff_of_its_part_it_is_on():
+    root = score(1, clef="piano")
+    structure.add_part(root, "violin")
+    edit.ensure_note_ids(root)
+    notes = root.find("part/measure").findall("note")
+    right = next(note.get("id") for note in notes if (note.findtext("staff") or "1") == "1")
+    left = next(note.get("id") for note in notes if note.findtext("staff") == "2")
+    violin = root.findall("part")[1].find("measure/note").get("id")
+    edit.write_note(root, right, "whole", 0, "E")
+    edit.write_note(root, left, "whole", 0, "C")
+    edit.write_note(root, violin, "whole", 0, "G")
+    edit.ensure_note_ids(root)
+    played = sorted((note["part"], note["staff"], note["midi"] % 12) for note in playback(root)["notes"])
+    assert played == [(0, 1, 4), (0, 2, 0), (1, 1, 7)], "the right hand, the left hand and the violin"
