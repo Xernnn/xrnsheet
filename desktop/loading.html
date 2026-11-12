@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>xrnsheet</title>
+<style>
+  /* The app's own colours, from app/static/app.css. */
+  :root { --bg: #f5f5f6; --text: #1f1f1f; --muted: #5d6066; --field: #ffffff; --line: #d3d6db; --accent: #70afea; color-scheme: light; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #2d2d30; --text: #ececee; --muted: #a2a4aa; --field: #242427; --line: #47474b; --accent: #2093fe; color-scheme: dark; }
+  }
+  html, body { height: 100%; margin: 0; }
+  body { display: grid; place-items: center; padding: 16px; box-sizing: border-box; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; width: 100%; text-align: center; }
+  .spinner { width: 28px; height: 28px; margin: 0 auto 16px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: turn 0.9s linear infinite; }
+  @keyframes turn { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+  h1 { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+  p { color: var(--muted); margin: 0; }
+  pre { text-align: left; white-space: pre-wrap; word-break: break-word; max-height: 50vh; overflow: auto; margin: 16px 0 0; padding: 12px; background: var(--field); border: 1px solid var(--line); border-radius: 6px; font: 12px/1.45 ui-monospace, monospace; color: var(--text); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="spinner" id="spinner"></div>
+  <h1 id="title">Starting xrnsheet…</h1>
+  <p id="note">Your scores open in a moment.</p>
+  <pre id="detail" hidden></pre>
+</main>
+<script>
+  const query = new URLSearchParams(location.search);
+  const problem = query.get("problem");
+  if (problem) {
+    document.getElementById("spinner").hidden = true;
+    document.getElementById("title").textContent = problem;
+    document.getElementById("note").textContent = "Close this window and open xrnsheet again once it's fixed.";
+    const detail = query.get("detail");
+    if (detail) {
+      const box = document.getElementById("detail");
+      box.textContent = detail;
+      box.hidden = false;
+    }
+  } else if (query.get("state") === "restarting") {
+    document.getElementById("title").textContent = "Starting xrnsheet again…";
+    document.getElementById("note").textContent = "Its server stopped. Every edit was saved as you made it.";
+  }
+</script>
+</body>
+</html>

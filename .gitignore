@@ -14,3 +14,6 @@ data/notes/
 models/*
 !models/chord_reader.pt
 !models/note_reader.pt
+desktop/node_modules/
+desktop/dist/
+desktop/build/
