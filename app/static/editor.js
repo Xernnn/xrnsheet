@@ -1,4 +1,4 @@
-// Note entry, selection, the note toolbar and playback. This loads last and starts the page.
+// Note entry, selection and the note toolbar. This loads last and starts the page.
 // In the order the toolbar shows them, which is MuseScore's: shortest first.
 const LENGTHS = [
   { key: "1", type: "64th", label: "64th note", glyph: "E1DD" },
@@ -19,22 +19,9 @@ const CHORD_WINDOW_MS = 40; // Keys of a MIDI keyboard pressed this close togeth
 const DRAG_START_PX = 4;
 const CURVE_REACH_PX = 6; // A slur is hair-thin, so a click this close to it counts.
 const CURVE_SAMPLE_PX = 4;
-const AUDIO_RATE = 44100;
-const AUDIO_TAIL_SECONDS = 0.5;
-// General MIDI groups its sounds in eights, so the group says what kind of instrument this is.
-// They're rough stand-ins to tell parts apart, and the levels even out how loud each wave sounds.
-const FAMILY_SOUNDS = {
-  5: { wave: "sawtooth", level: 0.7 }, // Strings.
-  6: { wave: "sawtooth", level: 0.7 }, // Ensembles and voices.
-  7: { wave: "sawtooth", level: 0.7 }, // Brass.
-  8: { wave: "square", level: 0.5 }, // Reeds.
-  9: { wave: "sine", level: 1.2 }, // Flutes.
-};
-const USUAL_SOUND = { wave: "triangle", level: 1 };
 const MARK_NAMES = { dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin", ottava: "Ottava", pedal: "Pedal" };
 const EXPRESSIONS = { staff: "Text, e.g. solo", expression: "Expression, e.g. dolce" };
 const editor = { on: false, type: "quarter", dots: 0, voice: 1, cursor: null, last: null, trail: [], future: [] };
-let player = null;
 let range = null; // A selected stretch: { first, last, ids }.
 let selectedMark = null; // The id of a selected dynamic, text, slur or other mark.
 let pan = null; // The pages being dragged about.
@@ -178,6 +165,7 @@ function drawRangeBoxes() {
 
 function drawCursor() {
   drawRangeBoxes();
+  drawLoopMarkers();
   const caret = $("caret");
   if (!editor.on) { caret.hidden = true; return; }
   if (!document.getElementById(plainId(editor.cursor))) {
@@ -230,6 +218,7 @@ function drawTitle() {
 function moveCursor(id) {
   editor.cursor = id;
   editor.last = null;
+  playFromNote(plainId(id));
   drawCursor();
   updateTools();
 }
@@ -561,6 +550,7 @@ async function growRange(id) {
   document.querySelectorAll("#pages g.selected").forEach(element => element.classList.remove("selected"));
   range = { first, last: id, ids: data.ids };
   selected = id;
+  playFromNote(first);
   selectedMark = null;
   drawRange();
   drawRangeBoxes();
@@ -915,140 +905,6 @@ function barAction(action, extra = {}) {
   return enqueue(async () => { await send("bars", { action, note: range?.first ?? actionTarget(), ...extra }); });
 }
 
-function tone(audio, midi, at, length, volume, wave) {
-  const oscillator = audio.createOscillator();
-  const gain = audio.createGain();
-  const end = at + Math.max(length, 0.05);
-  oscillator.type = wave;
-  oscillator.frequency.value = 440 * 2 ** ((midi - 69) / 12);
-  gain.gain.setValueAtTime(0, at);
-  gain.gain.linearRampToValueAtTime(volume, at + 0.012);
-  gain.gain.linearRampToValueAtTime(volume * 0.7, Math.max(at + 0.02, end - 0.04));
-  gain.gain.linearRampToValueAtTime(0, end);
-  oscillator.connect(gain).connect(audio.destination);
-  oscillator.start(at);
-  oscillator.stop(end + 0.02);
-}
-
-// Turns places in quarter notes into seconds, which takes adding up every tempo before them.
-function clockFor(data, speed) {
-  const changes = data.tempos?.length ? data.tempos : [{ start: 0, bpm: data.tempo }];
-  let seconds = 0;
-  const marks = changes.map((change, index) => {
-    if (index) seconds += (change.start - changes[index - 1].start) * 60 / (changes[index - 1].bpm * speed);
-    return { ...change, seconds };
-  });
-  return place => {
-    const mark = marks.findLast(item => item.start <= place) ?? marks[0];
-    return mark.seconds + (place - mark.start) * 60 / (mark.bpm * speed);
-  };
-}
-
-function soundOf(data, note) {
-  const program = data.programs?.[note.part] ?? 1;
-  return FAMILY_SOUNDS[Math.floor((program - 1) / 8)] ?? USUAL_SOUND;
-}
-
-// Works with speakers or with an offline context, which is how the tests check what would be heard.
-function schedule(audio, data, from, zero, speed = 1) {
-  const clock = clockFor(data, speed);
-  const at = place => zero + clock(place) - clock(from);
-  const notes = data.notes.filter(note => note.start >= from);
-  for (const note of notes) {
-    const { wave, level } = soundOf(data, note);
-    tone(audio, note.midi, at(note.start), at(note.start + note.length) - at(note.start), 0.4 * note.volume ** 2 * level, wave);
-  }
-  const chords = data.chords.filter(chord => chord.start + chord.length > from);
-  for (const chord of chords) {
-    const begins = Math.max(chord.start, from);
-    for (const midi of chord.midi) tone(audio, midi, at(begins), at(chord.start + chord.length) - at(begins), 0.045, "sine");
-  }
-  return { notes, chords, at };
-}
-
-// A plain 16-bit WAV, which any program can open.
-function wavFile(samples, rate) {
-  const peak = Math.max(1, samples.reduce((top, sample) => Math.max(top, Math.abs(sample)), 0));
-  const file = new DataView(new ArrayBuffer(44 + samples.length * 2));
-  const write = (at, word) => [...word].forEach((letter, index) => file.setUint8(at + index, letter.charCodeAt(0)));
-  write(0, "RIFF");
-  file.setUint32(4, 36 + samples.length * 2, true);
-  write(8, "WAVEfmt ");
-  file.setUint32(16, 16, true);
-  file.setUint16(20, 1, true); // Plain samples, not compressed.
-  file.setUint16(22, 1, true); // One channel.
-  file.setUint32(24, rate, true);
-  file.setUint32(28, rate * 2, true);
-  file.setUint16(32, 2, true);
-  file.setUint16(34, 16, true);
-  write(36, "data");
-  file.setUint32(40, samples.length * 2, true);
-  samples.forEach((sample, index) => file.setInt16(44 + index * 2, sample / peak * 0x7fff, true));
-  return new Blob([file], { type: "audio/wav" });
-}
-
-// Made by the same code as Play, so the file sounds just as the score does, only faster than real time.
-function saveAudio() {
-  return enqueue(async () => {
-    const data = await (await fetch(`/api/scores/${scoreId}/playback`)).json();
-    const seconds = clockFor(data, 1)(data.total) + AUDIO_TAIL_SECONDS;
-    const audio = new OfflineAudioContext(1, Math.ceil(seconds * AUDIO_RATE), AUDIO_RATE);
-    schedule(audio, data, 0, 0);
-    const rendered = await audio.startRendering();
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(wavFile(rendered.getChannelData(0), AUDIO_RATE));
-    link.download = "score.wav";
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  });
-}
-
-function clearPlaying() {
-  document.querySelectorAll("#pages .playing").forEach(element => element.classList.remove("playing"));
-}
-
-function stopPlaying() {
-  if (!player) return;
-  player.timers.forEach(clearTimeout);
-  player.audio.close();
-  player = null;
-  clearPlaying();
-  showPlaying(false);
-}
-
-function showPlaying(on) {
-  const button = $("play");
-  button.setAttribute("aria-label", on ? "Stop" : "Play");
-  button.setAttribute("aria-pressed", String(on));
-  button.innerHTML = icon(on ? "stop" : "play");
-}
-
-async function startPlaying() {
-  const response = await fetch(`/api/scores/${scoreId}/playback`);
-  if (!response.ok) { message("This sheet couldn't be played."); return; }
-  const data = await response.json();
-  const audio = new (window.AudioContext || window.webkitAudioContext)();
-  const chosen = data.notes.find(note => note.id === plainId(editor.on ? editor.cursor : selected));
-  const from = chosen ? chosen.start : 0;
-  const { notes, chords, at } = schedule(audio, data, from, audio.currentTime + 0.1, Number($("speed").value));
-  const started = audio.currentTime + 0.1;
-  const timers = notes.map(note => setTimeout(() => {
-    clearPlaying();
-    const element = document.getElementById(note.id);
-    element?.classList.add("playing");
-    element?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, (at(note.start) - started + 0.1) * 1000));
-  timers.push(setTimeout(stopPlaying, (at(data.total) - started + 0.3) * 1000));
-  player = { audio, timers };
-  showPlaying(true);
-  $("play").dataset.notes = notes.length;
-  $("play").dataset.chords = chords.length;
-}
-
-function togglePlaying() {
-  return player ? stopPlaying() : startPlaying();
-}
-
 function setUpToolbar() {
   // One frame for them all, so the notes stand on one line as they do in MuseScore's toolbar.
   const boxes = LENGTHS.map(({ glyph }) => setGlyphs(glyph));
@@ -1102,7 +958,6 @@ function setUpToolbar() {
     if (mark) openMark(mark);
     else if (event.target.closest("g.pgHead")) openProject();
   });
-  $("audio").addEventListener("click", saveAudio);
   $("dotButton").addEventListener("click", chooseDot);
   $("tripletButton").addEventListener("click", () => toggleTuplet());
   $("inputToggle").addEventListener("click", toggleInput);
@@ -1110,8 +965,7 @@ function setUpToolbar() {
   $("deleteBar").addEventListener("click", deleteBars);
   $("lyricButton").addEventListener("click", startLyrics);
   // A clicked button keeps the focus, and Space would press it again instead of playing.
-  for (const id of ["noteBar", "side", "mainBar", "statusBar", "pitches"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
-  $("play").addEventListener("click", togglePlaying);
+  for (const id of ["noteBar", "side", "mainBar", "statusBar", "pitches", "playPopup", "speedPopup"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
   $("redo").addEventListener("click", redoEdit);
   window.addEventListener("resize", drawCursor);
   $("pages").addEventListener("mousemove", event => drawGhost(event.clientX, event.clientY));
@@ -1233,6 +1087,7 @@ document.addEventListener("keydown", event => {
 
 setUpPage();
 setUpShell();
+setUpPlayback();
 setUpToolbar();
 updateTools();
 if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); } else drawHistory();

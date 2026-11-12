@@ -658,16 +658,6 @@ function setUpShell() {
   $("breaksCount").addEventListener("input", () => { document.querySelector('input[name="breaksMode"][value="every"]').checked = true; });
   document.querySelectorAll("dialog [data-close]").forEach(button => button.addEventListener("click", () => button.closest("dialog").close()));
   $("keysTable").innerHTML = SHORTCUTS.map(([keys, what]) => `<tr><td>${keysHtml(keys)}</td><td>${what}</td></tr>`).join("");
-  $("playSettings").addEventListener("click", event => {
-    const popup = $("playPopup");
-    popup.hidden = !popup.hidden;
-    const at = event.currentTarget.getBoundingClientRect();
-    popup.style.top = `${at.bottom + 4}px`;
-    popup.style.left = `${Math.max(4, Math.min(at.left, innerWidth - popup.offsetWidth - 4))}px`;
-  });
-  document.addEventListener("pointerdown", event => {
-    if (!$("playPopup").hidden && !event.target.closest("#playPopup, #playSettings")) $("playPopup").hidden = true;
-  });
   $("pickupChoice").addEventListener("change", event => {
     if (event.target.value !== "") barAction("pickup", { count: Number(event.target.value) });
     event.target.value = "";

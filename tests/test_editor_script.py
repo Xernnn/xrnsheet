@@ -85,7 +85,61 @@ def run_script(program: str) -> object:
 
 
 def test_the_page_loads_the_scripts_these_tests_read():
-    assert page_scripts() == ["page.js", "palettes.js", "shell.js", "editor.js"]
+    assert page_scripts() == ["page.js", "palettes.js", "shell.js", "playback.js", "editor.js"]
+
+
+def playback_program(body: str) -> str:
+    """The playback script's functions and the constants they read, then a test that prints JSON."""
+    source = (STATIC / "playback.js").read_text(encoding="utf-8")
+    constants = "\n".join(re.findall(r"^const (?:EARLY|TICK|SLOWEST_SPEED|FASTEST_SPEED) = [^;]*;", source, re.M))
+    return constants + "\n" + page_functions() + "\n" + body
+
+
+def test_the_metronome_counts_a_pickup_as_the_end_of_a_bar_and_six_eight_in_two():
+    bars = [
+        {"start": 0, "length": 1, "full": 4, "index": 0, "beats": 4, "beatType": 4},
+        {"start": 1, "length": 4, "full": 4, "index": 1, "beats": 4, "beatType": 4},
+        {"start": 5, "length": 3, "full": 3, "index": 2, "beats": 6, "beatType": 8},
+    ]
+    found = run_script(playback_program(f"console.log(JSON.stringify(beatsBetween({{ bars: {json.dumps(bars)} }}, 0, 8)));"))
+    places = [[beat["place"], beat["strong"]] for beat in found]
+    assert places == [[0, False], [1, True], [2, False], [3, False], [4, False], [5, True], [6.5, False]]
+
+
+def test_the_counters_read_and_write_a_time_and_a_measure_and_beat():
+    bars = [{"start": 0, "length": 2, "full": 4, "index": 0, "beats": 4, "beatType": 4}, {"start": 2, "length": 4, "full": 4, "index": 1, "beats": 4, "beatType": 4}]
+    body = f"""
+        const data = {{ bars: {json.dumps(bars)}, tempo: 120, tempos: [{{ start: 0, bpm: 120 }}, {{ start: 2, bpm: 60 }}] }};
+        const clock = clockFor(data, 1);
+        console.log(JSON.stringify([
+            timeText(0), timeText(3725.43), secondsIn("01:02:05.5"), secondsIn("1:30"), secondsIn("x"),
+            beatAt(data, 0), beatAt(data, 1), beatAt(data, 3.5), placeAtBeat(data, 2, 3), placeAtBeat(data, 1, 1), placeAtBeat(data, 9, 1),
+            clock(4), clock.place(clock(4)), clock.place(2.5),
+        ]));
+    """
+    found = run_script(playback_program(body))
+    assert found[:5] == ["00:00:00.0", "01:02:05.4", 3725.5, 90, None]
+    assert found[5:8] == [{"measure": 1, "beat": 3}, {"measure": 1, "beat": 4}, {"measure": 2, "beat": 2}], "a pickup of two beats starts on the third"
+    assert found[8:11] == [4, 0, None], "a pickup's first beat is where it starts, not before"
+    assert found[11:] == [3, 4, 3.5], "two beats at 120 take a second, and a beat and a half at 60 the rest"
+
+
+def test_a_loop_goes_round_the_selection_wherever_it_is_first_played():
+    bars = [{"start": 0, "length": 4, "index": 0}, {"start": 4, "length": 4, "index": 1}, {"start": 8, "length": 4, "index": 0}, {"start": 12, "length": 4, "index": 1}]
+    events = {"a": [0, 1, 1], "b": [1, 2, 2], "c": [0, 3, 1]}
+    body = f"""
+        const playState = {{ loop: null }};
+        const data = {{ bars: {json.dumps(bars)}, events: {json.dumps(events)}, total: 16 }};
+        const windows = [];
+        for (const loop of [null, {{ first: "a", last: "b" }}, {{ first: "b", last: "a" }}, {{ first: "c", last: "c" }}, {{ first: "a", last: "gone" }}]) {{
+            playState.loop = loop;
+            windows.push(loopWindow(data));
+        }}
+        console.log(JSON.stringify([...windows, placeOf(data, "a", 5)]));
+    """
+    found = run_script(playback_program(body))
+    assert found[:5] == [{"start": 0, "end": 16}, {"start": 1, "end": 8}, {"start": 1, "end": 8}, {"start": 3, "end": 4}, {"start": 0, "end": 16}]
+    assert found[5] == {"start": 9, "end": 10}, "the second time it's played"
 
 
 def palettes() -> list[dict]:

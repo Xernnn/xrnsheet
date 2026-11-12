@@ -129,7 +129,7 @@ A score read from a photo or PDF also has the original sheet in a panel on the r
 | `X` | Flip the stem |
 | Ctrl+Alt+`1` to `4` | Write in that voice, or move the selection to it |
 | Enter | Start a new line at this measure, or open a selected mark's text |
-| Space | Play or stop, from the selected note |
+| Space | Play or stop, from the playback position |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | `F9`, `F7`, `F8` | Show or hide Palettes, Instruments, Properties |
 | Ctrl+`=`, Ctrl+`-`, Ctrl+`0` | Zoom in, zoom out, 100%. Ctrl and the mouse wheel also zoom |
@@ -143,9 +143,11 @@ The keys are MuseScore's where MuseScore has one. A browser keeps a few for itse
 
 Measures that don't add up to the time signature are listed above the score, which is usually how a misread rhythm shows itself. Click one to go there, then fix it with "Remove beat" or "Insert beat" in the Properties panel. A new time signature doesn't move notes between measures: the ones that no longer fit are listed for you to fix.
 
-Play sounds the notes and the chord symbols, starting from the selected note. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, articulations and ornaments, and the sustain pedal.
+Play sounds the notes and the chord symbols. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, articulations and ornaments, and the sustain pedal.
 
-An 8va line keeps the notes under it at the pitch they sound, which is how MusicXML and MuseScore store them, and draws them an octave lower. A note clicked onto the staff under one is the note an octave above where it's drawn. The cog beside Play slows it down or speeds it up.
+An 8va line keeps the notes under it at the pitch they sound, which is how MusicXML and MuseScore store them, and draws them an octave lower. A note clicked onto the staff under one is the note an octave above where it's drawn.
+
+**The playback toolbar** is MuseScore's: Rewind, Play, Loop, the metronome and the playback settings, then the position as a time and as a measure and beat, and the tempo. Play starts from the playback position, which is wherever you last selected a note or rest, typed a time or a measure and beat into the counters, rewound, or stopped. While entering notes it starts where the next note goes. Loop goes round the selection, or the whole score if nothing is selected, between flags drawn on the page; the settings also set either flag at the selected note, and turn the chord symbols off or on. The metronome ticks each beat, a dotted one in 6/8, 9/8 and 12/8, higher on the first of each bar, and an exported audio file has it in while it's on. The tempo opens the speed, from 10% to 300% of the written tempo, and the tempo shown follows it.
 
 Tools ▸ Transpose moves the selection, or the whole score if nothing is selected, to a key or by an interval, and the chord symbols move with it. Format ▸ Add/remove system breaks sets how many measures go on a line.
 

@@ -508,8 +508,37 @@ def programs_of(root: ET.Element) -> list[int]:
     return found
 
 
+def bars_played(bars: list[tuple[Context, Timeline, float]]) -> list[dict]:
+    """Return each bar as it's played, for the playback position and the metronome.
+
+    A pickup is shorter than its time signature says, and its beats are the last ones of a bar.
+    """
+    found = []
+    for context, timeline, start in bars:
+        longest = max((line_end(line) for line in timeline.lines.values()), default=0)
+        found.append({"start": start, "length": float(longest or context.length), "full": float(context.length), "index": context.index, "beats": context.beats, "beatType": context.beat_type})
+    return found
+
+
+def event_places(root: ET.Element) -> dict[str, list]:
+    """Say where in its bar each note and rest is, and how long it lasts, so a stretch can be found to loop."""
+    found: dict[str, list] = {}
+    for part in root.findall("part"):
+        for context in contexts(part):
+            for line in read_measure(context.measure, context.divisions).lines.values():
+                for event in line:
+                    for note in event.notes:
+                        if note.get("id"):
+                            found[note.get("id")] = [context.index, float(event.onset), float(event.length)]
+    return found
+
+
 def playback(root: ET.Element) -> dict:
-    """Return notes and chords, timed in quarter notes from the start of the score."""
+    """Return notes and chords, timed in quarter notes from the start of the score.
+
+    The bars are listed as they're played, and each note and rest says where it is in its bar, so
+    the page can show the playback position as a measure and beat and loop over a selection.
+    """
     notes: list[dict] = []
     chords: list[dict] = []
     holds: list[tuple[float, float]] = []
@@ -538,4 +567,6 @@ def playback(root: ET.Element) -> dict:
         "chords": chords,
         "total": total,
         "programs": programs_of(root),
+        "bars": bars_played(top_bars),
+        "events": event_places(root),
     }

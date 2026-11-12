@@ -2021,6 +2021,85 @@ def test_sound(page, base: str, created: list[str]) -> None:
     check("playback stops", page.locator("#pages .playing").count() == 0)
 
 
+def wait_playing(page, playing: bool) -> None:
+    page.wait_for_function("wanted => document.querySelector('#play').getAttribute('aria-pressed') === wanted", arg=str(playing).lower())
+
+
+def test_playback_toolbar(page, base: str, shots: Path | None, created: list[str]) -> None:
+    written_melody(page, base, created, bars=4, tune="cdefgabcdefg")
+    page.wait_for_function("() => playState.data !== null")
+    check("the toolbar has rewind, play, loop, metronome and settings", all(page.is_visible(f"#{name}") for name in ("rewind", "play", "loop", "metronome", "playSettings")))
+    check("it shows the tempo", page.inner_text("#tempoValue") == "100", page.inner_text("#tempoValue"))
+    check("and the position at the start", (page.input_value("#timeCounter"), page.input_value("#beatCounter")) == ("00:00:00.0", "1.1"))
+    page.fill("#beatCounter", "3.1")
+    page.keyboard.press("Enter")
+    check("a measure typed in moves the position there", page.input_value("#timeCounter") == "00:00:04.8", page.input_value("#timeCounter"))
+    page.keyboard.press(" ")
+    wait_playing(page, True)
+    check("with nothing selected, Play starts from that position", page.get_attribute("#play", "data-notes") == "4", page.get_attribute("#play", "data-notes"))
+    page.wait_for_timeout(400)
+    page.keyboard.press(" ")
+    wait_playing(page, False)
+    measure = page.input_value("#beatCounter")
+    check("stopping keeps the place it got to", measure.startswith("3."), measure)
+    page.keyboard.press(" ")
+    wait_playing(page, True)
+    check("and Play carries on from there", page.get_attribute("#play", "data-notes") in ("3", "4"), page.get_attribute("#play", "data-notes"))
+    page.keyboard.press(" ")
+    wait_playing(page, False)
+    page.click("#rewind")
+    check("rewind goes back to the start", (page.input_value("#timeCounter"), page.input_value("#beatCounter")) == ("00:00:00.0", "1.1"))
+    page.fill("#timeCounter", "00:00:01.2")
+    page.keyboard.press("Enter")
+    check("a time typed in moves the position there", page.input_value("#beatCounter") == "1.3", page.input_value("#beatCounter"))
+
+    select_notes(page, 1, 2)
+    page.click("#loop")
+    check("the loop button turns on", page.get_attribute("#loop", "aria-pressed") == "true")
+    check("flags mark where the loop starts and ends", page.locator(".loopMarker.in").count() == 1 and page.locator(".loopMarker.out").count() == 1)
+    page.click("#play")
+    wait_playing(page, True)
+    check("the loop plays only the selection", page.get_attribute("#play", "data-notes") == "2", page.get_attribute("#play", "data-notes"))
+    page.wait_for_timeout(1700)  # Two quarter notes at 100 a minute take 1.2 seconds.
+    place = page.evaluate("() => player && playingPlace()")
+    check("and goes round again", place is not None and 1 <= place <= 3, place)
+    if shots:
+        page.screenshot(path=str(shots / "playback.png"))
+    page.click("#play")
+    wait_playing(page, False)
+    page.click("#loop")
+    check("the loop can be turned off", page.get_attribute("#loop", "aria-pressed") == "false" and page.locator(".loopMarker").count() == 0)
+
+    page.click("#metronome")
+    check("the metronome turns on", page.get_attribute("#metronome", "aria-pressed") == "true")
+    beats = page.evaluate("""async () => {
+        const data = await fetchPlayback();
+        const { beats } = schedule(new OfflineAudioContext(1, 44100, 44100), data, 0, 0, 1, Infinity, { metronome: playState.metronome });
+        return beats.map(beat => [beat.place, beat.strong]);
+    }""")
+    check("it ticks every beat, higher on each bar's first", beats == [[place, place % 4 == 0] for place in range(16)], beats[:6])
+    with page.expect_download() as download:
+        menu(page, "File", "Export", "Audio (WAV)")
+    with wave.open(str(download.value.path())) as sound:
+        rate = sound.getframerate()
+        samples = array.array("h", sound.readframes(sound.getnframes()))
+    check("exported audio has the ticks in it while it's on", max(abs(sample) for sample in samples[int(rate * 0.6 * 12.5) :]) > 1000)
+    page.click("#metronome")
+
+    page.fill("#beatCounter", "1.3")
+    page.keyboard.press("Enter")
+    page.click("#tempoButton")
+    page.fill("#speedValue", "200")
+    page.keyboard.press("Enter")
+    check("the speed doubles the tempo shown", page.inner_text("#tempoValue") == "200", page.inner_text("#tempoValue"))
+    check("and halves the time to a place", page.input_value("#timeCounter") == "00:00:00.6", page.input_value("#timeCounter"))
+    page.click("#speedReset")
+    check("reset goes back to the written tempo", page.inner_text("#tempoValue") == "100")
+    page.keyboard.press("Escape")
+    page.mouse.click(5, 5)
+    settle(page)
+
+
 def test_phone(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()
     page.set_viewport_size({"width": 390, "height": 800})
@@ -2117,6 +2196,7 @@ def main() -> None:
             test_midi_keyboard(context, base, created)
             test_opening_a_file(page, base, arguments.shots, created)
             test_sound_of_marks(page, base, created)
+            test_playback_toolbar(page, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])

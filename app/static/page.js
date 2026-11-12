@@ -113,6 +113,7 @@ function message(text) {
 }
 
 function openScore(id) {
+  forgetPlayback();
   scoreId = id;
   score = null;
   selected = null;
@@ -123,6 +124,7 @@ function openScore(id) {
 
 // The score stays where it is, as it's saved with every edit, and the Home tab lists it.
 function closeScore() {
+  forgetPlayback();
   history.replaceState(null, "", " ");
   scoreId = null;
   score = null;
@@ -197,6 +199,7 @@ function draw() {
   drawRange();
   drawCursor();
   updateTools();
+  refreshPosition();
 }
 
 function drawOriginals() {
@@ -264,6 +267,7 @@ function select(id) {
   selected = id;
   const element = id && document.getElementById(id);
   if (element) markSelected(element);
+  if (id) playFromNote(id);
   drawRangeBoxes();
   updateTools();
 }

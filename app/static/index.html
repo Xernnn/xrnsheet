@@ -19,8 +19,15 @@
     <button id="partsButton" title="Open or print one instrument's part"><span data-icon="parts"></span><span>Parts</span></button>
   </div>
   <div id="playTools" class="scoreOnly" role="toolbar" aria-label="Playback">
+    <button id="rewind" class="flat" aria-label="Rewind" title="Rewind to the start, or to the start of the loop"><span data-icon="rewind"></span></button>
     <button id="play" class="flat" aria-label="Play" aria-pressed="false" title="Play from the selected note, or stop (Space)"><span data-icon="play"></span></button>
+    <button id="loop" class="flat" aria-label="Loop playback" aria-pressed="false" title="Loop playback over the selection"><span data-icon="loop"></span></button>
+    <button id="metronome" class="flat" aria-label="Metronome" aria-pressed="false" title="Metronome"><span data-icon="metronome"></span></button>
     <button id="playSettings" class="flat" aria-label="Playback settings" title="Playback settings"><span data-icon="cog"></span></button>
+    <span class="divider"></span>
+    <input id="timeCounter" class="readout counter" aria-label="Playback time" title="Playback time. Type a time to go there" value="00:00:00.0" autocomplete="off" spellcheck="false">
+    <input id="beatCounter" class="readout counter" aria-label="Measure and beat" title="Measure and beat. Type one, such as 5.1, to go there" value="1.1" autocomplete="off" spellcheck="false">
+    <button id="tempoButton" class="flat readout" aria-label="Playback speed" title="Playback speed" aria-haspopup="dialog"><span class="tempoNote"></span>&nbsp;=&nbsp;<span id="tempoValue">100</span></button>
   </div>
   <div id="undoTools" class="scoreOnly">
     <button id="undo" class="flat" aria-label="Undo" title="Undo (Ctrl+Z)" disabled><span data-icon="undo"></span></button>
@@ -198,7 +205,14 @@
   <div id="editorError" hidden></div>
 </div>
 <div id="playPopup" class="popup" hidden>
-  <label>Tempo <select id="speed" aria-label="Playback speed"><option value="0.5">50%</option><option value="0.75">75%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>
+  <label class="check"><input type="checkbox" id="playChords" checked> Play chord symbols</label>
+  <button id="loopLeft">Set loop marker left</button>
+  <button id="loopRight">Set loop marker right</button>
+</div>
+<div id="speedPopup" class="popup" hidden>
+  <label>Speed <input id="speedValue" type="number" min="10" max="300" step="1" value="100" aria-label="Playback speed in percent"> %</label>
+  <input id="speed" type="range" min="10" max="300" step="5" value="100" aria-label="Playback speed">
+  <button id="speedReset">Reset to the written tempo</button>
 </div>
 
 <dialog id="newDialog" aria-labelledby="newTitle">
@@ -317,6 +331,7 @@
 <script src="page.js"></script>
 <script src="palettes.js"></script>
 <script src="shell.js"></script>
+<script src="playback.js"></script>
 <script src="editor.js"></script>
 </body>
 </html>
