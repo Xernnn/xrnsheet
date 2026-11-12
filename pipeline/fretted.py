@@ -235,10 +235,11 @@ def tab_voice(voice: str, staff: str, taken: set[str]) -> str:
     return str(number)
 
 
-# What a fret number on a TAB staff shows of its note. The rest belongs to the standard staff.
-TAB_NOTATIONS = {"tied", "slide", "glissando"}
-TAB_TECHNICAL = {"hammer-on", "pull-off", "bend", "harmonic"}
-LEFT_ON_STANDARD = {"lyric", "accidental", "beam", "stem", "notations", "staff", "voice", "play", "listen", "notehead-text"}
+# What a fret number on a TAB staff shows of its note: its ties. Slides, bends, hammer-ons and the
+# like are drawn there from the note (see decorate.py), as a copy of a mark joining two notes would
+# be numbered like the note's own and taken for its other end. The rest belongs to the standard staff.
+TAB_NOTATIONS = {"tied"}
+LEFT_ON_STANDARD = {"lyric", "accidental", "beam", "stem", "notations", "staff", "voice", "play", "listen", "notehead", "notehead-text"}
 
 
 def tab_copy(note: ET.Element, staff: str, voice: str) -> ET.Element:
@@ -258,11 +259,6 @@ def tab_copy(note: ET.Element, staff: str, voice: str) -> ET.Element:
     for child in notations if notations is not None else []:
         if child.tag in TAB_NOTATIONS:
             kept.append(copy.deepcopy(child))
-        elif child.tag == "technical":
-            technical = ET.Element("technical")
-            technical.extend(copy.deepcopy(mark) for mark in child if mark.tag in TAB_TECHNICAL)
-            if len(technical):
-                kept.append(technical)
     if len(kept):
         place(copied, kept)
     return copied

@@ -1367,6 +1367,7 @@ def clear_marks(root: ET.Element, note_id: str) -> None:
         raise EditError("This note has no marks to clear")
     if len(notations) == 0:
         find_note(root, note_id).remove(notations)
+    repair_slurs(context_of(root, find_note(root, note_id))[0], {"hammer-on", "pull-off", "wavy-line"})  # Their other ends go too.
 
 
 def list_chords(root: ET.Element) -> list[dict]:

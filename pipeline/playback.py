@@ -9,16 +9,32 @@ sustain pedal. Notes under an 8va line need nothing done, as MusicXML gives them
 import re
 import xml.etree.ElementTree as ET
 from bisect import bisect_right
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 
 from chords.vocab import QUALITIES
 from pipeline.fretted import fretboard
 from pipeline.marks import ACCENTS, DYNAMICS
 from pipeline.musicxml import chord_from_harmony
-from pipeline.rhythm import STEPS, Context, Event, Timeline, alteration_in_key, contexts, is_tied, line_end, read_measure
+from pipeline.rhythm import STEPS, TAB_COPY, Context, Event, Timeline, alteration_in_key, contexts, is_tied, line_end, read_measure
+from pipeline.structure import instrument_of
 
 DEFAULT_TEMPO = 100
+OCTAVE = 12
+# Techniques, as playback approximates them. Lengths are in quarter notes, or shares of the note.
+PIZZICATO_PROGRAM = 46  # General MIDI's pizzicato strings, counted from 1.
+PIZZICATO_LONGEST = 0.5
+DEAD_NOTE, DEAD_SOFTER = 0.1, 0.5
+PALM_MUTE, LET_RING = "P.M.", "let ring"
+PALM_MUTED, PALM_SOFTER = 0.4, 0.85
+BEND_REACHED = 0.25
+LEGATO_SOFTER = 0.7  # A hammered or pulled note isn't picked, so it's quieter.
+SLIDE_SHARE, GLISSANDO_SHARE = 0.25, 0.5
+MOST_SLIDE_STEPS = 12
+SLIDE_SOFTER = 0.6
+LATE = 1e-6
+# A natural harmonic's fret, and how far above the open string it sounds there.
+NATURAL_NODES = {12: 12, 7: 19, 19: 19, 5: 24, 24: 24, 4: 28, 9: 28, 16: 28, 3: 31}
 MOST_PASSES = 16  # A file can ask for any number of repeats, and playback has to end.
 START_LEVEL = 80  # Music with no dynamic plays at mezzo forte.
 MOST_LEVEL, LEAST_LEVEL = 127, 12
@@ -406,7 +422,175 @@ def tied_from(ringing: dict[tuple, dict], key: tuple[str, str], midi: int) -> tu
     return next((held for held in ringing if held[0][0] == key[0] and held[1] == midi), None)
 
 
-def play_part(bars: list, shifts: list[int], swings: list, holds: list, silent: frozenset[str] = frozenset()) -> list[dict]:
+def dashed_spans(bars: list[tuple[Context, Timeline, float]], end: float) -> dict[str, list[tuple[float, float]]]:
+    """Return when each text line of a part, such as "P.M." or "let ring", starts and stops, by its words."""
+    moments = []
+    for _, timeline, start in bars:
+        for mark in timeline.marks:
+            if mark.element.tag == "direction":
+                words = " ".join((found.text or "").strip() for found in mark.element.iter("words")).strip()
+                moments.extend((start + float(mark.onset), dashes.get("type"), dashes.get("number", "1"), words) for dashes in mark.element.iter("dashes"))
+    found: dict[str, list[tuple[float, float]]] = {}
+    opened: dict[str, tuple[float, str]] = {}
+    for at, kind, number, words in sorted(moments, key=lambda item: item[0]):
+        if kind == "start":
+            opened[number] = (at, words)
+        elif kind == "stop" and number in opened:
+            begun, said = opened.pop(number)
+            found.setdefault(said, []).append((begun, at))
+    for begun, said in opened.values():
+        found.setdefault(said, []).append((begun, end))
+    return found
+
+
+def within(spans: list[tuple[float, float]], at: float) -> tuple[float, float] | None:
+    return next((span for span in spans if span[0] <= at < span[1]), None)
+
+
+@dataclass
+class Style:
+    """How one part's player plays what's written: plucked or bowed, palm muted, letting notes ring.
+
+    The marks are heard as nearly as notes can make them. A pizzicato note is short and played by
+    General MIDI's pizzicato strings, a palm-muted note is short and quieter, a dead note is a click,
+    and a bend starts on its note and reaches the bent pitch a quarter of the way through. A natural
+    harmonic sounds the harmonic its fret makes on the string, a guitar's artificial one an octave
+    above the fretted note, and a violin's two octaves above the stopped note, whose touched
+    diamond is silent.
+    """
+
+    family: str | None = None
+    frets: dict[str, tuple[int, int]] = field(default_factory=dict)  # A note's string and fret, by its id.
+    opens: dict[int, int] = field(default_factory=dict)  # Each string's sound with the capo on.
+    pizzicato: list[tuple[float, bool]] = field(default_factory=list)
+    lines: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
+
+    @classmethod
+    def of(cls, root: ET.Element, part: ET.Element, bars: list, end: float, board) -> "Style":
+        entry = next((found for found in root.findall("part-list/score-part") if found.get("id") == part.get("id")), None)
+        instrument = instrument_of(entry)
+        frets = {}
+        opens = {}
+        if board is not None and board.tab:
+            opens = {string: board.open_of(string) + board.capo for string in range(1, board.count + 1)}
+            for note in part.iter("note"):
+                string, fret = note.findtext("notations/technical/string"), note.findtext("notations/technical/fret")
+                if (note.findtext("staff") or "1") in board.tab and string and fret and string.isdigit() and fret.isdigit():
+                    frets[(note.get("id") or "").removesuffix(TAB_COPY)] = (int(string), int(fret))
+        changes = []
+        for _, timeline, start in bars:
+            for mark in timeline.marks:
+                for sound in mark.element.iter("sound") if mark.element.tag == "direction" else []:
+                    if sound.get("pizzicato") in ("yes", "no"):
+                        changes.append((start + float(mark.onset), sound.get("pizzicato") == "yes"))
+        return cls(instrument.family if instrument is not None else None, frets, opens, sorted(changes, key=lambda item: item[0]), dashed_spans(bars, end))
+
+    def plucked_at(self, at: float) -> bool:
+        return self.family == "Strings - Bowed" and next((on for where, on in reversed(self.pizzicato) if where <= at), False)
+
+    def harmonic_midi(self, note: ET.Element, midi: int) -> int | None:
+        """Return what a harmonic sounds, or None for a violin's touched note, which isn't heard by itself."""
+        harmonic = note.find("notations/technical/harmonic")
+        if harmonic is None:
+            return midi
+        if harmonic.find("touching-pitch") is not None:
+            return None
+        if harmonic.find("artificial") is not None:
+            return midi + (OCTAVE * 2 if self.family == "Strings - Bowed" else OCTAVE)
+        placed = self.frets.get(note.get("id") or "")
+        if placed is not None and placed[0] in self.opens:
+            return self.opens[placed[0]] + NATURAL_NODES.get(placed[1], placed[1] + OCTAVE)
+        return midi if self.family == "Strings - Bowed" else midi + OCTAVE
+
+    def shaped(self, note: ET.Element, entry: dict) -> list[dict]:
+        """Play one note as its marks ask, which can take it apart into a bend's two pitches, or silence it."""
+        midi = self.harmonic_midi(note, entry["midi"])
+        if midi is None:
+            return []
+        entry["midi"] = midi
+        if self.plucked_at(entry["start"]):
+            entry["length"] = min(entry["length"], PIZZICATO_LONGEST)
+            entry["program"] = PIZZICATO_PROGRAM
+        if note.findtext("notehead") == "x":
+            entry["length"] = min(entry["length"], DEAD_NOTE)
+            entry["volume"] *= DEAD_SOFTER
+        if within(self.lines.get(PALM_MUTE, []), entry["start"]):
+            entry["length"] *= PALM_MUTED
+            entry["volume"] *= PALM_SOFTER
+        bend = note.findtext("notations/technical/bend/bend-alter")
+        if bend and bend.lstrip("-").isdigit() and int(bend):
+            reached = entry | {"start": entry["start"] + entry["length"] * BEND_REACHED, "length": entry["length"] * (1 - BEND_REACHED), "midi": entry["midi"] + int(bend), "bend": int(bend)}
+            entry["length"] *= BEND_REACHED
+            return [entry, reached]
+        return [entry]
+
+    def finish(self, notes: list[dict], part: ET.Element) -> list[dict]:
+        """Join hammer-ons, pull-offs, slides and glissandos to the notes they lead to, and let notes ring."""
+        by_id: dict[str | None, list[dict]] = {}
+        for entry in notes:
+            by_id.setdefault(entry["id"], []).append(entry)
+        added = []
+        for tag, group in (("hammer-on", "technical"), ("pull-off", "technical"), ("slide", ""), ("glissando", "")):
+            for first, last in joined(part, tag, group):
+                for before in by_id.get(first.get("id"), []):
+                    after = min((entry for entry in by_id.get(last.get("id"), []) if entry["start"] >= before["start"] + before["length"] - LATE), key=lambda entry: entry["start"], default=None)
+                    if after is None:
+                        continue
+                    if tag in ("hammer-on", "pull-off"):
+                        before["length"] = max(before["length"], after["start"] - before["start"])
+                        after["volume"] *= LEGATO_SOFTER
+                    else:
+                        added.extend(slid(before, after, GLISSANDO_SHARE if tag == "glissando" else SLIDE_SHARE))
+        notes = sorted([*notes, *added], key=lambda entry: entry["start"])
+        return let_ring(notes, self.lines.get(LET_RING, []))
+
+
+def joined(part: ET.Element, tag: str, group: str) -> list[tuple[ET.Element, ET.Element]]:
+    """Return each pair of notes a mark of this kind joins, first note first."""
+    found = []
+    waiting: dict[str, ET.Element] = {}
+    for note in part.iter("note"):
+        for mark in note.iterfind(f"notations/{group}/{tag}" if group else f"notations/{tag}"):
+            number = mark.get("number", "1")
+            if mark.get("type") == "start":
+                waiting[number] = note
+            elif mark.get("type") == "stop" and number in waiting:
+                found.append((waiting.pop(number), note))
+    return found
+
+
+def slid(before: dict, after: dict, share: float) -> list[dict]:
+    """Fill the end of a note with the semitones a slide passes through on its way to the next."""
+    distance = after["midi"] - before["midi"]
+    steps = min(abs(distance) - 1, MOST_SLIDE_STEPS)
+    if steps <= 0:
+        return []
+    taken = before["length"] * share
+    before["length"] -= taken
+    each = taken / steps
+    direction = 1 if distance > 0 else -1
+    return [before | {"start": before["start"] + before["length"] + number * each, "length": each, "midi": before["midi"] + direction * (number + 1), "volume": before["volume"] * SLIDE_SOFTER} for number in range(steps)]
+
+
+def let_ring(notes: list[dict], spans: list[tuple[float, float]]) -> list[dict]:
+    """Let each note under "let ring" sound to the end of the line, or until its key is played again."""
+    if not spans:
+        return notes
+    starts: dict[int, list[float]] = {}
+    for entry in notes:
+        starts.setdefault(entry["midi"], []).append(entry["start"])
+    for midi in starts:
+        starts[midi].sort()
+    for entry in notes:
+        span = within(spans, entry["start"])
+        if span is None:
+            continue
+        again = starts[entry["midi"]][bisect_right(starts[entry["midi"]], entry["start"]):]
+        entry["length"] = max(entry["length"], min(span[1], again[0] if again else span[1]) - entry["start"])
+    return notes
+
+
+def play_part(bars: list, shifts: list[int], swings: list, holds: list, silent: frozenset[str] = frozenset(), style: Style | None = None) -> list[dict]:
     """Return one part's notes, each with its moment, how loud it is and the staff it's on.
 
     A tablature staff linked to a standard staff only shows that staff's notes again, so it's silent.
@@ -444,7 +628,11 @@ def play_part(bars: list, shifts: list[int], swings: list, holds: list, silent: 
                         notes.extend(ornament_sounds(note, midi, context.fifths, begins + ahead, sounding - ahead, volume))
                         continue
                     entry = {"id": note.get("id"), "start": begins + ahead, "length": sounding - ahead, "midi": midi, "volume": volume}
-                    notes.append(entry)
+                    pieces = style.shaped(note, entry) if style is not None else [entry]
+                    notes.extend(pieces)
+                    if not pieces:
+                        continue
+                    entry = pieces[-1]
                 if is_tied(note, "start"):
                     ringing[key, midi] = entry
                 else:
@@ -564,7 +752,8 @@ def playback(root: ET.Element) -> dict:
         total = max(total, end)
         board = fretboard(part, entries.get(part.get("id")))
         silent = frozenset([board.linked] if board is not None and board.linked else [])
-        played = sustained(play_part(bars, transposed_bars(part), swings, holds, silent), pedal_spans(bars, end))
+        style = Style.of(root, part, bars, end, board)
+        played = sustained(style.finish(play_part(bars, transposed_bars(part), swings, holds, silent, style), part), pedal_spans(bars, end))
         notes.extend(item | {"part": part_number} for item in played)
         if part_number == 0:
             for _, timeline, start in bars:

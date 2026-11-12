@@ -33,6 +33,8 @@ NOTE_MARKS = {
     "turn": ("ornaments", "turn"),
     "upbow": ("technical", "up-bow"),
     "downbow": ("technical", "down-bow"),
+    "open": ("technical", "open-string"),
+    "stopped": ("technical", "stopped"),
     "arpeggio": (None, "arpeggiate"),
 }
 # How loud each dynamic is, as a MIDI velocity. A <sound> stores it as a percentage of 90.
@@ -73,15 +75,28 @@ def new_id(root: ET.Element) -> str:
     return f"mark{number}"
 
 
+# Marks inside a note that a click can name: fingerings, string numbers and the like, which Verovio
+# draws with no ids of their own, so the drawing is given them (see decorate.py).
+NAMED_TECHNICAL = {"fingering", "pluck", "string", "bend"}
+NAMED_STARTS = {"slur", "hammer-on", "pull-off"}
+
+
+def named_in(technical: ET.Element) -> list[ET.Element]:
+    """Return a note's marks of this kind that are clicked on. A string beside a fret is a tablature note's, not a mark."""
+    has_fret = technical.find("fret") is not None
+    return [mark for mark in technical if (mark.tag in NAMED_TECHNICAL and not (mark.tag == "string" and has_fret)) or (mark.tag in NAMED_STARTS and mark.get("type") == "start")]
+
+
 def ensure_mark_ids(root: ET.Element) -> None:
     """Give each mark an id, so a click on it can name it. Verovio keeps those of slurs and hairpins.
 
     Numbers go in document order, so a score saved without ids gets the same ones every time.
     """
     used = {element.get("id") for element in root.iter() if element.get("id")}
+    named = {id(mark) for technical in root.iter("technical") for mark in named_in(technical)}
     number = 0
     for element in root.iter():
-        wanted = element.tag == "direction" or (element.tag == "slur" and element.get("type") == "start") or (element.tag == "wedge" and element.get("type") != "stop")
+        wanted = element.tag == "direction" or (element.tag == "slur" and element.get("type") == "start") or (element.tag == "wedge" and element.get("type") != "stop") or id(element) in named
         if wanted and not element.get("id"):
             while f"mark{number}" in used:
                 number += 1
@@ -267,6 +282,8 @@ def direction_kind(direction: ET.Element) -> str:
     sound = direction.find("sound")
     if "wedge" in tags:
         return "hairpin"
+    if "dashes" in tags:
+        return "textline"
     if "octave-shift" in tags:
         return "ottava"
     if "pedal" in tags:
@@ -544,7 +561,24 @@ def direction_label(direction: ET.Element) -> str:
 
 
 # How each direction is drawn. Chords are tied to their drawings by order, and these are the same.
-DRAWN_AS = {"dynamic": "dynam", "tempo": "tempo", "text": "dir", "jump": "dir", "rehearsal": "reh", "repeat-sign": "repeatMark", "ottava": "octave", "pedal": "pedal"}
+DRAWN_AS = {"dynamic": "dynam", "tempo": "tempo", "text": "dir", "textline": "dir", "jump": "dir", "rehearsal": "reh", "repeat-sign": "repeatMark", "ottava": "octave", "pedal": "pedal"}
+# A mark drawn with its id already on it, which the page needn't match up by order.
+SELF_NAMED = "self"
+NOTE_MARK_KINDS = {"fingering": "fingering", "pluck": "pluck", "string": "string", "bend": "bend", "hammer-on": "hammer", "pull-off": "pull", "slur": None}
+BEND_NAMES = {"1": "½", "2": "full", "3": "1½"}
+
+
+def note_mark_entries(measure: ET.Element, bar: str | None) -> list[dict]:
+    """List the marks inside a bar's notes that can be clicked, in the order the bar draws them."""
+    found = []
+    for note in measure.iter("note"):
+        for technical in note.iterfind("notations/technical"):
+            for mark in named_in(technical):
+                kind = NOTE_MARK_KINDS.get(mark.tag)
+                if kind:
+                    text = BEND_NAMES.get(mark.findtext("bend-alter") or "", mark.findtext("bend-alter") or "") if mark.tag == "bend" else (mark.text or "").strip()
+                    found.append({"id": mark.get("id"), "bar": bar, "kind": kind, "drawn": SELF_NAMED, "text": text})
+    return found
 
 
 def list_marks(root: ET.Element) -> list[dict]:
@@ -558,6 +592,7 @@ def list_marks(root: ET.Element) -> list[dict]:
         # An octave line is drawn once, from its start. Each end of a pedal is drawn, and both are the one pedal.
         pedal = {id(end[1]): ends[0][1].get("id") for ends in placed_lines(part, "pedal") for end in ends if end is not None}
         ottava_ends = {id(ends[1][1]) for ends in placed_lines(part, "octave-shift") if ends[1] is not None}
+        line_ends = {id(ends[1][1]) for ends in placed_lines(part, "dashes") if ends[1] is not None}
         ottavas = []
         for index, measure in enumerate(part.findall("measure")):
             bar = top_bars[index] if index < len(top_bars) else None
@@ -568,9 +603,12 @@ def list_marks(root: ET.Element) -> list[dict]:
                     if id(direction) not in ottava_ends:
                         ottavas.append(((index, int(direction.findtext("staff") or 1)), {"id": direction.get("id"), "bar": bar, "kind": kind, "drawn": DRAWN_AS[kind], "text": ""}))
                     continue
+                if kind == "textline" and id(direction) in line_ends:
+                    continue  # A text line is drawn once, from its words.
                 mark_id = pedal.get(id(direction), direction.get("id")) if kind == "pedal" else direction.get("id")
                 if kind in DRAWN_AS:
                     found.append({"id": mark_id, "bar": bar, "kind": kind, "drawn": DRAWN_AS[kind], "text": direction_label(direction)})
+            found.extend(note_mark_entries(measure, bar))
             for element in measure.iter("wedge"):
                 if element.get("type") != "stop":
                     found.append({"id": element.get("id"), "bar": bar, "kind": "hairpin", "drawn": "hairpin", "text": ""})
@@ -616,9 +654,39 @@ def remove_slur(root: ET.Element, mark_id: str) -> bool:
     return False
 
 
+def remove_note_mark(root: ET.Element, mark_id: str) -> bool:
+    """Take away a mark inside a note, such as a fingering. A hammer-on goes with its other end."""
+    for part in root.findall("part"):
+        for note in part.iter("note"):
+            for technical in note.iterfind("notations/technical"):
+                mark = next((found for found in technical if found.get("id") == mark_id), None)
+                if mark is None:
+                    continue
+                technical.remove(mark)
+                if len(technical) == 0:
+                    note.find("notations").remove(technical)
+                drop_if_empty(note)
+                repair_slurs(part)
+                for other in part.iter("note"):
+                    drop_if_empty(other)
+                return True
+    return False
+
+
+def remove_text_line(root: ET.Element, direction: ET.Element) -> bool:
+    for part in root.findall("part"):
+        for ends in placed_lines(part, "dashes"):
+            if ends[0][1] is direction:
+                for end in ends:
+                    if end is not None and any(child is end[1] for child in end[0]):
+                        end[0].remove(end[1])
+                return True
+    return False
+
+
 def remove_placed(root: ET.Element, mark_id: str) -> None:
-    """Remove a mark someone clicked on. An octave line or a pedal goes with both its ends."""
-    if remove_wedge(root, mark_id) or remove_slur(root, mark_id):
+    """Remove a mark someone clicked on. An octave line, a pedal or a text line goes with both its ends."""
+    if remove_wedge(root, mark_id) or remove_slur(root, mark_id) or remove_note_mark(root, mark_id):
         return
     part, measure, direction = find_direction(root, mark_id)
     for tag in ("octave-shift", "pedal"):
@@ -626,6 +694,8 @@ def remove_placed(root: ET.Element, mark_id: str) -> None:
             if ends[0][1] is direction:
                 remove_line(ends)
                 return
+    if remove_text_line(root, direction):
+        return
     measure.remove(direction)
 
 
@@ -660,7 +730,7 @@ def set_label(root: ET.Element, mark_id: str, text: str) -> None:
             direction.append(new.find("sound"))
     elif kind == "rehearsal":
         direction.find("direction-type/rehearsal").text = text.strip()[:MOST_TEXT_LETTERS]
-    elif kind == "text":
+    elif kind in ("text", "textline") and direction.find("direction-type/words") is not None:
         next(direction.iter("words")).text = text.strip()[:MOST_TEXT_LETTERS]
     else:
         raise EditError("This mark can only be removed.")

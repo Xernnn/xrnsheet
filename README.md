@@ -192,6 +192,13 @@ other programs. [docs/instrument-api.md](docs/instrument-api.md) lists the serve
   DADGAD, open G, open D, half a step down, or any other, and a capo from the 1st to the 12th
   fret. A new tuning or capo keeps the notes' sound and moves their frets. Notes no string can play
   are listed, and left off the tablature.
+- **Guitar techniques:** hammer-ons and pull-offs with their H and P, slides and glissandos, bends
+  of ½, full or 1½ tones, vibrato, palm mute and let ring lines, natural and artificial harmonics,
+  dead notes, right-hand p-i-m-a, left-hand fingers 0 to 4 and string numbers in circles. They show
+  on the tablature too, and playback plays them.
+- **Violin:** up- and down-bows, strings as Roman numerals or "sul G", fingers 0 to 4, positions
+  ("III pos."), "pizz." and "arco", which playback follows, harmonics and open strings.
+- **Piano:** fingers 1 to 5, above the right hand and below the left, typed one note after another.
 - **Playback** says which part and staff each note is on, so one hand of a piano can be heard alone.
 
 ## Train the chord reader

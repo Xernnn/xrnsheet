@@ -11,6 +11,7 @@ from pathlib import Path
 
 import verovio
 
+from pipeline import decorate
 from pipeline.layout import page_layout
 from pipeline.musicxml import UnreadableScore
 from pipeline.fretted import tab_staves
@@ -305,6 +306,7 @@ def prepare_tablature(root: ET.Element) -> None:
 def prepare_for_drawing(musicxml: str) -> str:
     root = ET.fromstring(musicxml)
     prepare_tablature(root)
+    decorate.prepare(root)
     add_beams(root)
     set_line_breaks(root)
     place_octave_lines(root)
@@ -441,7 +443,9 @@ def render_pages(musicxml: str, view: str = "page") -> list[str]:
             raise UnreadableScore("Could not read this MusicXML")
         if "<sign>TAB</sign>" in prepared:
             closer_tablature(toolkit, max(round(layout.staves * 2) - TAB_NEARER, 0))
-        return [keep_spaces(size_header(set_text_font(replace_private_glyphs(toolkit.renderToSVG(page))), layout.space)) for page in range(1, toolkit.getPageCount() + 1)]
+        drawn = ET.fromstring(prepared)
+        space = layout.space * 100  # A staff space, in the hundredths of a millimetre a page is drawn in.
+        return [keep_spaces(size_header(set_text_font(replace_private_glyphs(decorate.decorate(toolkit.renderToSVG(page), drawn, space))), layout.space)) for page in range(1, toolkit.getPageCount() + 1)]
 
 
 def export_pdf(musicxml: str, out_path: Path) -> None:

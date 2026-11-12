@@ -758,25 +758,35 @@ def repair_ties(part: ET.Element, index: int) -> None:
                         set_tie(note, "stop", False)
 
 
-def repair_slurs(part: ET.Element) -> None:
-    """Remove slurs that have lost their start or their end."""
-    waiting: dict[str, tuple[ET.Element, ET.Element]] = {}
-    unmatched = []
-    for note in part.iter("note"):
-        for notations in note.findall("notations"):
-            for slur in notations.findall("slur"):
-                number = slur.get("number", "1")
-                if slur.get("type") == "start":
-                    if number in waiting:
-                        unmatched.append(waiting[number])
-                    waiting[number] = (notations, slur)
-                elif slur.get("type") == "stop":
-                    if number in waiting:
-                        del waiting[number]
-                    else:
-                        unmatched.append((notations, slur))
-    for notations, slur in [*unmatched, *waiting.values()]:
-        notations.remove(slur)
+# Marks that join one note to a later one, each end on its note, and where in <notations> they are.
+NOTE_PAIRS = {"slur": "", "slide": "", "glissando": "", "hammer-on": "technical", "pull-off": "technical", "wavy-line": "ornaments"}
+
+
+def repair_slurs(part: ET.Element, tags: frozenset[str] | set[str] = frozenset(NOTE_PAIRS)) -> None:
+    """Remove slurs, slides, glissandos, hammer-ons, pull-offs and wavy lines that have lost their start or their end."""
+    for tag, group in NOTE_PAIRS.items():
+        if tag not in tags:
+            continue
+        waiting: dict[str, tuple[ET.Element, ET.Element, ET.Element]] = {}
+        unmatched = []
+        for note in part.iter("note"):
+            for notations in note.findall("notations"):
+                for holder in [notations] if not group else notations.findall(group):
+                    for mark in holder.findall(tag):
+                        number = mark.get("number", "1")
+                        if mark.get("type") == "start":
+                            if number in waiting:
+                                unmatched.append(waiting[number])
+                            waiting[number] = (notations, holder, mark)
+                        elif mark.get("type") == "stop":
+                            if number in waiting:
+                                del waiting[number]
+                            else:
+                                unmatched.append((notations, holder, mark))
+        for notations, holder, mark in [*unmatched, *waiting.values()]:
+            holder.remove(mark)
+            if holder is not notations and len(holder) == 0:
+                notations.remove(holder)
 
 
 def remove_wedge_end(measure: ET.Element, direction: ET.Element, wedge: ET.Element) -> None:
@@ -795,13 +805,16 @@ def remove_wedge_end(measure: ET.Element, direction: ET.Element, wedge: ET.Eleme
 
 # Lines that are directions with two ends, and the types that start each. A pedal can also change
 # partway, which is neither end.
-LINE_STARTS = {"wedge": {"crescendo", "diminuendo"}, "octave-shift": {"up", "down"}, "pedal": {"start", "sostenuto"}}
+LINE_STARTS = {"wedge": {"crescendo", "diminuendo"}, "octave-shift": {"up", "down"}, "pedal": {"start", "sostenuto"}, "dashes": {"start"}}
 # An octave line moves the notes under it this many octaves from where they're drawn: 8va is +1.
 OCTAVE_SHIFTS = {("down", "8"): 1, ("down", "15"): 2, ("up", "8"): -1, ("up", "15"): -2}
 
 
 def repair_lines(part: ET.Element) -> None:
-    """Remove hairpins, octave lines and pedals that have lost their start or their end."""
+    """Remove hairpins, octave lines, pedals and text lines that have lost their start or their end.
+
+    A text line such as "P.M. - - -" goes with its words, which say nothing without the line.
+    """
     for tag, starts in LINE_STARTS.items():
         waiting: dict[str, tuple[ET.Element, ET.Element, ET.Element]] = {}
         unmatched = []
@@ -819,7 +832,10 @@ def repair_lines(part: ET.Element) -> None:
                             unmatched.append(waiting[number])
                         waiting[number] = (measure, direction, line)
         for measure, direction, line in [*unmatched, *waiting.values()]:
-            remove_wedge_end(measure, direction, line)
+            if tag == "dashes" and any(child is direction for child in measure):
+                measure.remove(direction)
+            else:
+                remove_wedge_end(measure, direction, line)
 
 
 @dataclass(frozen=True)

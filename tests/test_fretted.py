@@ -459,9 +459,26 @@ def fretted_edit(root, rng):
     if found is None:
         return
     notes = [note.get("id") for note in root.iter("note") if note.find("pitch") is not None]
-    choice = rng.choice(["string", "string", "string", "tuning", "capo", "tab"])
+    choice = rng.choice(["string", "string", "string", "tuning", "capo", "tab", "technique", "technique", "join", "line"])
     root.set("last-edit", f"fretted {choice}")
-    if choice == "string" and notes:
+    if choice in ("technique", "join", "line") and notes:
+        from pipeline import technique
+
+        first, other = rng.choice(notes), rng.choice(notes)
+        if choice == "technique":
+            rng.choice([
+                lambda: technique.set_string_number(root, [first], rng.randint(0, found.count)),
+                lambda: technique.toggle_bend(root, [first], rng.choice(list(technique.BENDS))),
+                lambda: technique.toggle_harmonic(root, [first], rng.choice(["natural", "artificial"])),
+                lambda: technique.toggle_dead_note(root, [first]),
+                lambda: technique.set_fingering(root, [first], rng.choice("01234")),
+                lambda: technique.set_pluck(root, [first], rng.choice("pima")),
+            ])()
+        elif choice == "join":
+            technique.toggle_pair(root, first, other, rng.choice(list(technique.PAIRS)))
+        else:
+            rng.choice([lambda: technique.toggle_named_line(root, first, other, rng.choice(list(technique.TEXT_LINES))), lambda: technique.toggle_vibrato(root, first, other)])()
+    elif choice == "string" and notes:
         fretted.choose_string(root, rng.choice(notes), rng.randint(1, found.count))
     elif choice == "tuning":
         fretted.set_strings(root, 0, rng.choice(sorted(fretted.tunings_for(found.standard))))

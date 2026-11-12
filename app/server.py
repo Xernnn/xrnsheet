@@ -36,7 +36,7 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
-from pipeline import concert, edit, fretted, layout, marks, mixer, structure, transpose
+from pipeline import concert, edit, fretted, layout, marks, mixer, structure, technique, transpose
 from pipeline.engrave import VIEWS, export_pdf, glyph_script, page_size, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
@@ -189,6 +189,7 @@ class MarkEdit(BaseModel):
     unit: str = "quarter"
     dots: int = 0
     on: bool = True
+    number: int = 0  # A string, or a position, by its number.
 
 
 class TransposeEdit(BaseModel):
@@ -744,8 +745,8 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None])
         except edit.EditError as error:
             raise HTTPException(422, str(error)) from error
         edit.ensure_note_ids(root)
-        fretted.sync(root)  # Every TAB staff shows its standard staff's notes as they now are.
         marks.ensure_mark_ids(root)
+        fretted.sync(root)  # Every TAB staff shows its standard staff's notes as they now are.
         save_version(folder, root)
         return describe(folder, read_status(folder)) | (extra or {})
 
@@ -858,6 +859,19 @@ MARK_ACTIONS: dict[str, Callable[[ET.Element, MarkEdit], dict | None]] = {
     "grace": lambda root, body: {"written": marks.add_grace(root, first_and_last(body)[0], body.on)},
     "remove": lambda root, body: marks.remove_placed(root, body.id or ""),
     "label": lambda root, body: marks.set_label(root, body.id or "", body.text),
+    # How guitarists, string players and pianists play: see docs/instrument-api.md.
+    "fingering": lambda root, body: technique.set_fingering(root, body.notes, body.text),
+    "pluck": lambda root, body: technique.set_pluck(root, body.notes, body.text or body.name),
+    "stringNumber": lambda root, body: technique.set_string_number(root, body.notes, body.number),
+    "bend": lambda root, body: technique.toggle_bend(root, body.notes, body.name),
+    "harmonic": lambda root, body: technique.toggle_harmonic(root, body.notes, body.name),
+    "deadNote": lambda root, body: technique.toggle_dead_note(root, body.notes),
+    "join": lambda root, body: technique.toggle_pair(root, *first_and_last(body), body.name),
+    "vibrato": lambda root, body: technique.toggle_vibrato(root, *first_and_last(body)),
+    "line": lambda root, body: technique.toggle_named_line(root, *first_and_last(body), body.name),
+    "sul": lambda root, body: technique.toggle_sul(root, *first_and_last(body), body.text or body.name),
+    "pizzicato": lambda root, body: technique.set_pizzicato(root, first_and_last(body)[0], body.on),
+    "position": lambda root, body: technique.set_position(root, first_and_last(body)[0], body.number),
 }
 
 

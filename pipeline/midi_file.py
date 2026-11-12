@@ -59,6 +59,21 @@ def note_events(notes: list[dict], channel: int) -> list[tuple[int, int, bytes]]
     return events
 
 
+def sound_changes(notes: list[dict], channel: int, program: int) -> list[tuple[int, float, bytes]]:
+    """Change a part's sound where a note asks for another, as pizzicato strings do, and change it back after.
+
+    At one moment the change comes after the notes ending there and before those starting.
+    """
+    events = []
+    current = program
+    for note in sorted(notes, key=lambda item: item["start"]):
+        wanted = note.get("program", program)
+        if wanted != current and 1 <= wanted <= MOST_SOUNDS:
+            events.append((ticks(note["start"]), 0.5, bytes([0xC0 | channel, wanted - 1])))
+            current = wanted
+    return events
+
+
 def channel_of(part: int) -> int:
     channel = part % (MOST_CHANNELS - 1)
     return channel + 1 if channel >= DRUM_CHANNEL else channel
@@ -83,7 +98,8 @@ def midi_bytes(data: dict) -> bytes:
         levels = mixed[part] if part < len(mixed) else None
         if levels is not None:  # The mixer's volume and pan, as the controllers every MIDI program reads.
             events += [(0, -1, bytes([0xB0 | channel, VOLUME_CONTROLLER, midi_volume(levels["volume"])])), (0, -1, bytes([0xB0 | channel, PAN_CONTROLLER, midi_pan(levels["pan"])]))]
-        events += note_events([note for note in data["notes"] if note.get("part", 0) == part], channel)
+        played = [note for note in data["notes"] if note.get("part", 0) == part]
+        events += note_events(played, channel) + sound_changes(played, channel, program)
         tracks.append(track(events))
     if data["chords"]:
         channel = channel_of(len(programs))

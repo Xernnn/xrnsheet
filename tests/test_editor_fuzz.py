@@ -71,9 +71,11 @@ def loose_ties(root):
 
 
 def check_pairs(root):
-    """A slur, hairpin, octave line or pedal has two ends, and a lost end draws nothing or runs off the page."""
+    """A slur, hairpin, octave line, pedal, text line, slide or hammer-on has two ends, and a lost end draws nothing or runs off the page."""
     for part in root.findall("part"):
-        for tag, opening in (("slur", ("start",)), ("wedge", ("crescendo", "diminuendo")), ("octave-shift", ("up", "down")), ("pedal", ("start",))):
+        pairs = (("slur", ("start",)), ("wedge", ("crescendo", "diminuendo")), ("octave-shift", ("up", "down")), ("pedal", ("start",)), ("dashes", ("start",)),
+                 ("slide", ("start",)), ("glissando", ("start",)), ("hammer-on", ("start",)), ("pull-off", ("start",)), ("wavy-line", ("start",)))
+        for tag, opening in pairs:
             open_ends: dict[str, int] = {}
             for measure in part.findall("measure"):
                 for element in measure.iter(tag):
