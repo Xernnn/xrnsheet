@@ -2691,13 +2691,16 @@ def test_fingerboard_and_switcher(page, base: str, shots: Path | None, created: 
     select_notes(page, 0)
     spots = page.evaluate("() => [...document.querySelectorAll('#fingerboard .spot.chosen')].map(spot => [spot.dataset.string, spot.dataset.stop, spot.dataset.show])")
     check("a selected note lights its place, with its first-position finger", spots == [["2", "2", "1"]], spots)
+    check("and has the violinist's bowing beside it in the inspector", "violinist" in page.inner_text("#propInstrumentName") and page.is_visible('#propInstrument [data-instrument-cell="mark:downbow"]') and page.is_visible('#propInstrument [data-instrument-cell="mark:upbow"]'))
+    page.click('#propInstrument [data-instrument-cell="mark:upbow"]')
+    settle(page)
+    check("which marks the note", len(notes_with(saved_score(base, score_id), "notations/technical/up-bow")) == 1)
     if shots:
         page.screenshot(path=str(shots / "fingerboard.png"))
     piano = page.evaluate("() => document.querySelector('#pages g.measure').querySelector('g.staff g.mRest, g.staff g.rest').id")
     click_on(page, page.locator(f"[id='{piano}']"))
     settle(page)
     check("selecting the piano's music switches back to its keyboard", page.inner_text("#partName") == "Piano" and page.is_visible("#pianoPanel"))
-    check("a violinist's note has bowing beside it", True)
     page.keyboard.press("Escape")
 
 
@@ -2789,8 +2792,8 @@ def test_practice(context, base: str, shots: Path | None, created: list[str]) ->
     page.wait_for_function("() => practice.follower?.index === 1 && practice.follower.arrived")
     check("the right one on a MIDI keyboard plays on to the next", page.inner_text("#waitState") == "Play D5", page.inner_text("#waitState"))
     page.locator('#pianoKeys [data-midi="74"]').dispatch_event("pointerdown")
-    page.wait_for_function("() => practice.follower?.index === 2")
-    check("and so does the keyboard below", True)
+    page.wait_for_timeout(300)
+    check("and so does the keyboard below", page.evaluate("() => practice.follower?.index") == 2, page.evaluate("() => practice.follower?.index"))
     if shots:
         page.screenshot(path=str(shots / "practice.png"))
     page.keyboard.press(" ")
