@@ -165,7 +165,7 @@ def test_the_inspector_shows_each_group_of_marks_where_it_applies():
     assert [name for name, shown in where.items() if "measure" in shown] == ["Clefs", "Key signatures", "Time signatures", "Tempo", "Repeats & jumps", "Barlines"]
     assert [name for name, shown in where.items() if "score" in shown] == ["Key signatures", "Time signatures"]
     # The rest have buttons of their own beside the note, and the command palette finds every cell.
-    assert [name for name, shown in where.items() if not shown] == ["Accidentals", "Layout", "Grace notes", "Guitar techniques", "Fingers and strings", "Bowed strings"]
+    assert [name for name, shown in where.items() if not shown] == ["Accidentals", "Layout", "Grace notes", "Guitar techniques", "Fingers and strings", "Bowed strings", "Piano hands"]
 
 
 def test_every_palette_cell_is_named_drawn_and_does_something():

@@ -3030,6 +3030,105 @@ def test_violin_notation(page, base: str, shots: Path | None, created: list[str]
     check("the palette has the bowings with their keys", "Up bow" in found and "]" in found, found)
 
 
+def test_piano_notation(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """A pianist's score: fingers typed after selecting notes, hands, and a note drawn on the other staff, heard with that hand."""
+    score_id = open_blank(page, base, created, bars=2, staff="piano")
+    page.keyboard.press("5")
+    page.keyboard.type("cegc", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    lower = page.evaluate("""() => document.querySelector("#pages g.measure").querySelectorAll("g.staff")[1].querySelector("g.mRest, g.rest").id""")
+    click_on(page, page.locator(f"[id='{lower}']"))
+    settle(page)
+    page.keyboard.press("n")
+    settle(page)
+    page.keyboard.press("6")
+    page.keyboard.type("cg", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    page.keyboard.press("Escape")
+    right = lambda: own_notes(saved_score(base, score_id))
+    left = lambda: own_notes(saved_score(base, score_id), staff="2")
+    fingers = lambda notes: [(note.findtext("notations/technical/fingering"), note.find("notations/technical/fingering").get("placement") if note.find("notations/technical/fingering") is not None else None) for note in notes]
+    select_notes(page, 0, 2)
+    rows = page.locator("#instrumentSlots .slot").evaluate_all("rows => rows.map(row => row.dataset.row)")
+    check("a pianist's note has fingers and hands beside it", rows == ["Fingers", "Hand"], rows)
+    page.keyboard.press("Control+f")
+    check("Ctrl+F asks for the fingers of the notes selected", page.is_visible("#chordInput") and "3 in turn" in page.get_attribute("#chordInput", "placeholder"), page.get_attribute("#chordInput", "placeholder"))
+    page.keyboard.type("135")
+    page.keyboard.press("Enter")
+    settle(page)
+    check("then 135 fingers them one each, above the right hand", fingers(right()[:3]) == [("1", "above"), ("3", "above"), ("5", "above")], fingers(right()))
+    check("and the digits typed there don't change the notes' lengths", [note.findtext("type") for note in right()[:3]] == ["quarter"] * 3)
+    left_note = page.evaluate("""() => document.querySelector("#pages g.measure").querySelectorAll("g.staff")[1].querySelector("g.note").id""")
+    click_on(page, page.locator(f"[id='{left_note}']"))
+    settle(page)
+    page.locator('#instrumentSlots [data-cell="finger:5"]').click()
+    settle(page)
+    check("a finger for the left hand goes below its staff", fingers(left()[:1]) == [("5", "below")], fingers(left()))
+    check("and its button shows it", page.get_attribute('#instrumentSlots [data-cell="finger:5"]', "aria-pressed") == "true")
+    page.keyboard.press("Control+f")
+    page.keyboard.type("0")
+    page.keyboard.press("Enter")
+    settle(page)
+    check("a finger a pianist hasn't got is refused, with the range", page.is_visible("#editorError") and "1 to 5" in page.inner_text("#editorError"), page.inner_text("#editorError"))
+    page.keyboard.press("Escape")
+    for cell, words in [("hand:RH", ["R.H."]), ("hand:LH", ["L.H."])]:
+        technique_round(page, base, score_id, cell, 3, None, lambda root, words=words: words_in(root, *words) == words, "#pages g.dir", "piano")
+    select_notes(page, 3)
+    page.locator('#instrumentSlots [data-cell="hand:RH"]').click()
+    settle(page)
+    page.locator('#instrumentSlots [data-cell="hand:LH"]').click()
+    settle(page)
+    check("the other hand's words take the place of the first's", words_in(saved_score(base, score_id), "R.H.", "L.H.") == ["L.H."])
+
+    # The last note of the right hand drawn on the left hand's staff, as Ctrl+Shift+↓ does in MuseScore.
+    crossed = right()[3].get("id")
+    lines = lambda staff: page.evaluate("staff => { const lines = staffLines(document.querySelector('#pages g.measure').querySelectorAll('g.staff')[staff]); return [lines.top, lines.bottom]; }", staff)
+    head_y = lambda: page.evaluate("id => { const box = document.getElementById(id).querySelector('.notehead').getBoundingClientRect(); return box.top + box.height / 2; }", crossed)
+    select_notes(page, 3)
+    page.keyboard.press("Control+Shift+ArrowDown")
+    settle(page)
+    lower_top, lower_bottom = lines(1)
+    # It's C6, which the bass clef puts sixteen steps above its top line, A3.
+    wanted = lower_top - 16 * (lower_bottom - lower_top) / 8
+    check("Ctrl+Shift+↓ draws the note on the staff below, in its clef", score_data(base, score_id)["notes"][crossed][5].get("cross") == 2 and abs(head_y() - wanted) < 3, (head_y(), wanted))
+    check("and the inspector says which hand plays it", "left hand" in page.inner_text("#propWhat") and page.get_attribute('#instrumentSlots [data-cell="cross:down"]', "aria-pressed") == "true", page.inner_text("#propWhat"))
+    check("its bar still adds up in its own voice", score_data(base, score_id)["barChecks"] == [])
+    page.wait_for_function("id => playState.data?.notes?.some(note => note.id === id && note.staff === 2)", arg=crossed)
+    heard = lambda choice: page.evaluate("""async choice => {
+        practice.hear = choice;
+        const data = await fetchPlayback();
+        return schedule(new OfflineAudioContext(1, 44100, 44100), data, 0, 0, 1, Infinity, { only: notesOf(choice) }).notes.map(note => note.id);
+    }""", choice)
+    check("Practice's left hand alone plays it", crossed in heard("staff:0:2") and crossed not in heard("staff:0:1"), heard("staff:0:2"))
+    if shots:
+        page.screenshot(path=str(shots / "piano-write.png"))
+    page.keyboard.press("Control+Shift+ArrowUp")
+    settle(page)
+    check("and Ctrl+Shift+↑ brings it back", "cross" not in (score_data(base, score_id)["notes"][crossed][5:] or [{}])[0])
+    press(page, "Control+z")
+    check("which undo takes back", score_data(base, score_id)["notes"][crossed][5].get("cross") == 2)
+    page.keyboard.press("Control+Shift+ArrowUp")
+    settle(page)
+    page.keyboard.press("Control+Shift+ArrowUp")
+    settle(page)
+    check("there's no staff above the right hand, and it says so", "no staff there" in page.inner_text("#message"), page.inner_text("#message"))
+    page.keyboard.press("Control+Shift+P")
+    page.fill("#commandInput", "staff below")
+    found = page.locator("#commandList li").first.inner_text()
+    page.keyboard.press("Escape")
+    check("the palette has it with its key", "staff below" in found and "Ctrl" in found and "↓" in found, found)
+    page.keyboard.press("Escape")
+    page.click('#modeSwitch [data-mode="practice"]')
+    page.select_option("#practiceHear", "staff:0:1")
+    if shots:
+        page.screenshot(path=str(shots / "piano-practice.png"))
+    page.click('#modeSwitch [data-mode="write"]')
+
+
 def test_practice(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()
     page.add_init_script("""
@@ -3255,6 +3354,7 @@ def main() -> None:
             test_new_scores_for_players(page, base, arguments.shots, created)
             test_guitar_notation(page, base, arguments.shots, created)
             test_violin_notation(page, base, arguments.shots, created)
+            test_piano_notation(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)

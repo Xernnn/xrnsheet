@@ -227,7 +227,8 @@ function drawInspector() {
 
 function drawSelection(element) {
   const part = partOfStaff(staffNumber(element)) ?? 0;
-  const hand = handName(part, staffInPart(element));
+  const crossed = playedAs(element.id).cross;
+  const hand = crossed ? `${handName(part, crossed - 1)}, drawn on its staff` : handName(part, staffInPart(element));
   const where = [`voice ${layerNumber(element) + 1}`, `${partLabel(part)}${hand ? `, ${hand}` : ""}`];
   const index = measureIndexOf(element);
   const facts = measureFacts(index);

@@ -117,6 +117,8 @@ A score read from a photo or PDF also has the original sheet beside it, in every
 
 `[` and `]` mark a down-bow and an up-bow, in note input too.
 
+**A pianist's note** has the pedal, octave lines and arpeggio, then fingers 1 to 5, which go above the right hand's staff and below the left hand's, R.H. and L.H. over the note, the other hand's words taking their place, and a note drawn on the staff above or below, for the other hand to play. That note stays in its own staff's voice, so its bar still adds up, the inspector says which hand plays it, and Practice's "one hand" hears it with that hand. Ctrl+Shift+↑ and ↓ do the same, as in MuseScore.
+
 A pressed button is what the note has already, and pressing it again takes it away. Ctrl+F opens a box to type fingers for the selection, one for every note or one each in turn, as `013`, then Enter.
 
 F8 shows or hides the inspector on the selection, F7 on the score. On a narrow window it opens over the score.
@@ -129,7 +131,7 @@ F8 shows or hides the inspector on the selection, F7 on the score. On a narrow w
 - **Speed**, from 25% to 150% here, or 10% to 300% from the tempo.
 - **Count in** one or two bars, ticking every beat and higher on the first, with the count shown.
 - **Metronome.**
-- **Hear** everything, one part alone, or one hand of a piano: its upper staff is the right hand and its lower the left.
+- **Hear** everything, one part alone, or one hand of a piano: its upper staff is the right hand and its lower the left, and a note drawn on the other staff is that staff's hand's.
 - **Wait for** a part or one hand: Play then stops at each of those notes until you've played them, on a MIDI keyboard or on the instrument below, and the rest of the music plays along in time between them. The notes it's waiting for are purple on the page and outlined on the instrument, and a wrong note is named. A chord can be played in any order, and notes played a little early count.
 
 **Entering notes.** Press `N`, pick a duration, and type the letters, click the staff, or play the instrument below. A new measure appears when you write past the last one. A longer note overwrites what comes after it and a shorter one leaves a rest, so every measure stays full. A note too long for its measure carries into the next one, tied. A letter takes the octave nearest the note before, and a guitar's or bass's first letter starts from the middle of its staff, as its clef has it, and stays within the three octaves up from its lowest string. A MIDI keyboard works while entering notes, and keys pressed together make a chord. On a phone, buttons for C to B and a rest show while entering notes.
@@ -156,6 +158,7 @@ F8 shows or hides the inspector on the selection, F7 on the score. On a narrow w
 | Ctrl+`3` | Make a triplet from the chosen duration, or take one away. Ctrl+`5`, `6` and `7` make other tuplets |
 | `+` `-` `=` | Sharp, flat, natural. `#` is also sharp |
 | ↑ ↓ | Move a note a semitone. With Ctrl, an octave. With Alt+Shift, one step of the scale |
+| Ctrl+Shift+↑ ↓ | Draw the note on the staff above or below, for a pianist's other hand |
 | ← → | Previous or next note. With Ctrl, previous or next measure |
 | Ctrl+Home, Ctrl+End | First or last note of the staff |
 | Shift with any of those, Shift+click | Select a stretch of notes |

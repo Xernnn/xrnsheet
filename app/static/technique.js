@@ -109,6 +109,12 @@ function techniquePalettes() {
       cell("mark:open", "Open string (o)", wordsCell("o", "plain"), () => markAction("toggle", { name: "open" })),
       cell("mark:stopped", "Stopped (+)", wordsCell("+", "plain"), () => markAction("toggle", { name: "stopped" })),
     ] },
+    { id: "hands", name: "Piano hands", contexts: [], textual: true, cells: [
+      cell("hand:RH", "Right hand (R.H.)", wordsCell("R.H.", "plain"), () => markAction("hand", { name: "RH" })),
+      cell("hand:LH", "Left hand (L.H.)", wordsCell("L.H.", "plain"), () => markAction("hand", { name: "LH" })),
+      cell("cross:up", "Draw on the staff above, for the other hand", `<span class="words plain">${icon("up")}staff</span>`, () => crossStaff("crossUp"), played => played.cross !== undefined && played.cross === 1),
+      cell("cross:down", "Draw on the staff below, for the other hand", `<span class="words plain">${icon("down")}staff</span>`, () => crossStaff("crossDown"), played => played.cross !== undefined && played.cross > 1),
+    ] },
   ];
 }
 
@@ -135,6 +141,12 @@ function techniqueRows(kind, part) {
       ["Sul", [...SUL_STRINGS.filter(letter => letters.includes(letter)).map(letter => `sul:${letter}`), "sul:pont.", "sul:tasto"]],
       ["Position", ROMAN.slice(0, SHOWN_POSITIONS).map((_, number) => `position:${number}`)],
       ["Bow", ["pizzicato:on", "pizzicato:off", "mark:open", "mark:stopped", "harmonic:natural", "harmonic:artificial"]],
+    ];
+  }
+  if (kind === "piano") {
+    return [
+      ["Fingers", ["finger:1", "finger:2", "finger:3", "finger:4", "finger:5", "finger:type"]],
+      ["Hand", ["hand:RH", "hand:LH", "cross:up", "cross:down"]],
     ];
   }
   return [];
@@ -297,6 +309,16 @@ function askForFingers() {
     openEditor(headBox(document.getElementById(notes[0])), null, "");
     editing = { newMark: { action: "fingering", notes } };
     $("chordInput").placeholder = notes.length > 1 ? `Fingers: one for all, or ${notes.length} in turn, e.g. ${"1352".slice(0, Math.min(notes.length, 4))}` : "Finger, e.g. 3";
+  });
+}
+
+// Ctrl+Shift+↑ and ↓ draw the selected notes on the staff above or below, for the other hand, as
+// MuseScore's keys do. The notes stay in their own staff's voice.
+function crossStaff(action) {
+  return enqueue(async () => {
+    if (range) await send("group", { action, notes: range.ids });
+    else if (actionTarget()) await send(`notes/${actionTarget()}`, { action });
+    else message("Choose a note first.");
   });
 }
 

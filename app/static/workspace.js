@@ -227,6 +227,7 @@ const CELL_KEYS = {
   "text:staff": "Ctrl+T", "text:expression": "Ctrl+E", "text:rehearsal": "Ctrl+M", "layout:break": "Enter",
   "accidental:sharp": "+", "accidental:flat": "-", "accidental:natural": "=",
   "finger:type": "Ctrl+F", "mark:downbow": "[", "mark:upbow": "]",
+  "cross:up": "Ctrl+Shift+↑", "cross:down": "Ctrl+Shift+↓",
 };
 
 function cellCommands() {

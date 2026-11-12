@@ -56,6 +56,7 @@ const SHORTCUTS = [
   ["+  -  =", "Sharp, flat, natural"],
   ["↑  ↓", "Move a note a semitone. With Ctrl, an octave"],
   ["Alt+Shift+↑  ↓", "Move a note one step of the scale"],
+  ["Ctrl+Shift+↑  ↓", "Draw the note on the staff above or below, for a pianist's other hand"],
   ["A to G, on a selected note", "Rename it. With Shift, add that note to its chord"],
   ["Alt+2 to 9", "Add a note that interval above"],
   ["Q  W", "Half or twice as long. With Shift, through the dotted lengths"],
