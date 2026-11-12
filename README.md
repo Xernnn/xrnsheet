@@ -136,6 +136,7 @@ A score read from a photo or PDF also has the original sheet in a panel on the r
 | `F9`, `F7`, `F8` | Show or hide Palettes, Instruments, Properties |
 | `F10` | Show or hide the mixer |
 | `P` | Show or hide the piano keyboard |
+| `F12` | Show or hide the timeline |
 | Ctrl+`=`, Ctrl+`-`, Ctrl+`0` | Zoom in, zoom out, 100%. Ctrl and the mouse wheel also zoom |
 | Esc | Stop entering notes, clear the selection, or close a menu or box |
 | Click the staff | While entering notes, place a note there. Shift+click adds it to a chord |
@@ -143,7 +144,7 @@ A score read from a photo or PDF also has the original sheet in a panel on the r
 | Drag the paper | Move the pages about |
 | Double-click the title | Change the title and composer |
 
-The keys are MuseScore's where MuseScore has one. A browser keeps a few for itself: in an ordinary tab Ctrl+T opens a new tab, so use Add ▸ Text ▸ Staff text there, and some browsers open their own menu on `F10`, so use View ▸ Mixer there.
+The keys are MuseScore's where MuseScore has one. A browser keeps a few for itself: in an ordinary tab Ctrl+T opens a new tab, so use Add ▸ Text ▸ Staff text there, some browsers open their own menu on `F10`, so use View ▸ Mixer there, and most open their developer tools on `F12`, so use View ▸ Timeline.
 
 Measures that don't add up to the time signature are listed above the score, which is usually how a misread rhythm shows itself. Click one to go there, then fix it with "Remove beat" or "Insert beat" in the Properties panel. A new time signature doesn't move notes between measures: the ones that no longer fit are listed for you to fix.
 
@@ -157,6 +158,8 @@ An 8va line keeps the notes under it at the pitch they sound, which is how Music
 
 **Piano keyboard.** View ▸ Piano keyboard, or `P`, shows a piano's 88 keys below the score. The selected notes light up in blue, and while the score plays its notes light up in green as they sound. A key is the pitch the staff shows, so at concert pitch it's the one a transposing instrument sounds. While entering notes, clicking a key writes its note, and Shift+click adds it to the chord, as a MIDI keyboard does; otherwise a key is only heard. Ctrl and the mouse wheel over it make the keys wider or narrower.
 
+**Timeline.** View ▸ Timeline, or `F12`, shows the whole score below it, a column for each measure: rows for where the tempo, time signature, rehearsal marks, key signature, barlines and jumps change, then a row for each instrument, filled where it has notes. Click a measure to select it on that instrument, or Shift+click to stretch the selection to it. While entering notes a click moves the cursor there.
+
 Tools ▸ Transpose moves the selection, or the whole score if nothing is selected, to a key or by an interval, and the chord symbols move with it. Format ▸ Add/remove system breaks sets how many measures go on a line.
 
 A staff can hold four voices. Choose one with the coloured buttons or Ctrl+Alt and a number, and the arrows stay in that voice. If you write a rest in an extra voice, it stays there so you can carry on, and Delete removes it.
@@ -167,7 +170,7 @@ Repeats & jumps starts or ends a repeat at the selected measure, and marks it as
 
 Click a chord symbol to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. Measures you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
 
-What MuseScore has and this editor doesn't yet: the timeline, and page and style settings.
+What MuseScore has and this editor doesn't yet: page and style settings.
 
 To recognize a sheet without the app:
 

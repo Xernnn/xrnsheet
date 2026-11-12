@@ -43,6 +43,7 @@ from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import UnreadableScore, read_score_file, to_text
 from pipeline.playback import playback
 from pipeline.rhythm import fit_divisions, indexed
+from pipeline.timeline import timeline
 
 JOB_DIR = ROOT / "data" / "jobs"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -601,6 +602,7 @@ def describe(folder: Path, status: dict) -> dict:
         "barsPerLine": structure.bars_per_line(root),
         "concertPitch": concert.shown_at_concert_pitch(root),
         "partIds": part_ids(root),
+        "timeline": timeline(shown),
         "mixer": mixer_of(folder, root),
         "transposing": concert.is_transposing(root),
     } | structure.title_of(root)

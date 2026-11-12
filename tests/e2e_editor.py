@@ -2060,6 +2060,54 @@ def test_piano_keyboard(page, base: str, shots: Path | None, created: list[str])
     check("P puts the keyboard away", page.is_hidden("#dock"))
 
 
+def timeline_cell(page, row: str, measure: int):
+    return page.locator(f'#timelineGrid .row:has(.label:text-is("{row}")) .cell[data-measure="{measure}"]')
+
+
+def test_timeline(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, bars=8, tune="cdefgabcdefg")
+    page.click('#sideTabs [data-panel="instruments"]')
+    page.click("#partAdd")
+    page.click('#partChooser li:text-is("Woodwinds")')
+    page.dblclick('#partChooser [data-instrument="flute"]')
+    page.click("#partOk")
+    settle(page)
+    select_notes(page, 4)
+    choose(page, "time:3/4")
+    settle(page)
+    select_notes(page, 0)
+    page.keyboard.press("Control+m")
+    settle(page)
+    page.keyboard.press("F12")
+    check("F12 opens the timeline below the score", page.is_visible("#timelinePanel"))
+    labels = page.locator("#timelineGrid .label").all_inner_texts()
+    check("it has MuseScore's rows, then one for each instrument", labels == ["", "Tempo", "Time signature", "Rehearsal mark", "Key signature", "Barlines", "Jumps and markers", "Music", "Flute"], labels)
+    check("a column for each measure", page.locator('#timelineGrid .row:has(.label:text-is("Music")) .cell').count() == 8)
+    check("the time signature row shows where it changes", (timeline_cell(page, "Time signature", 0).inner_text(), timeline_cell(page, "Time signature", 1).inner_text()) == ("4/4", "3/4"))
+    check("and the rehearsal mark row its letter", timeline_cell(page, "Rehearsal mark", 0).inner_text() == "A")
+    check("and the barlines row the end", timeline_cell(page, "Barlines", 7).inner_text() == "final")
+    filled = page.evaluate("""() => [...document.querySelectorAll('#timelineGrid .row.part')].map(row => [...row.querySelectorAll('.cell')].map(cell => cell.classList.contains('filled')))""")
+    check("an instrument's row shows the measures it plays in", filled[0] == [True] * 3 + [False] * 5 and not any(filled[1]), filled)
+    timeline_cell(page, "Flute", 2).click()
+    settle(page)
+    chosen = page.evaluate("() => [...document.querySelectorAll('#timelineGrid .cell.chosen')].map(cell => [Number(cell.dataset.part), Number(cell.dataset.measure)])")
+    check("a click selects that measure of that instrument", chosen == [[1, 2]], chosen)
+    lower = page.evaluate("() => document.querySelectorAll('#pages g.measure')[2].querySelectorAll(':scope > g.staff')[1].querySelector('g.mRest, g.rest').id")
+    check("on the page too", page.evaluate("() => range?.ids ?? [selected]") == [lower], page.evaluate("() => range?.ids ?? [selected]"))
+    page.keyboard.down("Shift")
+    timeline_cell(page, "Flute", 4).click()
+    page.keyboard.up("Shift")
+    settle(page)
+    chosen = page.evaluate("() => [...document.querySelectorAll('#timelineGrid .cell.chosen')].map(cell => Number(cell.dataset.measure))")
+    check("Shift+click stretches the selection to the measure", chosen == [2, 3, 4], chosen)
+    if shots:
+        page.screenshot(path=str(shots / "timeline.png"))
+    page.keyboard.press("Escape")
+    settle(page)
+    menu(page, "View", "Timeline")
+    check("View ▸ Timeline puts it away", page.is_hidden("#dock"))
+
+
 def test_midi_keyboard(context, base: str, created: list[str]) -> None:
     page = context.new_page()
     page.add_init_script("""
@@ -2376,6 +2424,7 @@ def main() -> None:
             test_audio_file(page, base, created)
             test_mixer(page, base, arguments.shots, created)
             test_piano_keyboard(page, base, arguments.shots, created)
+            test_timeline(page, base, arguments.shots, created)
             test_midi_keyboard(context, base, created)
             test_opening_a_file(page, base, arguments.shots, created)
             test_sound_of_marks(page, base, created)

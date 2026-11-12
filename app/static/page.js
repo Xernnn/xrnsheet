@@ -202,6 +202,7 @@ function draw() {
   }
   drawRange();
   if (dock.active === "mixer" && !$("dock").hidden) drawMixer();
+  if (dock.active === "timeline" && !$("dock").hidden) drawTimeline();
   drawCursor();
   updateTools();
   refreshPosition();

@@ -120,6 +120,7 @@ function updateTools() {
   hint = "";
   drawProperties();
   lightKeys();
+  markTimeline();
 }
 
 function staffLines(staff) {
@@ -1040,6 +1041,7 @@ document.addEventListener("keydown", event => {
   if (key === " " && event.target.tagName === "BUTTON") return;
   if (PANEL_KEYS[key]) { handled(); toggleSide(PANEL_KEYS[key]); return; }
   if (key === "F10") { handled(); toggleDock("mixer"); return; }
+  if (key === "F12") { handled(); toggleDock("timeline"); return; }
   if ((key === "p" || key === "P") && !event.shiftKey) { handled(); toggleDock("piano"); return; }
   if (key === "Insert") { handled(); barAction("insert"); return; }
   if (event.altKey && event.shiftKey && key.toLowerCase() === "t") { handled(); askForTempo(); return; }

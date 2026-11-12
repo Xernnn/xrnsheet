@@ -1,6 +1,8 @@
 // The panels docked below the score, as MuseScore docks them, each one a tab when more than one is
-// open: the mixer (F10) and the piano keyboard (P).
-const DOCK_PANELS = { mixer: { label: "Mixer", keys: "F10" }, piano: { label: "Piano keyboard", keys: "P" } };
+// open: the mixer (F10), the piano keyboard (P) and the timeline (F12).
+const DOCK_PANELS = { mixer: { label: "Mixer", keys: "F10" }, piano: { label: "Piano keyboard", keys: "P" }, timeline: { label: "Timeline", keys: "F12" } };
+// The timeline's first rows, in MuseScore's order, each saying where something changes.
+const TIMELINE_ROWS = [["tempo", "Tempo"], ["time", "Time signature"], ["rehearsal", "Rehearsal mark"], ["key", "Key signature"], ["barline", "Barlines"], ["jump", "Jumps and markers"]];
 const LOWEST_KEY = 21, HIGHEST_KEY = 108; // A piano's 88 keys, A0 to C8.
 const BLACK_KEYS = new Set([1, 3, 6, 8, 10]);
 const NARROWEST_KEY = 10, WIDEST_KEY = 44; // A white key's width in pixels, which Ctrl and the wheel change.
@@ -30,6 +32,7 @@ function drawDock() {
   for (const name of Object.keys(DOCK_PANELS)) $(`${name}Panel`).hidden = !shown || name !== dock.active;
   if (shown && dock.active === "mixer") drawMixer();
   if (shown && dock.active === "piano") drawKeyboard();
+  if (shown && dock.active === "timeline") drawTimeline();
   drawCursor();
 }
 
@@ -229,7 +232,75 @@ function hearKey(midi) {
   }
 }
 
+// The timeline: a column for each measure, rows for what changes where, and a row for each
+// instrument showing the measures it plays in. A click selects that measure, Shift+click stretches
+// the selection to it, as in MuseScore.
+function drawTimeline() {
+  const line = score?.timeline;
+  if (!line) return;
+  const row = (label, cells, kind) => {
+    const holder = document.createElement("div");
+    holder.className = `row ${kind}`;
+    const name = document.createElement("div");
+    name.className = "label";
+    name.textContent = label;
+    name.title = label;
+    const strip = document.createElement("div");
+    strip.className = "cells";
+    strip.append(...cells);
+    holder.append(name, strip);
+    return holder;
+  };
+  const cell = (measure, part, text = "", filled = false) => {
+    const found = document.createElement("i");
+    found.className = `cell${filled ? " filled" : ""}${text ? " marked" : ""}`;
+    found.dataset.measure = measure;
+    found.dataset.part = part;
+    if (text) { found.textContent = text; found.title = text; }
+    return found;
+  };
+  const numbers = line.measures.map((measure, index) => cell(index, 0, index === 0 || (index + 1) % 5 === 0 ? String(index + 1) : ""));
+  const rows = [row("", numbers, "numbers")];
+  for (const [key, label] of TIMELINE_ROWS) rows.push(row(label, line.measures.map((measure, index) => cell(index, 0, measure[key])), "meta"));
+  line.parts.forEach((filled, part) => {
+    rows.push(row(score.parts?.[part] || `Instrument ${part + 1}`, filled.map((played, index) => cell(index, part, "", played)), "part"));
+  });
+  $("timelineGrid").replaceChildren(...rows);
+  markTimeline();
+}
+
+// Show the selected measures in the timeline, on the rows of the instruments they're in.
+function markTimeline() {
+  if (!dockOpen("timeline") || $("timelinePanel").hidden) return;
+  const measures = new Map([...document.querySelectorAll("#pages g.measure")].map((measure, index) => [measure, index]));
+  const chosen = new Set();
+  for (const id of range ? range.ids : [actionTarget()].filter(Boolean)) {
+    const element = document.getElementById(id);
+    const index = element && measures.get(element.closest("g.measure"));
+    if (index !== undefined && index !== null) chosen.add(`${partOfStaff(staffNumber(element))}:${index}`);
+  }
+  document.querySelectorAll("#timelineGrid .part .cell").forEach(cell => cell.classList.toggle("chosen", chosen.has(`${cell.dataset.part}:${cell.dataset.measure}`)));
+}
+
+function clickTimeline(event) {
+  const cell = event.target.closest(".cell");
+  if (!cell || !score) return;
+  const part = Number(cell.dataset.part), index = Number(cell.dataset.measure);
+  const measure = document.querySelectorAll("#pages g.measure")[index];
+  const first = (score.partStaves ?? []).slice(0, part).reduce((total, count) => total + count, 0);
+  const staff = measure?.querySelectorAll(":scope > g.staff")[first];
+  if (!staff) return;
+  const extend = event.shiftKey;
+  enqueue(async () => {
+    const opening = [...staff.querySelectorAll(EVENTS)].find(element => stepOf(element) === element);
+    if (editor.on) { if (opening) moveCursor(opening.id); }
+    else await selectMeasure(staff, extend);
+    staff.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
+}
+
 function setUpDock() {
+  $("timelineGrid").addEventListener("click", clickTimeline);
   $("pianoPanel").addEventListener("wheel", event => {
     if (!event.ctrlKey) return;
     event.preventDefault();
