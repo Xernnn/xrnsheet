@@ -605,15 +605,19 @@ def set_tuplet_mark(note: ET.Element, kind: str | None) -> None:
 def overwrite(line: list[Event], new: Event, context: Context, key: tuple[str, str]) -> list[Event]:
     """Put an event into a voice. Anything it covers goes, and leftover time becomes rests.
 
-    A triplet can only be replaced whole, because part of one wouldn't add up to anything.
+    A triplet can only be replaced whole, because part of one wouldn't add up to anything. That's
+    the whole triplet, not just the notes of it that are covered: a note carried over a barline can
+    cover the first two notes of a triplet and none of the third.
     """
     kept: list[Event] = []
     for event in sorted(line, key=lambda event: event.onset):
         if event.end <= new.onset or event.onset >= new.end:
             kept.append(event)
             continue
-        if event.in_tuplet and (event.onset < new.onset or event.end > new.end):
-            raise EditError("Triplets can't be cut in half.")
+        if event.in_tuplet:
+            start, end = tuplet_bounds(line, event)
+            if start < new.onset or end > new.end:
+                raise EditError("Triplets can't be cut in half.")
         if event.onset < new.onset:
             kept.extend(rests(event.onset, new.onset, context, key))
         if event.end > new.end:

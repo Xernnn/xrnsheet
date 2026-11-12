@@ -541,6 +541,17 @@ def test_a_note_before_a_triplet_cannot_cut_it():
         edit.change_length(root, first_id(root), "quarter", 1)
 
 
+def test_a_note_carried_over_the_barline_cannot_cut_a_triplet_there():
+    """Three quarters of a half-note triplet fit inside the half note carried in, and the rest of it doesn't."""
+    root = blank(measures=2)
+    cursor = edit.make_tuplet(root, first_id(root, 1), Fraction(4), keep_note=False)["cursor"]
+    for step in "CDE":
+        cursor = edit.write_note(root, cursor, "quarter", 0, step)["cursor"]
+    with pytest.raises(EditError, match="Triplets"):
+        edit.write_note(root, first_id(root), "whole", 1, "G")  # Six beats: two of them in the second bar.
+    assert [note.findtext("pitch/step") for note in root.findall("part/measure")[1].iter("note")][:3] == ["C", "D", "E"]
+
+
 def test_a_note_too_long_for_the_rest_of_a_triplet_is_refused():
     root = triplet_bar()
     second = root.findall(".//note")[1].get("id")
