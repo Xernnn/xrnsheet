@@ -1,0 +1,55 @@
+{
+  "name": "xrnsheet",
+  "productName": "xrnsheet",
+  "version": "0.1.0",
+  "description": "Turn a photo or PDF of sheet music into notation you can edit and reprint",
+  "author": "xrn",
+  "desktopName": "xrnsheet.desktop",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "test:window": "node test/window.js",
+    "pack": "bash stage.sh && electron-builder --linux AppImage --x64",
+    "app:install": "bash install.sh"
+  },
+  "devDependencies": {
+    "electron": "^44.10.1",
+    "electron-builder": "^26.18.0"
+  },
+  "overrides": {
+    "app-builder-lib": {
+      "minimatch@>=7.0.0 <11.0.1": "^11.0.1"
+    }
+  },
+  "build": {
+    "appId": "app.xrnsheet.desktop",
+    "productName": "xrnsheet",
+    "executableName": "xrnsheet",
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": ["main.js", "server.js", "loading.html", "package.json"],
+    "extraResources": [
+      { "from": "build/xrnsheet", "to": "xrnsheet" },
+      { "from": "build/desktop.json", "to": "desktop.json" }
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "onlyLoadAppFromAsar": true
+    },
+    "linux": {
+      "target": [{ "target": "AppImage", "arch": ["x64"] }],
+      "category": "AudioVideo;Audio;Music;",
+      "synopsis": "Sheet music from a photo or PDF, ready to edit",
+      "description": "Reads a photo or PDF of sheet music into notation you can edit, play and reprint",
+      "icon": "build/icon.png",
+      "artifactName": "xrnsheet-${version}.AppImage"
+    }
+  }
+}

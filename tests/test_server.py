@@ -1160,3 +1160,56 @@ def test_a_barline_is_chosen_for_the_measure_a_note_is_in(client):
     assert styles() == [None, None, "light-heavy"]
     assert client.post(f"/api/scores/{score_id}/bars", json={"action": "barline", "note": second, "style": "wavy"}).status_code == 422
     assert client.post(f"/api/scores/{score_id}/bars", json={"action": "barline", "style": "double"}).status_code == 422
+
+
+def test_the_app_keeps_its_scores_in_the_folder_it_is_given(tmp_path, monkeypatch):
+    started = {}
+    monkeypatch.setattr(server, "JOB_DIR", server.JOB_DIR)  # Put back after the test.
+    monkeypatch.setattr(server.uvicorn, "run", lambda app, **options: started.update(options))
+    server.main(["--jobs", str(tmp_path / "scores"), "--port", "8123"])
+    assert server.JOB_DIR == (tmp_path / "scores").resolve() and server.JOB_DIR.is_dir()
+    assert started["host"] == "127.0.0.1" and started["port"] == 8123
+    client = TestClient(server.app, base_url="http://127.0.0.1:8123")
+    score_id = client.post("/api/scores/blank", json={"measures": 2}).json()["id"]
+    assert (tmp_path / "scores" / score_id).is_dir()
+
+
+def test_the_server_stops_once_whatever_started_it_has_gone(tmp_path):
+    import socket
+    import subprocess
+    import sys
+    import urllib.request
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    command = [sys.executable, "-m", "app.server", "--port", str(port), "--jobs", str(tmp_path), "--stop-when-stdin-closes"]
+    process = subprocess.Popen(command, cwd=Path(server.__file__).parent.parent, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/scores", timeout=1) as answer:
+                    assert json.loads(answer.read()) == []
+                break
+            except OSError:
+                assert process.poll() is None, process.stderr.read().decode()
+                assert time.monotonic() < deadline, "the server never answered"
+                time.sleep(0.2)
+        process.stdin.close()  # As when the desktop app is killed: its end of the pipe closes.
+        assert process.wait(timeout=20) is not None
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def test_the_printable_score_and_parts_show_where_they_open(client, ready_score):
+    # Print and Parts open the PDF in a window to print from; as an attachment, a Chromium window
+    # (the desktop app's among them) would only offer to save it.
+    for query in ("", "?part=0"):
+        answer = client.get(f"/api/scores/{ready_score}/score.pdf{query}")
+        assert answer.status_code == 200 and answer.content.startswith(b"%PDF")
+        disposition = answer.headers["content-disposition"]
+        assert disposition.startswith("inline;"), disposition
+        assert 'filename="score.pdf"' in disposition or 'filename="part_1.pdf"' in disposition

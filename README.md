@@ -51,6 +51,25 @@ To read notes with the model in this repository and not homr, which only works f
 
 You can also open a `.musicxml`, `.xml` or `.mxl` file from another program the same way as a photo, and it goes straight to the editor.
 
+### As a desktop app
+
+On Linux, xrnsheet can also be installed as an app of its own, with its own window and a place in the app launcher. It needs the [Setup](#setup) above and Node.js 24:
+
+```sh
+cd desktop
+npm run app:install
+```
+
+This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it to the launcher. Run it again to update. The app starts its own copy of the server when it opens and stops it when it closes, so nothing needs to be running first.
+
+- **Your scores** are kept in `~/.local/share/xrnsheet/jobs`, not in the checkout, so they stay through updates and branch changes.
+- **Python:** the app runs on this checkout's `.venv`, where the 6 GB of PyTorch already is, rather than carrying a copy. Set `XRNSHEET_PYTHON` before installing to use another one.
+- **Opening files:** `.musicxml` and `.mxl` files offer xrnsheet under "Open with", and `xrnsheet.AppImage song.mxl` opens one from a terminal. If the app is already open, the file opens there.
+- **Keys:** Ctrl+T, Ctrl+K and the other keys a browser tab keeps for itself all reach the score. Ctrl+Q quits.
+- **If it won't start**, the window says why, and the server's log is `~/.local/state/xrnsheet/server.log`.
+
+`npm start` in `desktop/` runs the app straight from the checkout, and `npm test` and `npm run test:window` check it. `test:window` starts the real app headless with a throwaway scores folder.
+
 ### The editor
 
 The window is laid out like MuseScore Studio's, so what you know from there is where you expect it.
@@ -169,6 +188,7 @@ After you've pressed "Mark as checked" on some sheets:
 
 ```sh
 .venv/bin/python -m chords.corrections       # gather checked sheets into data/corrections/
+                                             # (add --jobs ~/.local/share/xrnsheet/jobs for the desktop app's)
 .venv/bin/python bench/real_report.py        # how the app did on the held-out sheets
 .venv/bin/python -m chords.retrain           # train a candidate and report on it
 .venv/bin/python -m chords.retrain --promote # also replace the live model if it passes

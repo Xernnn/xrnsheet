@@ -1,14 +1,17 @@
 """Turn the sheets you've checked into labelled chord images.
 
     .venv/bin/python -m chords.corrections
+    .venv/bin/python -m chords.corrections --jobs ~/.local/share/xrnsheet/jobs    the desktop app's
 
-This rebuilds data/corrections/ from data/jobs/, so run it whenever you've checked more sheets.
+This rebuilds data/corrections/ from data/jobs/, or from the folder given with --jobs, so run it
+whenever you've checked more sheets.
 
 A sheet is only used once you've pressed "Mark as checked", because an unchanged chord only
 counts as right if someone looked at it. About one sheet in five is kept back as a test set.
 A hash picks those sheets, not a person, so hard sheets can't be steered in or out of the test.
 """
 
+import argparse
 import csv
 import hashlib
 import json
@@ -170,7 +173,9 @@ def load_labels(out_dir: Path = OUT_DIR) -> list[dict]:
 
 
 if __name__ == "__main__":
-    counts = export()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--jobs", type=Path, default=JOB_DIR, help="the folder the app keeps its scores in")
+    counts = export(parser.parse_args().jobs.expanduser())
     if not counts:
         print("No checked sheets yet. Press \"Mark as checked\" in the app once a sheet is fixed.")
     else:
