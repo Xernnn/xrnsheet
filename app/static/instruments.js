@@ -14,8 +14,11 @@ const NARROWEST_KEY = 10, WIDEST_KEY = 44; // A white key's width in pixels, whi
 const PREVIEW_SECONDS = 0.4;
 // Strings from the highest, as tablature draws them: a guitar in standard tuning, a violin in fifths.
 const GUITAR = { strings: [64, 59, 55, 50, 45, 40], names: ["E", "B", "G", "D", "A", "E"], stops: 19, inlays: [3, 5, 7, 9, 15, 17, 19], double: [12] };
-// A violin's first to fifth positions reach a ninth above each open string, fourth finger in fifth position.
-const VIOLIN = { strings: [76, 69, 62, 55], names: ["E", "A", "D", "G"], stops: 14, positions: { 2: "1st", 4: "2nd", 5: "3rd", 7: "4th", 9: "5th" }, tapes: [2, 4, 5, 7] };
+// A violin's first to seventh positions, the fourth finger in seventh reaching an eleventh above each
+// open string. A position is named where its first finger goes.
+const VIOLIN = { strings: [76, 69, 62, 55], names: ["E", "A", "D", "G"], stops: 17, positions: { 2: "1st", 4: "2nd", 5: "3rd", 7: "4th", 9: "5th", 10: "6th", 12: "7th" }, tapes: [2, 4, 5, 7] };
+// The stop a violinist's first finger is at in each position, from half position to XII.
+const FIRST_FINGER = [1, 2, 4, 5, 7, 9, 10, 12, 14, 16, 17, 19, 21];
 const SHARP_NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"];
 // A key's width is whatever fills the panel, until Ctrl and the wheel choose one.
 // The notes sounding and awaited are kept by pitch for the keys, and with their ids for a neck.
@@ -34,7 +37,7 @@ function kindOfPart(index) {
   if (score?.fretted?.[index]) return "guitar";
   if (/bass/.test(name)) return /piano|keyboard/.test(name) ? "piano" : "other";
   if (/guitar/.test(name)) return "guitar";
-  if (/violin|fiddle/.test(name)) return "violin";
+  if (/violin|viola|fiddle/.test(name)) return "violin";
   if (/piano|keyboard|harpsichord|organ|celesta|clavi|accordion|marimba/.test(name)) return "piano";
   const program = playState.data?.programs?.[index];
   if (program >= 25 && program <= 32) return "guitar";
@@ -104,7 +107,12 @@ function instrumentShown() {
 
 // A part's neck: a fretted part's strings as the score tunes them, with its frets and capo.
 function neckOf(part, kind) {
-  if (kind !== "guitar") return VIOLIN;
+  if (kind !== "guitar") {
+    const strings = bowedStrings(part);
+    if (!strings || strings.join() === "G3,D4,A4,E5") return VIOLIN;
+    const highFirst = [...strings].reverse();
+    return { ...VIOLIN, strings: highFirst.map(midiOfName), names: highFirst.map(letterOf) };
+  }
   const board = score?.fretted?.[part];
   if (!board) return GUITAR;
   const highFirst = [...board.strings].reverse();
@@ -277,14 +285,44 @@ function chosenPitches() {
   return chosenNotes().map(note => note.midi);
 }
 
-// Where the score says a note is played, on a guitar from its tablature or its string number, as a
-// string and a stop from the nut. Without a word from the score it's left for fingering() to place.
+// Where the score says a note is played, as a string and a stop from the nut: on a guitar from its
+// tablature or its string number, and on a violin from its string number, the "sul G" over it or the
+// position it's in. Without a word from the score it's left for fingering() to place.
 function storedSpot(neck, kind, note) {
   const played = playedAs(note.id);
   if (kind === "guitar" && played.string) return { string: played.string, stop: played.fret + (neck.capo ?? 0), midi: note.midi };
-  const string = played.mark;
-  const stop = string ? note.midi - neck.strings[string - 1] : null;
-  return stop !== null && stop >= 0 && stop <= neck.stops ? { string, stop, midi: note.midi } : null;
+  const named = kind === "violin" && played.sul ? neck.names.indexOf(letterOf(played.sul)) + 1 : 0;
+  const string = played.mark || named || null;
+  if (string) {
+    const stop = note.midi - neck.strings[string - 1];
+    return stop >= 0 && stop <= neck.stops ? { string, stop, midi: note.midi } : null;
+  }
+  if (kind === "violin" && played.position !== undefined) return inPosition(neck, note.midi, played.position);
+  return null;
+}
+
+// Where a note falls under the hand in a position: on the string where it's between a low first
+// finger and a stretched fourth, nearest the middle of the hand, or on an open string.
+function inPosition(neck, midi, position) {
+  const first = FIRST_FINGER[position] ?? FIRST_FINGER.at(-1);
+  let best = null;
+  neck.strings.forEach((open, index) => {
+    const stop = midi - open;
+    if (stop < first - 1 || stop > first + 6 || stop > neck.stops) return;
+    const away = Math.abs(stop - first - 2.5);
+    if (!best || away < best.away) best = { string: index + 1, stop, midi, away };
+  });
+  if (best) return best;
+  const open = neck.strings.indexOf(midi);
+  return open >= 0 ? { string: open + 1, stop: 0, midi } : null;
+}
+
+// The finger a violinist uses at a stop in a position: 1 from a half step below where the first
+// finger goes, to 4 a fourth above it.
+function fingerInPosition(position, stop) {
+  if (stop === 0) return "0";
+  const above = stop - (FIRST_FINGER[position] ?? 2);
+  return above <= 0 ? "1" : above <= 2 ? "2" : above <= 4 ? "3" : above <= 6 ? "4" : "";
 }
 
 // Place notes on a neck: those the score places where it says, the rest as fingering() finds best,
@@ -307,7 +345,9 @@ function placeOnNeck(neck, kind, notes) {
 function spotLabel(kind, spot, element) {
   const name = noteName(Number(element.dataset.midi)).replace(/\d+$/, "");
   if (kind !== "violin") return name;
-  return (spot.id && playedAs(spot.id).finger) || violinFinger(Number(element.dataset.stop)) || name;
+  const played = spot.id ? playedAs(spot.id) : {};
+  const stop = Number(element.dataset.stop);
+  return played.finger || (played.position !== undefined ? fingerInPosition(played.position, stop) : violinFinger(stop)) || name;
 }
 
 // Light the selected notes, the notes sounding and the notes playback is waiting for.
@@ -385,10 +425,14 @@ function pressKey(midi, addToChord, where = null) {
 }
 
 // A guitar with tablature keeps whichever string was played. Without tablature there's nowhere to
-// keep it, and its notes are shown where they're most easily played.
+// keep it, and its notes are shown where they're most easily played. A violin's note gets the string
+// played as its number, but only where that isn't the string it would be shown on anyway, as a
+// violinist marks only the strings that aren't the obvious ones.
 function stringToKeep(part, sounding, where) {
   if (!where?.string) return {};
-  if (kindOfPart(part) === "guitar") return score?.fretted?.[part]?.tab ? { string: where.string } : {};
+  const kind = kindOfPart(part);
+  if (kind === "guitar") return score?.fretted?.[part]?.tab ? { string: where.string } : {};
+  if (kind === "violin") return fingering(neckOf(part, kind), [sounding])[0]?.string === where.string ? {} : { string: where.string };
   return {};
 }
 

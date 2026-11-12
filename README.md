@@ -108,11 +108,20 @@ A score read from a photo or PDF also has the original sheet beside it, in every
 - **Bend** ½, full or 1½, and vibrato. **Lines:** palm mute (P.M.) and let ring over the selection. **Sound:** a natural or an artificial harmonic, and a dead note.
 - **Right hand** p, i, m and a, **left hand** fingers 0 to 4, and **string numbers** in circles, which on a guitar with tablature move its tablature to that string too.
 
+**A violinist's note** (or a viola's) has its up- and down-bow, slur, staccato and tenuto, then:
+
+- **Fingers** 0 to 4, and **strings** I to IV, as Roman numerals over the note.
+- **Sul:** "sul G" and the instrument's other strings, sul ponticello and sul tasto, each with a dashed line over the selection.
+- **Position:** "½ pos." and "I pos." to "VII pos." from the note on, and the palette has them to XII.
+- **Bow:** "pizz." and "arco" from the note, which playback follows, open (o) and stopped (+), and natural and artificial harmonics; an artificial harmonic adds the diamond a fourth above.
+
+`[` and `]` mark a down-bow and an up-bow, in note input too.
+
 A pressed button is what the note has already, and pressing it again takes it away. Ctrl+F opens a box to type fingers for the selection, one for every note or one each in turn, as `013`, then Enter.
 
 F8 shows or hides the inspector on the selection, F7 on the score. On a narrow window it opens over the score.
 
-**The instrument** below the score is the chosen part's: a piano's 88 keys, a guitar's or bass's fretboard (its strings tuned as the score has them, every fret it has, with the inlays, and the capo across the strings, with the frets behind it greyed), or a violin's fingerboard (G, D, A and E, the open string to the fourth finger in fifth position, with first to fifth position marked and first position's finger tapes). A part of any other kind gets the keyboard. It lights the selected notes in blue, and while the score plays its notes in amber as they sound. A guitar's notes are shown at the string and fret its tablature plays them on, as they sound, and without tablature where they're most easily played together, each chord on strings of its own. A violin's are shown in the lowest position, with the finger number. While entering notes, a key, a fret or a place on a string writes that note, and Shift adds it to the chord, as a MIDI keyboard does; otherwise it's only heard. On a guitar with tablature the note is played on the string clicked, at that fret, and a click on the tablature staff itself writes nothing, as its lines are strings. A key is the pitch the staff shows, so at concert pitch it's the one a transposing instrument sounds. Ctrl and the mouse wheel over the keyboard make the keys wider or narrower. The panel's tabs show the mixer or the timeline in its place, and P, F10 and F12 show or put away the instrument, the mixer and the timeline.
+**The instrument** below the score is the chosen part's: a piano's 88 keys, a guitar's or bass's fretboard (its strings tuned as the score has them, every fret it has, with the inlays, and the capo across the strings, with the frets behind it greyed), or a violin's or viola's fingerboard (its four strings, the open string to the fourth finger in seventh position, with first to seventh position marked and first position's finger tapes). A part of any other kind gets the keyboard. It lights the selected notes in blue, and while the score plays its notes in amber as they sound. A guitar's notes are shown at the string and fret its tablature plays them on, as they sound, and without tablature where they're most easily played together, each chord on strings of its own. A violin's are shown on the string its number or a "sul G" names, or under the hand in the position marked, and otherwise in the lowest position, each with its finger: the one written on it, or the one that position uses. While entering notes, a key, a fret or a place on a string writes that note, and Shift adds it to the chord, as a MIDI keyboard does; otherwise it's only heard. On a guitar with tablature the note is played on the string clicked, at that fret. A violin's note played on another string than the one it would be shown on gets that string's number. A click on the tablature staff itself writes nothing, as its lines are strings. A key is the pitch the staff shows, so at concert pitch it's the one a transposing instrument sounds. Ctrl and the mouse wheel over the keyboard make the keys wider or narrower. The panel's tabs show the mixer or the timeline in its place, and P, F10 and F12 show or put away the instrument, the mixer and the timeline.
 
 **Practice:**
 
@@ -164,6 +173,7 @@ F8 shows or hides the inspector on the selection, F7 on the score. On a narrow w
 | `S` | Slur a stretch, or this note to the next |
 | `<` `>` | Crescendo, diminuendo over a stretch |
 | Shift+`S` `V` `N` `O` | Staccato, accent, tenuto, marcato |
+| `[` `]` | Down-bow, up-bow |
 | `/` | Add a grace note before this note. With no note chosen, or in Read or Practice, find a command |
 | `J` | Swap for the same note under another name, as C♯ for D♭ |
 | `X` | Flip the stem |

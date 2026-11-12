@@ -213,7 +213,8 @@ function buildPalettes() {
 function cellButton(cell) {
   const button = document.createElement("button");
   button.dataset.cell = cell.key;
-  button.title = cell.label;
+  // A cell with a key of its own says so, as the command palette does.
+  button.title = CELL_KEYS[cell.key] ? `${cell.label} (${CELL_KEYS[cell.key]})` : cell.label;
   button.setAttribute("aria-label", cell.label);
   if (cell.needs) button.dataset.needs = cell.needs;
   button.innerHTML = cell.html;

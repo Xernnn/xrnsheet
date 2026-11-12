@@ -1013,6 +1013,8 @@ function setUpToolbar() {
 
 const PITCH_KEYS = { "#": "sharp", "+": "sharp", "-": "flat", "=": "natural" };
 const MARK_KEYS = { S: "staccato", V: "accent", N: "tenuto", O: "marcato" };
+// A down-bow and an up-bow, side by side on the keyboard as the strokes follow each other.
+const BOW_KEYS = { "[": "downbow", "]": "upbow" };
 
 // With Ctrl, outside Write, only the keys that change nothing in the score: zoom, copy, select, move
 // about, and undo and redo, which the top bar offers everywhere.
@@ -1122,6 +1124,7 @@ document.addEventListener("keydown", event => {
   }
   if (key === " ") { handled(); togglePlaying(); return; }
   if (MARK_KEYS[key]) { handled(); markAction("toggle", { name: MARK_KEYS[key] }); return; }
+  if (BOW_KEYS[key]) { handled(); markAction("toggle", { name: BOW_KEYS[key] }); return; }
   if (key === "s") { handled(); markAction("slur"); return; }
   if (key === "<") { handled(); markAction("hairpin", { name: "crescendo" }); return; }
   if (key === ">") { handled(); markAction("hairpin", { name: "diminuendo" }); return; }

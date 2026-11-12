@@ -226,7 +226,7 @@ const CELL_KEYS = {
   "hairpin:crescendo": "<", "hairpin:diminuendo": ">", "line:crescendo": "<", "line:diminuendo": ">", grace: "/",
   "text:staff": "Ctrl+T", "text:expression": "Ctrl+E", "text:rehearsal": "Ctrl+M", "layout:break": "Enter",
   "accidental:sharp": "+", "accidental:flat": "-", "accidental:natural": "=",
-  "finger:type": "Ctrl+F",
+  "finger:type": "Ctrl+F", "mark:downbow": "[", "mark:upbow": "]",
 };
 
 function cellCommands() {

@@ -2669,7 +2669,7 @@ def test_fingerboard_and_switcher(page, base: str, shots: Path | None, created: 
     check("and offers each one by its kind", offered[:2] == ["Piano · keyboard", "Violin · fingerboard"], offered)
     page.locator('.menu button:has(span:text-is("Violin · fingerboard"))').click()
     check("choosing the violin brings its fingerboard", page.is_visible("#fingerboardPanel") and page.is_hidden("#pianoPanel") and page.inner_text("#partName") == "Violin")
-    check("four strings tuned in fifths, with the positions marked", page.locator("#fingerboard .stringName").all_inner_texts() == list("EADG") and page.locator("#fingerboard .number").all_inner_texts() == ["1st", "2nd", "3rd", "4th", "5th"])
+    check("four strings tuned in fifths, with the positions marked", page.locator("#fingerboard .stringName").all_inner_texts() == list("EADG") and page.locator("#fingerboard .number").all_inner_texts() == ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th"])
     violin = page.evaluate("() => document.querySelector('#pages g.measure').querySelectorAll(':scope > g.staff')[2].querySelector('g.mRest, g.rest').id")
     click_on(page, page.locator(f"[id='{violin}']"))
     settle(page)
@@ -2927,6 +2927,109 @@ def test_guitar_notation(page, base: str, shots: Path | None, created: list[str]
     page.keyboard.press("Escape")
 
 
+def technique_round(page, base: str, score_id: str, cell: str, first: int, last: int | None, written, drawn: str, where: str) -> None:
+    """Press a cell beside the selected notes: the score has it, the page shows it, and undo takes it away."""
+    select_notes(page, first, last)
+    before, words = page.locator(drawn).count(), page.inner_text("#pages")
+    page.locator(f'#instrumentSlots [data-cell="{cell}"]').click()
+    settle(page)
+    has = written(saved_score(base, score_id))
+    shown = page.locator(drawn).count() > before or page.inner_text("#pages") != words
+    press(page, "Control+z")
+    gone = not written(saved_score(base, score_id))
+    check(f"{cell} beside a {where}'s note is written, shown and undone", has and shown and gone, (has, shown, gone))
+
+
+def words_in(root: ET.Element, *texts: str) -> list[str]:
+    return [words.text for words in root.iter("words") if words.text in texts]
+
+
+def test_violin_notation(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """A violinist's score: bowings by key, strings, positions and fingers, and the fingerboard following them."""
+    score_id = open_blank(page, base, created, bars=3, staff="violin")
+    page.keyboard.press("5")
+    page.keyboard.type("gbd", delay=0)
+    settle(page)
+    show_instrument(page)
+    page.locator('#fingerboard .spot[data-string="3"][data-stop="9"]').click()
+    settle(page)
+    page.locator('#fingerboard .spot[data-string="2"][data-stop="2"]').click()
+    settle(page)
+    notes = own_notes(saved_score(base, score_id))
+    check("a place on another string writes the note with that string's number", [note.findtext("notations/technical/string") for note in notes[3:5]] == ["3", None] and [note.findtext("pitch/step") for note in notes[3:5]] == ["B", "B"], [note.findtext("notations/technical/string") for note in notes])
+    page.keyboard.press("Escape")
+    settle(page)
+    page.wait_for_function("() => Object.keys(playState.data?.events ?? {}).length >= 5")
+    select_notes(page, 3)
+    check("the fingerboard shows it on its string", spots(page, "fingerboard", "chosen") == [[3, 9]], spots(page, "fingerboard", "chosen"))
+    select_notes(page, 0)
+    page.keyboard.press("[")
+    settle(page)
+    check("[ marks a down-bow", len(notes_with(saved_score(base, score_id), "notations/technical/down-bow")) == 1 and page.locator("#pages g.artic").count() >= 1)
+    select_notes(page, 1)
+    page.keyboard.press("]")
+    settle(page)
+    check("] marks an up-bow", len(notes_with(saved_score(base, score_id), "notations/technical/up-bow")) == 1)
+    press(page, "Control+z")
+    press(page, "Control+z")
+    check("and undo takes them away", not notes_with(saved_score(base, score_id), "notations/technical/down-bow") and not notes_with(saved_score(base, score_id), "notations/technical/up-bow"))
+    rows = page.locator("#instrumentSlots .slot").evaluate_all("rows => rows.map(row => row.dataset.row)")
+    check("a violinist's note has fingers, strings, sul, positions and bowing beside it", rows == ["Fingers", "String", "Sul", "Position", "Bow"], rows)
+    sul_cells = page.locator('#instrumentSlots [data-row="Sul"] button').evaluate_all("buttons => buttons.map(button => button.dataset.cell)")
+    check("sul offers the violin's own strings", sul_cells == ["sul:G", "sul:D", "sul:A", "sul:E", "sul:pont.", "sul:tasto"], sul_cells)
+
+    technical = lambda tag: lambda root: bool(notes_with(root, f"notations/technical/{tag}"))
+    for cell, first, last, written, drawn in [
+        ("finger:2", 1, None, technical("fingering"), "#pages g.fing"),
+        ("bowedString:2", 1, None, lambda root: own_notes(root)[1].findtext("notations/technical/string") == "2", "#pages g.fing"),
+        ("sul:G", 0, 2, lambda root: bool(words_in(root, "sul G")), "#pages g.dir"),
+        ("sul:pont.", 0, 2, lambda root: bool(words_in(root, "sul pont.")), "#pages g.dir"),
+        ("position:3", 0, None, lambda root: bool(words_in(root, "III pos.")), "#pages g.dir"),
+        ("pizzicato:on", 1, None, lambda root: bool(words_in(root, "pizz.")), "#pages g.dir"),
+        ("pizzicato:off", 1, None, lambda root: bool(words_in(root, "arco")), "#pages g.dir"),
+        ("mark:open", 0, None, technical("open-string"), "#pages g.artic"),
+        ("mark:stopped", 1, None, technical("stopped"), "#pages g.artic"),
+        ("harmonic:natural", 2, None, technical("harmonic"), "#pages g.artic, #pages g.fing"),
+        ("harmonic:artificial", 2, None, lambda root: len(notes_with(root, "notations/technical/harmonic")) == 2, "#pages g.note"),
+    ]:
+        technique_round(page, base, score_id, cell, first, last, written, drawn, "violin")
+
+    # A position and a sul over the notes move them on the fingerboard, with the finger they're played with.
+    select_notes(page, 0)
+    page.locator('#instrumentSlots [data-cell="position:3"]').click()
+    settle(page)
+    select_notes(page, 1)
+    check("a note in third position is shown there, with its finger", page.evaluate("() => [...document.querySelectorAll('#fingerboard .spot.chosen')].map(spot => [spot.dataset.string, spot.dataset.stop, spot.dataset.show])") == [["3", "9", "3"]] and page.get_attribute('#instrumentSlots [data-cell="position:3"]', "aria-pressed") == "true")
+    select_notes(page, 0, 2)
+    page.locator('#instrumentSlots [data-cell="sul:G"]').click()
+    settle(page)
+    select_notes(page, 1)
+    check("and sul G puts it on the G string", spots(page, "fingerboard", "chosen") == [[4, 16]], spots(page, "fingerboard", "chosen"))
+    page.locator('#instrumentSlots [data-cell="finger:4"]').click()
+    settle(page)
+    check("a finger marked is the one the fingerboard shows", page.evaluate("() => document.querySelector('#fingerboard .spot.chosen').dataset.show") == "4")
+    if shots:
+        page.screenshot(path=str(shots / "violin-write.png"))
+    page.keyboard.press("Escape")
+    settle(page)
+    position = page.locator("#pages g.dir", has_text="III pos.").first
+    position.evaluate("element => element.scrollIntoView({ block: 'center' })")
+    box = position.bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    settle(page)
+    check("a position on the page can be selected", page.inner_text("#propMarkKind") == "Position", page.inner_text("#toolLabel"))
+    page.keyboard.press("Delete")
+    settle(page)
+    check("and deleted", not words_in(saved_score(base, score_id), "III pos."))
+    press(page, "Control+z")
+    check("and undo brings it back", words_in(saved_score(base, score_id), "III pos.") == ["III pos."])
+    page.keyboard.press("Control+Shift+P")
+    page.fill("#commandInput", "up bow")
+    found = page.locator("#commandList li").first.inner_text()
+    page.keyboard.press("Escape")
+    check("the palette has the bowings with their keys", "Up bow" in found and "]" in found, found)
+
+
 def test_practice(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()
     page.add_init_script("""
@@ -3151,6 +3254,7 @@ def main() -> None:
             test_fingerboard_and_switcher(page, base, arguments.shots, created)
             test_new_scores_for_players(page, base, arguments.shots, created)
             test_guitar_notation(page, base, arguments.shots, created)
+            test_violin_notation(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)

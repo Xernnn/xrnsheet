@@ -6,6 +6,8 @@ const TUNING_NAMES = { standard: "Standard", dropD: "Drop D", DADGAD: "DADGAD", 
 const ROMAN = ["½", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"];
 const BEND_LABELS = { half: "½", full: "full", oneAndHalf: "1½" };
 const PLUCK_NAMES = { p: "thumb", i: "index finger", m: "middle finger", a: "ring finger" };
+const SUL_STRINGS = ["C", "G", "D", "A", "E"];
+const SHOWN_POSITIONS = 8; // ½ to VII beside the note; the palette has them all.
 let tunings = null; // The named tunings, from the server, once asked for.
 
 // A note's own id for a fret number on the tablature, which stands for the note it copies.
@@ -77,6 +79,9 @@ function techniquePalettes() {
   const pluck = letter => cell(`pluck:${letter}`, `Pluck with ${letter} (${PLUCK_NAMES[letter]})`, wordsCell(letter), () => markAction("pluck", { text: letter }), played => played.pluck === letter);
   const finger = number => cell(`finger:${number}`, `Finger ${number}${number === 0 ? " (open string)" : ""}`, wordsCell(String(number), "bold"), () => markAction("fingering", { text: String(number) }), played => played.finger === String(number));
   const string = number => cell(`string:${number}`, `String number ${number} (circled)`, circled(number), () => markAction("stringNumber", { number }), played => played.mark === number);
+  const bowedString = number => cell(`bowedString:${number}`, `String ${ROMAN[number]}`, wordsCell(ROMAN[number], "plain"), () => markAction("stringNumber", { number }), played => played.mark === number);
+  const sul = where => cell(`sul:${where}`, where === "pont." ? "Sul ponticello (near the bridge)" : where === "tasto" ? "Sul tasto (over the fingerboard)" : `Sul ${where} (play on the ${where} string)`, wordsCell(`sul ${where}`), () => markAction("sul", { text: where }), played => played.sul === where);
+  const position = number => cell(`position:${number}`, `${number ? `Position ${ROMAN[number]}` : "Half position"} (${ROMAN[number]} pos.)`, wordsCell(ROMAN[number], "plain"), () => markAction("position", { number }), played => played.position === number);
   return [
     { id: "guitar", name: "Guitar techniques", contexts: [], cells: [
       join("hammerOn", "Hammer-on (H) to the next note", "H"), join("pullOff", "Pull-off (P) to the next note", "P"),
@@ -85,7 +90,7 @@ function techniquePalettes() {
       cell("vibrato", "Vibrato", drawnCell(`<path d="M6 22c2.5-5 4.5-5 7 0s4.5 5 7 0 4.5-5 7 0 4.5 5 7 0 4.5-5 5-2" stroke-width="1.6"/>`), () => markAction("vibrato")),
       cell("line:palmMute", "Palm mute (P.M.)", wordsCell("P.M.", "plain"), () => markAction("line", { name: "palmMute" })),
       cell("line:letRing", "Let ring", wordsCell("let ring"), () => markAction("line", { name: "letRing" })),
-      cell("harmonic:natural", "Natural harmonic", glyphCell("E614", 7), () => markAction("harmonic", { name: "natural" }), played => played.harmonic === "natural"),
+      cell("harmonic:natural", "Natural harmonic", `<span class="words plain">${glyphIcon("E614", 6)} harm.</span>`, () => markAction("harmonic", { name: "natural" }), played => played.harmonic === "natural"),
       cell("harmonic:artificial", "Artificial harmonic (A.H.)", wordsCell("A.H.", "plain"), () => markAction("harmonic", { name: "artificial" }), played => played.harmonic === "artificial"),
       cell("deadNote", "Dead note (x)", glyphCell("E0A9", 6), () => markAction("deadNote"), played => Boolean(played.dead)),
     ] },
@@ -94,6 +99,15 @@ function techniquePalettes() {
       cell("finger:type", "Type fingers, one for each note…", wordsCell("1 3 5…", "plain"), askForFingers),
       ...["p", "i", "m", "a"].map(pluck),
       ...[1, 2, 3, 4, 5, 6].map(string),
+      ...[1, 2, 3, 4].map(bowedString),
+    ] },
+    { id: "bowed", name: "Bowed strings", contexts: [], textual: true, cells: [
+      ...SUL_STRINGS.map(sul), sul("pont."), sul("tasto"),
+      cell("pizzicato:on", "Pizzicato (pizz.)", wordsCell("pizz."), () => markAction("pizzicato", { on: true })),
+      cell("pizzicato:off", "Arco (with the bow)", wordsCell("arco"), () => markAction("pizzicato", { on: false })),
+      ...ROMAN.map((_, number) => position(number)),
+      cell("mark:open", "Open string (o)", wordsCell("o", "plain"), () => markAction("toggle", { name: "open" })),
+      cell("mark:stopped", "Stopped (+)", wordsCell("+", "plain"), () => markAction("toggle", { name: "stopped" })),
     ] },
   ];
 }
@@ -111,6 +125,16 @@ function techniqueRows(kind, part) {
       ["Right hand", ["pluck:p", "pluck:i", "pluck:m", "pluck:a"]],
       ["Left hand", ["finger:0", "finger:1", "finger:2", "finger:3", "finger:4", "finger:type"]],
       ["String number", Array.from({ length: Math.min(strings, 6) }, (_, index) => `string:${index + 1}`)],
+    ];
+  }
+  if (kind === "violin") {
+    const letters = (bowedStrings(part) ?? []).map(letterOf);
+    return [
+      ["Fingers", ["finger:0", "finger:1", "finger:2", "finger:3", "finger:4", "finger:type"]],
+      ["String", [1, 2, 3, 4].map(number => `bowedString:${number}`)],
+      ["Sul", [...SUL_STRINGS.filter(letter => letters.includes(letter)).map(letter => `sul:${letter}`), "sul:pont.", "sul:tasto"]],
+      ["Position", ROMAN.slice(0, SHOWN_POSITIONS).map((_, number) => `position:${number}`)],
+      ["Bow", ["pizzicato:on", "pizzicato:off", "mark:open", "mark:stopped", "harmonic:natural", "harmonic:artificial"]],
     ];
   }
   return [];

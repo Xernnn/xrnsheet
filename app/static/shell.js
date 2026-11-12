@@ -75,6 +75,7 @@ const SHORTCUTS = [
   ["S", "Slur a stretch, or this note to the next"],
   ["<  >", "Crescendo, diminuendo"],
   ["Shift+S  V  N  O", "Staccato, accent, tenuto, marcato"],
+  ["[  ]", "Down-bow, up-bow"],
   ["/", "Acciaccatura before this note"],
   ["J", "Respell: the same note under its other name"],
   ["X", "Flip the stem"],
