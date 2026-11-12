@@ -257,7 +257,7 @@ function drawStringChoice(element, part, played) {
   [...buttons.children].forEach((button, index) => {
     const open = midiOfName(names[index]) + (board.capo ?? 0);
     const fret = pitch === null ? null : pitch - open;
-    const playable = fret !== null && fret >= 0 && fret <= board.frets;
+    const playable = fret !== null && fret >= 0 && fret <= board.frets - (board.capo ?? 0);
     button.setAttribute("aria-pressed", String(played.string === index + 1));
     button.classList.toggle("cannot", !playable);
     button.title = playable ? `Play it on string ${index + 1}, ${letterOf(names[index])}, at fret ${fret}` : `String ${index + 1} can't play this note`;

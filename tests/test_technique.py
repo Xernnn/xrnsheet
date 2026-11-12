@@ -922,3 +922,10 @@ def test_a_paste_leaves_out_words_the_instrument_has_no_use_for():
     marks.paste_stretch(piano, keys[1], marks.copy_stretch(right, hands[0], hands[0])["events"])
     finished(piano)
     assert words_over(piano) == [("R.H.", False)], "a hand goes from piano to piano"
+
+
+def test_a_hammer_on_to_a_note_the_tablature_leaves_out_keeps_its_letter_on_the_staff():
+    root, ids = score("guitar-tab", 1, 64, 30)  # The second note is below the lowest string.
+    technique.toggle_pair(root, ids[0], ids[1], "hammerOn")
+    finished(root)
+    assert re.search(r'class="xrn-joined"[^>]*><text [^>]*>H</text>', svg_of(root))

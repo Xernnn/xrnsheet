@@ -616,6 +616,7 @@ def cross_staff(root: ET.Element, note_id: str, change: int) -> None:
 def drawn_on_other_staves(root: ET.Element) -> ET.Element:
     """Put each note moved to another staff on that staff, as MusicXML and Verovio have it, for a file or a drawing."""
     for note in root.iter("note"):
+        note.attrib.pop(fretted.CHOSEN, None)  # The app's own, which no other program reads.
         staff = note.attrib.pop(CROSS_STAFF, None)
         if staff is None:
             continue

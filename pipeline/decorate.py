@@ -512,11 +512,13 @@ def decorate(svg: str, root: ET.Element, space: float) -> str:
                 x, y, _ = places[note_id]
                 pieces.append(letter(x + HEAD_WIDTH * space / 2, y - 2.2 * space, "A.H.", space, note.get(HARMONIC_MARK), "harmonic", italic=True))
         for tag, text in JOINED.items():
-            for start, first, _ in pairs_of(part, tag, NOTE_PAIRS[tag]):
+            for start, first, last in pairs_of(part, tag, NOTE_PAIRS[tag]):
                 if not start.get("id"):
                     continue
-                # The letter goes on the tablature, as MuseScore has it, or on the staff if there's none.
-                lettered = DRAWN_TAB_SLUR if copies.get((first.get("id") or "") + TAB_COPY) is not None else DRAWN_SLUR
+                # The letter goes on the tablature, as MuseScore has it, or on the staff where the
+                # tablature has no slur: there's none, or a note of the two no string can play.
+                ends = [copies.get((note.get("id") or "") + TAB_COPY) for note in (first, last)]
+                lettered = DRAWN_TAB_SLUR if all(end is not None and end.find("pitch") is not None for end in ends) else DRAWN_SLUR
                 for suffix in (DRAWN_SLUR, DRAWN_TAB_SLUR):
                     svg, made = slur_letter(svg, start.get("id") + suffix, text, space, start.get("id"))
                     if made and suffix == lettered:

@@ -7,7 +7,9 @@ from fractions import Fraction
 
 import pytest
 
-from pipeline import concert, edit, fretted, structure, transpose
+import copy
+
+from pipeline import concert, edit, fretted, structure, technique, transpose
 from pipeline.engrave import render_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import to_text
@@ -928,3 +930,51 @@ def test_a_group_written_as_one_tag_opens_nothing():
 
     svg = '<g id="a" class="measure"><g id="b" class="tabDurSym" /><g id="c"><path /></g></g><g id="d"></g>'
     assert group_end(svg, 0) == svg.index('<g id="d"')
+
+
+def test_a_capo_leaves_the_frets_behind_it_out_of_reach():
+    root = guitar(measures=1)  # A nylon-string guitar, with 19 frets.
+    high = write(root, 83, 84)
+    assert [item["note"] for item in fretted.problems(root)] == [high[1]], "B5 is the top string's 19th fret, C6 would be its 20th"
+    fretted.set_strings(root, 0, capo=12)
+    synced(root)
+    listed = {item["note"]: item["reason"] for item in fretted.problems(root)}
+    assert high[1] in listed and "above the 19th fret" in listed[high[1]], "a capo on the 12th fret leaves seven above it, not nineteen"
+    assert string_and_fret(root, high[0]) == (1, 7)
+    with pytest.raises(EditError, match="fret 7 from the capo"):
+        fretted.choose_string(root, high[0], 2)
+
+
+def test_a_chord_written_a_note_at_a_time_is_fingered_as_a_chord():
+    root = guitar(measures=1)
+    first = write(root, 60)[0]
+    chord(root, first, 64)
+    chord(root, first, 67)
+    frets = [string_and_fret(root, note.get("id"))[1] for note in edit.locate(root, first).event.notes]
+    assert max(frets) - min(fret for fret in frets if fret) <= fretted.LONGEST_SPAN, f"playable together, not {frets}"
+
+
+def test_a_chosen_string_still_holds_in_a_chord_it_can_be_played_in():
+    root = guitar(measures=1)
+    first = write(root, 60)[0]
+    fretted.choose_string(root, first, 3)
+    synced(root)
+    chord(root, first, 64)
+    assert string_and_fret(root, first) == (3, 5)
+
+
+def test_a_note_hidden_on_the_staff_is_hidden_on_the_tablature():
+    root = guitar(measures=1)
+    hidden = write(root, 64, 67)[0]
+    own_note(root, hidden).set("print-object", "no")
+    synced(root)
+    assert copy_of(root, hidden).get("print-object") == "no"
+
+
+def test_a_string_chosen_for_a_note_is_the_apps_own_and_left_out_of_a_file():
+    root = guitar(measures=1)
+    note = write(root, 64)[0]
+    fretted.choose_string(root, note, 2)
+    synced(root)
+    assert copy_of(root, note).get(fretted.CHOSEN) == "yes"
+    assert fretted.CHOSEN not in to_text(technique.drawn_on_other_staves(copy.deepcopy(root)))
