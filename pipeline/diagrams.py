@@ -28,7 +28,12 @@ from pipeline.rhythm import EditError
 from pipeline.structure import GUITAR_STRINGS, pitch_of_name, read_setting, write_setting
 
 DIAGRAMS = "xrnsheet-chord-diagrams"
-PITCH_CLASSES = {"C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4, "F": 5, "F#": 6, "Gb": 6, "G": 7, "G#": 8, "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11}
+# Every name a chord's root or bass can have, E sharp and C flat among them, as a transposed or a
+# concert-pitch chord can be spelled.
+PITCH_CLASSES = {
+    "C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4, "F": 5, "F#": 6, "Gb": 6, "G": 7, "G#": 8, "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11,
+    "E#": 5, "B#": 0, "Cb": 11, "Fb": 4,
+}
 NAMES = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 X = None  # A string that isn't played.
 # Open chords, each string's fret from the low E up.

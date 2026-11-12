@@ -284,3 +284,17 @@ def test_a_file_has_no_frames_while_diagrams_are_off():
     diagrams.set_frame(root, 0, [None, 3, 5, 5, 5, 3])
     diagrams.set_shown(root, False)
     assert next(diagrams.with_frames(root).iter("harmony")).find("frame") is None
+
+
+@pytest.mark.parametrize("spelled, plain", [("E#", "F"), ("Cb7", "B7"), ("B#m", "Cm"), ("Fb", "E")])
+def test_a_chord_spelled_with_e_sharp_or_c_flat_has_the_diagram_of_its_sound(spelled, plain):
+    assert shape_for(spelled) == shape_for(plain)
+
+
+def test_a_score_whose_chords_are_transposed_to_c_flat_still_opens(client):
+    opened = client.post("/api/scores", files={"file": ("chart.musicxml", io.BytesIO(to_text(chart("C", "F", "G")).encode()))}).json()
+    url = f"/api/scores/{opened['id']}"
+    client.post(f"{url}/diagrams", json={"on": True})
+    moved = client.post(f"{url}/transpose", json={"key": -6, "direction": "closest"})
+    assert moved.status_code == 200 and "Cb" in [chord["text"] for chord in moved.json()["chords"]]
+    assert client.get(url).status_code == 200 and client.get(f"{url}/score.musicxml").status_code == 200
