@@ -847,9 +847,11 @@ def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
     Notes are copied as they're written, with how far their part sounds from that, so pasted
     into another instrument they sound the same, as they do in MuseScore. A player's techniques
     come too: each note's fingering, pluck, string number, bend, harmonic and dead note, a guitar
-    note's string on the tablature, and the hammer-ons, pull-offs, slides, glissandos and vibratos
-    between copied notes. A violin's artificial harmonic is copied as its stopped note, and the
-    paste adds the diamond back.
+    note's string, and the hammer-ons, pull-offs, slides, glissandos and vibratos between copied
+    notes. A violin's artificial harmonic is copied as its stopped note, and the paste adds the
+    diamond back. So do the words written over the passage: "pizz." and "arco", positions and
+    hands at their notes (`words`), and the P.M., let ring and sul lines starting there, to the
+    copied note each ends on or the copy's last (`lines`, as that note's place and the words).
     """
     from pipeline import fretted, technique  # They build on this module.
 
@@ -862,15 +864,28 @@ def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
         ends: dict[str, int] = {}
         joined: dict[tuple[str, str], int] = {}
         board = fretted.boards(root)[root.findall("part").index(start.part)]
+        lines = technique.lines_from(start.part, start.key[0])
+        sources = [number for number, item in enumerate(copied["events"]) if item["source"] is not None]
+        spans = []  # Each copied note's place and end, and its last copied piece: a rest can be copied as several.
+        for position, number in enumerate(sources):
+            spot = locate(root, copied["events"][number]["source"])
+            last = sources[position + 1] - 1 if position + 1 < len(sources) else len(copied["events"]) - 1
+            spans.append((number, (spot.context.index, spot.event.onset), (spot.context.index, spot.event.end), last))
         for number, item in enumerate(copied["events"]):
             source = item.pop("source")
-            item.update(marks=[], dynamic=None, slur=[], techniques=[], strings=[], joins=[])
+            item.update(marks=[], dynamic=None, slur=[], techniques=[], strings=[], joins=[], words=[], lines=[])
             if source is None:
                 continue
             note = find_note(root, source)
             spot = locate(root, source)
             item["marks"] = mark_names(note)
             item["dynamic"] = dynamic_at(spot.context, spot.event.onset)
+            item["words"] = technique.words_at(spot)
+            here = (spot.context.index, spot.event.onset)
+            for begins, stops, said in lines:
+                if begins == here:
+                    covered = [last for _, _, end, last in spans if stops is None or end <= stops]
+                    item["lines"].append([max([number, *covered]), said])
             touching = [index for index, member in enumerate(spot.event.notes) if technique.harmonic_kind(member)[1] == "touching-pitch"]
             item["pitches"] = [pitch for index, pitch in enumerate(item["pitches"]) if index not in touching]
             members = [member for index, member in enumerate(spot.event.notes) if index not in touching]
@@ -961,6 +976,10 @@ def paste_stretch(root: ET.Element, at_id: str, items: list[dict]) -> dict:
         for last, name in item.get("joins") or []:
             if 0 <= last < len(items) and last >= number and not locate(root, placed[number]).event.is_rest:
                 technique.join(root, placed[number], placed[last], name)
+        technique.give_words(root, placed[number], item.get("words") or [])
+        for last, words in item.get("lines") or []:
+            if 0 <= last < len(items) and last >= number:
+                technique.give_line(root, placed[number], placed[last], words)
     if strings:
         done["onStrings"] = strings
     return done

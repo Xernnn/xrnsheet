@@ -3317,6 +3317,7 @@ def test_techniques_copied_and_the_capo(page, base: str, shots: Path | None, cre
     check("pasted notes keep their fingers, bend and hammer-on", [note.findtext("notations/technical/fingering") for note in pasted] == ["1", "2", None, None] and pasted[3].find("notations/technical/bend") is not None and pasted[0].find("notations/technical/hammer-on") is not None)
     check("and the string a note was played on", string_and_fret(root, pasted[2].get("id")) == ("3", "14"), string_and_fret(root, pasted[2].get("id")))
     check("and the page draws them", page.locator("#pages g.xrn-bend").count() == 2 and page.locator("#pages g.xrn-joined").count() == 2)
+    check("and the palm mute over them", sum(1 for words in root.iter("words") if words.text == "P.M.") == 2 and page.locator("#pages g.dir", has_text="P.M.").count() == 2)
     press(page, "Control+z")
     check("and one undo takes the paste away", len(own_notes(saved_score(base, score_id))) == 4)
     score_pane(page)
@@ -3328,6 +3329,37 @@ def test_techniques_copied_and_the_capo(page, base: str, shots: Path | None, cre
     check("and the marks in its first bar can still be selected", page.inner_text("#propMarkKind") == "Palm mute", page.inner_text("#toolLabel"))
     if shots:
         page.screenshot(path=str(shots / "guitar-capo-words.png"))
+    page.keyboard.press("Escape")
+
+
+def test_words_copied_with_a_passage(page, base: str, created: list[str]) -> None:
+    """A violinist's pizz., position and sul G come with a copied passage, and only where they belong."""
+    score_id = open_blank(page, base, created, bars=3, staff="violin")
+    page.keyboard.press("5")
+    page.keyboard.type("gabc", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    ids = [note.get("id") for note in own_notes(saved_score(base, score_id))]
+    for body in [{"action": "pizzicato", "notes": ids[:1], "on": True}, {"action": "position", "notes": ids[1:2], "number": 3},
+                 {"action": "sul", "notes": ids[1:3], "text": "G"}]:
+        marks_api(base, score_id, body)
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    page.click('#modeSwitch [data-mode="write"]')
+    select_notes(page, 0, 3)
+    page.keyboard.press("Control+c")
+    settle(page)
+    rest = page.evaluate("() => document.querySelectorAll('#pages g.measure')[1].querySelector('g.staff g.mRest, g.staff g.rest').id")
+    click_on(page, page.locator(f"[id='{rest}']"))
+    settle(page)
+    page.keyboard.press("Control+v")
+    settle(page)
+    said = sorted(words.text for words in saved_score(base, score_id).iter("words"))
+    check("a copy brings its pizz., position and sul G", said == ["III pos.", "III pos.", "pizz.", "pizz.", "sul G", "sul G"], said)
+    check("and the page draws them", page.locator("#pages g.dir", has_text="sul G").count() == 2)
+    press(page, "Control+z")
+    check("and one undo takes them away with the notes", sorted(words.text for words in saved_score(base, score_id).iter("words")) == ["III pos.", "pizz.", "sul G"])
     page.keyboard.press("Escape")
 
 
@@ -3743,6 +3775,7 @@ def main() -> None:
             test_techniques_copied_and_the_capo(page, base, arguments.shots, created)
             test_tablature_editing(page, base, arguments.shots, created)
             test_marks_drawn_on_notes(page, base, arguments.shots, created)
+            test_words_copied_with_a_passage(page, base, created)
             test_practice(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)

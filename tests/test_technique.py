@@ -868,3 +868,57 @@ def test_clear_marks_takes_a_players_techniques_too():
     finished(violin)
     edit.clear_marks(violin, notes[0])
     assert len(edit.locate(violin, notes[0]).event.notes) == 1, "an artificial harmonic's diamond goes with it"
+
+
+def words_over(root, part=0):
+    return sorted((technique.words_of(direction), direction.find("sound") is not None) for direction in root.findall("part")[part].iter("direction") if technique.words_of(direction))
+
+
+def test_a_copy_carries_the_words_and_lines_over_a_passage():
+    root, ids = score("violin", 4, 67, 69, 71, 72)
+    technique.set_pizzicato(root, ids[0], True)
+    technique.set_position(root, ids[1], 3)
+    technique.toggle_sul(root, ids[1], ids[2], "G")
+    finished(root)
+    copied = marks.copy_stretch(root, ids[0], ids[3])
+    events = copied["events"]
+    assert events[0]["words"] == [{"kind": "pizzicato", "on": True}] and events[1]["words"] == [{"kind": "position", "number": 3}]
+    assert events[1]["lines"] == [[2, "sul G"]], "a line goes to the copied note it ends on"
+    later = next(note for note in root.findall("part/measure")[2].iter("note")).get("id")
+    marks.paste_stretch(root, later, events)
+    finished(root)
+    assert words_over(root).count(("pizz.", True)) == 2 and words_over(root).count(("III pos.", False)) == 2
+    sul = [line for line in technique.sul_lines(root.find("part"))]
+    assert len(sul) == 2 and sul[1][0] == (2, 1) and sul[1][1] == (2, 3), "the pasted sul G covers the notes it covered"
+
+
+def test_a_paste_over_its_own_words_keeps_them():
+    root, ids = score("violin", 2, 67, 69)
+    technique.set_pizzicato(root, ids[0], True)
+    technique.toggle_sul(root, ids[0], ids[1], "D")
+    finished(root)
+    marks.paste_stretch(root, ids[0], marks.copy_stretch(root, ids[0], ids[1])["events"])
+    finished(root)
+    assert words_over(root) == [("pizz.", True), ("sul D", False)], "pasted where they were, the words stay, once"
+
+
+def test_a_paste_leaves_out_words_the_instrument_has_no_use_for():
+    guitar, notes = score("guitar-tab", 2, 64, 67)
+    technique.toggle_named_line(guitar, notes[0], notes[1], "palmMute")
+    technique.set_position(guitar, notes[1], 5)
+    finished(guitar)
+    events = marks.copy_stretch(guitar, notes[0], notes[1])["events"]
+    piano, keys = score("piano", 2, 64, 67)
+    marks.paste_stretch(piano, keys[0], events)
+    finished(piano)
+    assert words_over(piano) == [], "a piano has no palm mute or positions"
+    again = next(note for note in guitar.findall("part/measure")[1].iter("note") if (note.findtext("staff") or "1") == "1").get("id")
+    marks.paste_stretch(guitar, again, events)
+    finished(guitar)
+    assert words_over(guitar).count(("P.M.", False)) == 2 and words_over(guitar).count(("V pos.", False)) == 2
+    right, hands = score("piano", 1, 72)
+    technique.toggle_hand(right, hands, "RH")
+    finished(right)
+    marks.paste_stretch(piano, keys[1], marks.copy_stretch(right, hands[0], hands[0])["events"])
+    finished(piano)
+    assert words_over(piano) == [("R.H.", False)], "a hand goes from piano to piano"

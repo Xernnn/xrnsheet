@@ -215,12 +215,17 @@ or `5<17>` for harmonics on the tablature, and "A.H." over a guitar's artificial
 ### Copying and pasting them
 
 `POST /api/scores/{id}/copy` gives each copied event `techniques` (one per note of the chord: its
-`fingering`, `pluck`, `string`, `bend`, `harmonic`, `dead`), `strings` (on a guitar with
-tablature, each note's string) and `joins` (`[later event, "hammerOn" | "pullOff" | "slide" |
-"glissando" | "vibrato"]`). `POST /api/scores/{id}/paste` puts them back, leaving out what the
-instrument pasted into can't have, and the strings once its tablature has the notes, as one edit.
-A violin's artificial harmonic is copied as its stopped note, and the paste adds its diamond. A
-passage's words and lines (P.M., sul G, pizz., positions, hands) aren't copied.
+`fingering`, `pluck`, `string`, `bend`, `harmonic`, `dead`), `strings` (on a guitar, each
+note's string), `joins` (`[later event, "hammerOn" | "pullOff" | "slide" | "glissando" |
+"vibrato"]`), `words` (`[{"kind": "pizzicato", "on": true}]`, `{"kind": "position",
+"number": 3}` or `{"kind": "hand", "name": "RH"}`, at that note) and `lines` (`[later event,
+"P.M." | "let ring" | "sul G" ...]`, a line starting at the note, to the copied note it ends on or
+the copy's last). `POST /api/scores/{id}/paste` puts them back, leaving out what the instrument
+pasted into can't have (palm mute and let ring are a fretted instrument's, sul and pizz. a bowed
+one's, positions either's, hands a keyboard's; a plain staff takes any), and the strings once its
+tablature has the notes, as one edit. Words or a line already there the same stay, rather than
+being toggled away. A violin's artificial harmonic is copied as its stopped note, and the paste
+adds its diamond.
 
 ### A capo
 

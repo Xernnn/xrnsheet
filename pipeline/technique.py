@@ -412,10 +412,11 @@ def remove_direction(end: tuple | None) -> None:
         end[0].remove(end[1])
 
 
-def toggle_text_line(root: ET.Element, first_id: str, last_id: str, words: str, placement: str) -> None:
+def toggle_text_line(root: ET.Element, first_id: str, last_id: str, words: str, placement: str, keep: bool = False) -> None:
     """Put words with a dashed line over a stretch, as "P.M." or "let ring", or take them away.
 
-    Two lines with the same words can't lie over each other on a staff, so one the new line overlaps goes.
+    Two lines with the same words can't lie over each other on a staff, so one the new line overlaps
+    goes. With `keep`, as a paste has it, the same line already there stays rather than going.
     """
     begin, chosen = events_between(root, first_id, last_id)
     first_context, _, first_event = chosen[0]
@@ -428,6 +429,8 @@ def toggle_text_line(root: ET.Element, first_id: str, last_id: str, words: str, 
         if said == words and (line_start[1].findtext("staff") or "1") == staff and line_start[3] < ends and starts < stop:
             overlapping.append((line_start, line_stop))
     same = any(found[0][3] == starts and found[1] is not None and found[1][3] == ends for found in overlapping)
+    if same and keep:
+        return
     for line_start, line_stop in overlapping:
         remove_direction(line_start)
         remove_direction(line_stop)
@@ -441,20 +444,20 @@ def toggle_text_line(root: ET.Element, first_id: str, last_id: str, words: str, 
     repair_lines(begin.part)
 
 
-def toggle_named_line(root: ET.Element, first_id: str, last_id: str, name: str) -> None:
+def toggle_named_line(root: ET.Element, first_id: str, last_id: str, name: str, keep: bool = False) -> None:
     if name not in TEXT_LINES:
         raise EditError("That isn't a line this app knows.")
-    toggle_text_line(root, first_id, last_id, *TEXT_LINES[name])
+    toggle_text_line(root, first_id, last_id, *TEXT_LINES[name], keep=keep)
 
 
-def toggle_sul(root: ET.Element, first_id: str, last_id: str, where: str) -> None:
+def toggle_sul(root: ET.Element, first_id: str, last_id: str, where: str, keep: bool = False) -> None:
     """Ask for a passage to be played on one string, as "sul G", or near the bridge or over the fingerboard."""
     where = where.strip()
     part = locate(root, first_id).part
     names = {name.rstrip("0123456789").rstrip("#b") for name in string_names(root, part)}
     if where not in names and where not in SUL_PLACES:
         raise EditError(f"Say a string, such as {' or '.join(sorted(names)) or 'G'}, or pont. or tasto.")
-    toggle_text_line(root, first_id, last_id, f"sul {where}", "above")
+    toggle_text_line(root, first_id, last_id, f"sul {where}", "above", keep=keep)
 
 
 def directions_here(spot: Spot, wanted) -> list[ET.Element]:
@@ -470,11 +473,14 @@ def words_of(direction: ET.Element) -> str:
     return " ".join((words.text or "").strip() for words in direction.iter("words")).strip()
 
 
-def toggle_words(root: ET.Element, note_id: str, text: str, kind_of, placement: str = "above", sound: dict | None = None) -> None:
-    """Put words of one kind at a note, replacing others of that kind there. The same words again take them away."""
+def toggle_words(root: ET.Element, note_id: str, text: str, kind_of, placement: str = "above", sound: dict | None = None, keep: bool = False) -> None:
+    """Put words of one kind at a note, replacing others of that kind there. The same words again take
+    them away, unless they're to be kept, as a paste keeps them."""
     spot = locate(root, note_id)
     existing = directions_here(spot, kind_of)
     same = any(words_of(found) == text for found in existing)
+    if same and keep:
+        return
     for found in existing:
         spot.context.measure.remove(found)
     if same:
@@ -486,16 +492,20 @@ def is_pizzicato_mark(direction: ET.Element) -> bool:
     return direction.find("sound[@pizzicato]") is not None
 
 
-def set_pizzicato(root: ET.Element, note_id: str, on: bool) -> None:
+def set_pizzicato(root: ET.Element, note_id: str, on: bool, keep: bool = False) -> None:
     """Mark "pizz." or "arco" at a note. Playback plucks the strings from "pizz." until "arco"."""
-    toggle_words(root, note_id, "pizz." if on else "arco", is_pizzicato_mark, sound={"pizzicato": "yes" if on else "no"})
+    toggle_words(root, note_id, "pizz." if on else "arco", is_pizzicato_mark, sound={"pizzicato": "yes" if on else "no"}, keep=keep)
 
 
-def set_position(root: ET.Element, note_id: str, number: int) -> None:
+def is_position_mark(direction: ET.Element) -> bool:
+    return words_of(direction).endswith(POSITION_WORDS)
+
+
+def set_position(root: ET.Element, note_id: str, number: int, keep: bool = False) -> None:
     """Mark the position the hand plays in from a note, as "III pos.", with 0 for half position."""
     if not 0 <= number < len(ROMAN):
         raise EditError(f"A position is from ½ to {ROMAN[-1]}.")
-    toggle_words(root, note_id, ROMAN[number] + POSITION_WORDS, lambda direction: words_of(direction).endswith(POSITION_WORDS))
+    toggle_words(root, note_id, ROMAN[number] + POSITION_WORDS, is_position_mark, keep=keep)
 
 
 HANDS = {"RH": "R.H.", "LH": "L.H."}
@@ -505,12 +515,81 @@ HANDS = {"RH": "R.H.", "LH": "L.H."}
 CROSS_STAFF = "xrn-staff"
 
 
-def toggle_hand(root: ET.Element, note_ids: list[str], hand: str) -> None:
+def is_hand_mark(direction: ET.Element) -> bool:
+    return words_of(direction) in HANDS.values()
+
+
+def toggle_hand(root: ET.Element, note_ids: list[str], hand: str, keep: bool = False) -> None:
     """Mark which hand plays the chosen notes, as "R.H." or "L.H." over them."""
     if hand not in HANDS:
         raise EditError("A hand is RH or LH.")
     for note in pitched(root, note_ids):
-        toggle_words(root, note.get("id"), HANDS[hand], lambda direction: words_of(direction) in HANDS.values())
+        toggle_words(root, note.get("id"), HANDS[hand], is_hand_mark, keep=keep)
+
+
+# The words and lines over a passage that a copy carries, and the instruments a paste gives them to.
+LINE_FAMILIES = {"P.M.": {PLUCKED}, "let ring": {PLUCKED}, "sul": {BOWED}}
+WORD_FAMILIES = {"pizzicato": {BOWED}, "position": {BOWED, PLUCKED}, "hand": {KEYBOARDS}}
+
+
+def words_at(spot: Spot) -> list[dict]:
+    """Say what a copy carries of the words at a note: "pizz." or "arco", a position, and a hand."""
+    found = []
+    for direction in directions_here(spot, lambda direction: True):
+        said = words_of(direction)
+        if is_pizzicato_mark(direction):
+            found.append({"kind": "pizzicato", "on": direction.find("sound").get("pizzicato") == "yes"})
+        elif said.endswith(POSITION_WORDS) and said.removesuffix(POSITION_WORDS) in ROMAN:
+            found.append({"kind": "position", "number": ROMAN.index(said.removesuffix(POSITION_WORDS))})
+        elif said in HANDS.values():
+            found.append({"kind": "hand", "name": next(name for name, words in HANDS.items() if words == said)})
+    return found
+
+
+def lines_from(part: ET.Element, staff: str) -> list[tuple[tuple[int, Fraction], tuple[int, Fraction] | None, str]]:
+    """A staff's P.M., let ring and sul lines, each with where it starts and stops, and its words."""
+    found = []
+    for begun, ended, said in text_lines(part):
+        if (begun[1].findtext("staff") or "1") == staff and (said in LINE_FAMILIES or said.startswith("sul ")):
+            found.append((begun[3], ended[3] if ended is not None else None, said))
+    return found
+
+
+def fits(root: ET.Element, note_id: str, families: set[str]) -> bool:
+    """Say whether a note's instrument has a use for words of these families. A plain staff takes any."""
+    family = family_of(root, locate(root, note_id).part)
+    return family is None or family in families
+
+
+def give_words(root: ET.Element, note_id: str, found: list[dict]) -> None:
+    """Put back the words a copied note had, as far as its new instrument has a use for them."""
+    for item in found:
+        if not fits(root, note_id, WORD_FAMILIES.get(item.get("kind"), set())):
+            continue
+        try:
+            if item["kind"] == "pizzicato":
+                set_pizzicato(root, note_id, bool(item.get("on")), keep=True)
+            elif item["kind"] == "position":
+                set_position(root, note_id, int(item.get("number", -1)), keep=True)
+            elif item["kind"] == "hand":
+                toggle_hand(root, [note_id], str(item.get("name")), keep=True)
+        except (EditError, KeyError, TypeError, ValueError):
+            pass  # Not something this note can have: it's pasted without it.
+
+
+def give_line(root: ET.Element, first_id: str, last_id: str, words: str) -> None:
+    """Put back a copied P.M., let ring or sul line over the notes it covered, on an instrument that has them."""
+    kind = "sul" if words.startswith("sul ") else words
+    if kind not in LINE_FAMILIES or not fits(root, first_id, LINE_FAMILIES[kind]):
+        return
+    try:
+        if words.startswith("sul "):
+            toggle_sul(root, first_id, last_id, words.removeprefix("sul "), keep=True)
+        else:
+            name = next(name for name, (said, _) in TEXT_LINES.items() if said == words)
+            toggle_named_line(root, first_id, last_id, name, keep=True)
+    except (EditError, StopIteration):
+        pass  # The instrument hasn't that string, say: the notes are pasted without it.
 
 
 def cross_staff(root: ET.Element, note_id: str, change: int) -> None:

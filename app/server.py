@@ -238,6 +238,8 @@ class CopiedEvent(BaseModel):
     techniques: list[dict] = []  # Each note's fingering, pluck, string number, bend, harmonic and dead note.
     strings: list[int | None] = []  # Each note's string on a guitar's tablature.
     joins: list[tuple[int, str]] = []  # Hammer-ons and the like to a later copied note: its place and the join.
+    words: list[dict] = []  # "pizz." or "arco", a position or a hand at the note: {"kind": "position", "number": 3}.
+    lines: list[tuple[int, str]] = []  # A P.M., let ring or sul line from the note: the copied note it ends on, and its words.
 
 
 class Paste(BaseModel):
