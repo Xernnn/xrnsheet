@@ -376,6 +376,7 @@ function lightKeys() {
       for (const name of ["chosen", "expected", "sounding"]) element.classList.toggle(name, lit?.name === name);
       element.dataset.show = lit ? spotLabel(kind, lit.spot, element) : "";
     });
+    showChosenSpot(holder);
     return;
   }
   // A keyboard key is the pitch the staff shows, so at concert pitch it's the one that sounds.
@@ -388,6 +389,15 @@ function lightKeys() {
     key.classList.toggle("expected", expected.has(midi));
     key.classList.toggle("sounding", lit.has(midi));
   });
+}
+
+// A selected note high on the neck is brought into view, as a phone shows only the first frets.
+function showChosenSpot(holder) {
+  const panel = holder.closest(".dockPanel");
+  const spot = holder.querySelector(".spot.chosen");
+  if (!panel || !spot) return;
+  const box = spot.getBoundingClientRect(), view = panel.getBoundingClientRect();
+  if (box.left < view.left || box.right > view.right) panel.scrollLeft += box.left + box.width / 2 - (view.left + view.width / 2);
 }
 
 // Playback lights a note for as long as it sounds, if it's the chosen part's: a key by its pitch,

@@ -101,6 +101,12 @@ def as_fingering(mark: ET.Element, text: str, placement: str, kind: str) -> ET.E
     return made
 
 
+def drawn_slur_numbers():
+    """Hand out the numbers drawn slurs take, from the top of MusicXML's sixteen down, and round again."""
+    while True:
+        yield from range(HIGHEST_SLUR_NUMBER, FIRST_DRAWN_SLUR - 1, -1)
+
+
 def prepare(root: ET.Element) -> None:
     """Turn marks Verovio doesn't draw into ones it does, for the drawing alone."""
     for part in root.findall("part"):
@@ -130,22 +136,25 @@ def prepare(root: ET.Element) -> None:
                     technical.remove(mark)
                     technical.insert(position, replacement)
         copies = notes_by_id(part)
-        number = HIGHEST_SLUR_NUMBER
+        numbers = drawn_slur_numbers()
         for tag in (*JOINED, "slide", "glissando"):
             for start, first, last in pairs_of(part, tag, NOTE_PAIRS[tag]):
                 name = start.get("id") or ""
                 if tag in JOINED:
+                    number = next(numbers)
                     add_slur(first, "start", number, name + DRAWN_SLUR if name else None)
                     add_slur(last, "stop", number)
                 first_copy, last_copy = copies.get((first.get("id") or "") + TAB_COPY), copies.get((last.get("id") or "") + TAB_COPY)
                 if first_copy is not None and last_copy is not None and first_copy.find("pitch") is not None and last_copy.find("pitch") is not None:
+                    # A number of its own: two slurs of one part open with one number across a barline
+                    # are ended at random, and drawn from one staff to the other.
+                    number = next(numbers)
                     if tag in JOINED:
                         add_slur(first_copy, "start", number, name + DRAWN_TAB_SLUR if name else None)
                         add_slur(last_copy, "stop", number)
                     else:
                         add_joint(first_copy, tag, "start", number, start.get("line-type", "solid"))
                         add_joint(last_copy, tag, "stop", number)
-                number = number - 1 if number > FIRST_DRAWN_SLUR else HIGHEST_SLUR_NUMBER
 
 
 def boards_of(root: ET.Element, part: ET.Element) -> Fretboard | None:

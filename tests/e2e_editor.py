@@ -3461,6 +3461,29 @@ def test_phone(context, base: str, shots: Path | None, created: list[str]) -> No
     page.click("#libraryToggle")
     check("on a phone the library opens over the score", page.is_visible("#library"))
     page.click("#libraryToggle")
+    # A guitar's note high on the neck is brought into view on a phone's short fretboard.
+    page.goto(base)
+    new_score(page, "guitar-tab", bars=2)
+    created.append(page.evaluate("() => scoreId"))
+    page.evaluate("() => enqueue(() => send(`notes/${editor.cursor}`, { action: 'write', type: 'quarter', dots: 0, midi: 79 }))")
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    show_instrument(page)
+    page.wait_for_function("() => playState.data !== null")
+    page.evaluate("() => select(allEvents()[0].id)")
+    settle(page)
+    seen = page.evaluate("""() => {
+        const spot = document.querySelector('#fretboard .spot.chosen'), panel = document.getElementById('fretboardPanel');
+        const box = spot.getBoundingClientRect(), view = panel.getBoundingClientRect();
+        return [Number(spot.dataset.stop), box.left >= view.left && box.right <= view.right];
+    }""")
+    check("a guitar note high on the neck is brought into view on a phone", seen == [15, True], seen)
+    page.evaluate("() => showInspector(true)")
+    overflow = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+    check("and the guitarist's box fits a phone", overflow == 0 and page.is_visible("#stringButtons"), overflow)
+    if shots:
+        page.screenshot(path=str(shots / "phone-guitar.png"))
     page.close()
 
 

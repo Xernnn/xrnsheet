@@ -760,3 +760,20 @@ def test_a_guitars_string_number_retyped_moves_its_tablature(client):
     assert (copy.findtext("notations/technical/string"), copy.findtext("notations/technical/fret")) == ("4", "5")
     refused = client.post(f"{url}/marks", json={"action": "label", "id": mark["id"], "text": "1"})
     assert refused.status_code == 422 and "String 1 can't play G3" in refused.json()["detail"]
+
+
+def test_a_pull_off_over_a_barline_is_drawn_on_each_staff_from_note_to_note():
+    from pipeline import decorate
+
+    root, ids = score("guitar-tab", 2, 64, 67, 69, 71, 69)
+    technique.toggle_pair(root, ids[3], ids[4], "pullOff")
+    finished(root)
+    drawn = copy.deepcopy(root)
+    decorate.prepare(drawn)
+    numbers = lambda note_id, kind: {slur.get("number") for slur in note(drawn, note_id).iterfind("notations/slur") if slur.get("type") == kind}
+    assert numbers(ids[3], "start") == numbers(ids[4], "stop") and numbers(ids[3] + TAB_COPY, "start") == numbers(ids[4] + TAB_COPY, "stop")
+    assert numbers(ids[3], "start").isdisjoint(numbers(ids[3] + TAB_COPY, "start")), "each staff's slur has a number of its own"
+    slurs = re.findall(r'<g id="[^"]+-(?:tab)?slur" class="slur"[^>]*>\s*<path d="M(-?\d+),(-?\d+) C(?:-?\d+,-?\d+ ){2}(-?\d+),(-?\d+)', svg_of(root))
+    assert len(slurs) >= 2
+    for _, start, _, end in slurs:
+        assert abs(int(start) - int(end)) < 600, "it stays on its staff, not drawn from one to the other"
