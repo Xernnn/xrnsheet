@@ -1224,6 +1224,55 @@ def test_marks_over_a_line_break(page, base: str, created: list[str]) -> None:
     check("redo removes it again", not notes_with(saved_score(base, score_id), "notations/slur"))
 
 
+def test_octave_and_pedal_lines(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, tune="cdefgabcdefgabcd", bars=8)
+    plain = head_heights(page)
+    step = page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step")
+    select_notes(page, 0, 2)
+    choose(page, "line:8va")
+    settle(page)
+    check("an 8va line is drawn", page.locator("#pages g.octave").count() == 1)
+    lowered = head_heights(page)
+    check("the notes under it are drawn an octave lower", all(abs(low - high - 7 * step) < 1.5 for high, low in zip(plain[:3], lowered[:3])) and abs(lowered[3] - plain[3]) < 1, (plain[:4], lowered[:4]))
+    octaves = [note.findtext("pitch/octave") for note in saved_score(base, score_id).iter("note") if note.find("pitch") is not None][:3]
+    check("and keep the pitch they sound at", octaves == ["5", "5", "5"], octaves)
+    sounding = page.evaluate("async () => (await (await fetch(`/api/scores/${scoreId}/playback`)).json()).notes.slice(0, 3).map(note => note.midi)")
+    check("so they play as written", sounding == [72, 74, 76], sounding)
+    page.keyboard.press("n")
+    settle(page)
+    click_staff(page, page.evaluate("() => document.querySelectorAll('#pages g.note')[1].id"), 0)
+    entered = [(note.findtext("pitch/step"), note.findtext("pitch/octave")) for note in saved_score(base, score_id).iter("note") if note.find("pitch") is not None][1]
+    check("a note clicked onto the top line under the 8va is the F an octave up", entered == ("F", "6"), entered)
+    page.keyboard.press("Escape")
+    settle(page)
+    click_mark(page, "#pages g.octave")
+    check("the line can be selected", mark_chosen(page).startswith("Ottava"), page.inner_text("#toolLabel"))
+    if shots:
+        page.screenshot(path=str(shots / "lines.png"))
+    page.keyboard.press("Delete")
+    settle(page)
+    check("Delete removes the whole line", page.locator("#pages g.octave").count() == 0 and not list(saved_score(base, score_id).iter("octave-shift")))
+    select_notes(page, 4, 6)
+    menu(page, "Add", "Lines", "Ottava 8va bassa")
+    settle(page)
+    check("Add ▸ Lines puts an 8va bassa below", [shift.get("type") for shift in saved_score(base, score_id).iter("octave-shift")] == ["up", "stop"])
+    select_notes(page, 8, 10)
+    choose(page, "line:pedal-pedstar")
+    settle(page)
+    check("a pedal is drawn as Ped. and a star", page.locator("#pages g.pedal").count() == 2)
+    held = page.evaluate("async () => (await (await fetch(`/api/scores/${scoreId}/playback`)).json()).notes.slice(8, 11).map(note => note.start + note.length)")
+    check("and holds its notes until it comes up", held == [11, 11, 11], held)
+    select_notes(page, 12, 14)
+    choose(page, "line:pedal-line")
+    settle(page)
+    click_mark(page, "#pages g.pedal:has(rect)")
+    check("a pedal line can be selected", mark_chosen(page).startswith("Pedal"), page.inner_text("#toolLabel"))
+    if shots:
+        page.screenshot(path=str(shots / "pedals.png"))
+    page.keyboard.press("Escape")
+    settle(page)
+
+
 def test_note_marks(page, base: str, shots: Path | None, created: list[str]) -> None:
     score_id = written_melody(page, base, created)
     select_notes(page, 0)
@@ -2012,6 +2061,7 @@ def main() -> None:
             test_titles_and_repeats(page, base, arguments.shots, created)
             test_sound(page, base, created)
             test_note_marks(page, base, arguments.shots, created)
+            test_octave_and_pedal_lines(page, base, arguments.shots, created)
             test_marks_over_a_line_break(page, base, created)
             test_placed_marks(page, base, arguments.shots, created)
             test_voices(page, base, arguments.shots, created)

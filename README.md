@@ -84,7 +84,7 @@ A score read from a photo or PDF also has the original sheet in a panel on the r
 
 **Entering notes.** Press `N`, pick a duration, and type the letters or click the staff. A new measure appears when you write past the last one. A longer note overwrites what comes after it and a shorter one leaves a rest, so every measure stays full. A note too long for its measure carries into the next one, tied. A MIDI keyboard works while entering notes, and keys pressed together make a chord.
 
-**Palettes.** Select a note, a stretch or a measure, then click a cell: Clefs, Key signatures, Time signatures (with common and cut time), Tempo, Accidentals (with double sharp and double flat), Dynamics, Articulations, Text, Repeats & jumps, Barlines and Layout. "Add Palettes" has Ornaments, Breaths & pauses, Grace notes, Arpeggios and Lines. The magnifying glass searches every palette. A key or time signature applies from the selected measure, and a barline goes at its end.
+**Palettes.** Select a note, a stretch or a measure, then click a cell: Clefs, Key signatures, Time signatures (with common and cut time), Tempo, Accidentals (with double sharp and double flat), Dynamics, Articulations, Text, Repeats & jumps, Barlines and Layout. "Add Palettes" has Ornaments, Breaths & pauses, Grace notes, Arpeggios and Lines, which has the 8va and 15ma lines above and below and the sustain pedal, as "Ped." and a star or as a line. The magnifying glass searches every palette. A key or time signature applies from the selected measure, and a barline goes at its end.
 
 **Selecting.** Click a note or rest. Shift-click another to select the stretch between them, which gets a blue box. Click an empty part of a measure to select the whole measure. A stretch moves, deletes or copies as one undo step, within one voice. Click a dynamic, tempo, text, sign, slur or hairpin to select it: Delete removes it, and a double-click or `F2` changes its text. A right-click opens a menu for whatever is under the pointer.
 
@@ -143,7 +143,9 @@ The keys are MuseScore's where MuseScore has one. A browser keeps a few for itse
 
 Measures that don't add up to the time signature are listed above the score, which is usually how a misread rhythm shows itself. Click one to go there, then fix it with "Remove beat" or "Insert beat" in the Properties panel. A new time signature doesn't move notes between measures: the ones that no longer fit are listed for you to fix.
 
-Play sounds the notes and the chord symbols, starting from the selected note. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, and articulations and ornaments. The cog beside Play slows it down or speeds it up.
+Play sounds the notes and the chord symbols, starting from the selected note. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, articulations and ornaments, and the sustain pedal.
+
+An 8va line keeps the notes under it at the pitch they sound, which is how MusicXML and MuseScore store them, and draws them an octave lower. A note clicked onto the staff under one is the note an octave above where it's drawn. The cog beside Play slows it down or speeds it up.
 
 Tools ▸ Transpose moves the selection, or the whole score if nothing is selected, to a key or by an interval, and the chord symbols move with it. Format ▸ Add/remove system breaks sets how many measures go on a line.
 

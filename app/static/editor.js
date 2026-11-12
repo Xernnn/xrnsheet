@@ -31,7 +31,7 @@ const FAMILY_SOUNDS = {
   9: { wave: "sine", level: 1.2 }, // Flutes.
 };
 const USUAL_SOUND = { wave: "triangle", level: 1 };
-const MARK_NAMES = { dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin" };
+const MARK_NAMES = { dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin", ottava: "Ottava", pedal: "Pedal" };
 const EXPRESSIONS = { staff: "Text, e.g. solo", expression: "Expression, e.g. dolce" };
 const editor = { on: false, type: "quarter", dots: 0, voice: 1, cursor: null, last: null, trail: [], future: [] };
 let player = null;
@@ -793,6 +793,7 @@ function openMark(element) {
 
 // Verovio makes up its own ids for these, so they're matched up by order within each bar. If a
 // bar doesn't draw the number expected, it's safer to leave its marks unclickable than to guess.
+// An octave or pedal line carried over a line break goes on in a piece that names the first.
 function tagMarks() {
   const groups = new Map();
   for (const mark of score.marks ?? []) {
@@ -802,9 +803,12 @@ function tagMarks() {
   }
   for (const [key, marks] of groups) {
     const [bar, drawn] = key.split("/");
-    const shown = document.getElementById(bar)?.querySelectorAll(`g.${drawn}`) ?? [];
+    const shown = document.getElementById(bar)?.querySelectorAll(`g.${drawn}:not(.spanning)`) ?? [];
     if (shown.length !== marks.length) continue;
-    shown.forEach((element, index) => { element.dataset.mark = marks[index].id; });
+    shown.forEach((element, index) => {
+      element.dataset.mark = marks[index].id;
+      document.querySelectorAll(`#pages g.spanning.id-${CSS.escape(element.id)}`).forEach(piece => { piece.dataset.mark = marks[index].id; });
+    });
   }
 }
 

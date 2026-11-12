@@ -33,6 +33,7 @@ from pipeline.rhythm import (
     line_end,
     make_note,
     note_lengths,
+    octave_shift_at,
     offset_of,
     on_plain_grid,
     overwrite,
@@ -506,9 +507,17 @@ def pitch_of_key(number: int, fifths: int) -> Pitch:
     return step, 1, octave
 
 
+def octaves_drawn_down(spot: Spot) -> int:
+    """How many octaves below how they sound notes are drawn here, under an 8va or the like."""
+    return octave_shift_at(spot.part, spot.context.index, spot.event.onset if spot.event else Fraction(0), spot.key[0])
+
+
 def pitch_on_line(spot: Spot, line: int) -> Pitch:
-    """Return the pitch at a place on the staff, counted in steps down from the top line."""
-    height = spot.context.tops.get(spot.key[0], diatonic("F", 5)) - line
+    """Return the pitch at a place on the staff, counted in steps down from the top line.
+
+    Under an 8va line the place stands for the note an octave above it.
+    """
+    height = spot.context.tops.get(spot.key[0], diatonic("F", 5)) - line + 7 * octaves_drawn_down(spot)
     step, octave = STEPS[height % 7], height // 7
     if not 0 <= octave <= 9:
         raise EditError("That's too far from the staff.")
@@ -944,7 +953,8 @@ def add_interval(root: ET.Element, note_id: str, interval: int) -> str:
         raise EditError("Choose a note to add an interval to.")
     heights = [height_of(note) for note in spot.event.notes]
     height = max(heights) + interval - 1 if interval > 0 else min(heights) + interval + 1
-    return add_pitch(root, note_id, "", line=spot.context.tops.get(spot.key[0], diatonic("F", 5)) - height)
+    line = spot.context.tops.get(spot.key[0], diatonic("F", 5)) - height + 7 * octaves_drawn_down(spot)
+    return add_pitch(root, note_id, "", line=line)
 
 
 def write_alter(pitch: ET.Element, alter: int) -> None:

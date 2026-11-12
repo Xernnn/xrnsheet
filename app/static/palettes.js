@@ -114,6 +114,15 @@ function hairpinCell(kind) {
 const SLUR_CELL = `<path d="M6 28c8-13 24-13 32 0c-8-10-24-10-32 0z" fill="currentColor" stroke-width="0.6"/>`;
 const BREAK_CELL = `<path d="M33 12v12H12M17 19l-5 5 5 5" stroke-width="1.6"/>`;
 const GRACE_CELL = `<g transform="translate(15 32) scale(0.014)" fill="currentColor" stroke="none">${setGlyphs("E1D7").paths}</g><path d="M13 22l13-8" stroke-width="1"/>`;
+// An octave line's number and a dashed line ending in a hook, above the music or below it.
+function ottavaCell(glyph, above) {
+  const y = above ? 19 : 31;
+  return `<g transform="translate(4 ${y}) scale(0.02)" fill="currentColor" stroke="none">${setGlyphs(glyph).paths}</g><path d="M24 ${y - 3}h14" stroke-width="1" stroke-dasharray="2.5 1.6"/><path d="M38.5 ${y - 3}v${above ? 7 : -7}" stroke-width="1"/>`;
+}
+const PEDAL_CELLS = {
+  pedstar: `<g transform="translate(3 27) scale(0.017)" fill="currentColor" stroke="none">${setGlyphs("E650").paths}</g><g transform="translate(31 27) scale(0.017)" fill="currentColor" stroke="none">${setGlyphs("E655").paths}</g>`,
+  line: `<path d="M5 17v10h34v-10" stroke-width="1.2"/>`,
+};
 const ARPEGGIO_CELL = `<path d="M22 6c-4 2-4 4 0 6s4 4 0 6s-4 4 0 6s4 4 0 6s-4 4 0 6" stroke-width="1.6"/>`;
 
 function tempoCell(codes, speed) {
@@ -139,6 +148,8 @@ function buildPalettes() {
   const jump = (name, label, html) => ({ key: `jump:${name}`, label, html: html ?? wordsCell(label), ...atNote(() => markAction("jump", { name })) });
   const hairpin = (name, label) => ({ key: `hairpin:${name}`, label, html: hairpinCell(name), ...atNote(() => markAction("hairpin", { name })) });
   const slur = { key: "slur", label: "Slur", html: drawnCell(SLUR_CELL), ...atNote(() => markAction("slur")) };
+  const ottava = (name, label, glyph, above) => ({ key: `line:${name}`, label, html: drawnCell(ottavaCell(glyph, above)), ...atNote(() => markAction("ottava", { name })) });
+  const pedal = (style, label) => ({ key: `line:pedal-${style}`, label, html: drawnCell(PEDAL_CELLS[style]), ...atNote(() => markAction("pedal", { name: style })) });
   const volta = (number, label) => ({ key: `ending:${number}`, label, html: voltaCell(number), ...atNote(() => barAction("ending", { number, last: range?.last ?? null })) });
   const repeat = (prefix, side, label) => ({ key: `${prefix}:${side}`, label, html: repeatCell(side), run: () => barAction(side) });
   return [
@@ -202,6 +213,8 @@ function buildPalettes() {
     { id: "lines", name: "Lines", cells: [
       { ...slur, key: "line:slur" }, { ...hairpin("crescendo", "Crescendo hairpin"), key: "line:crescendo" }, { ...hairpin("diminuendo", "Diminuendo hairpin"), key: "line:diminuendo" },
       { ...volta(1, "Prima volta"), key: "line:ending1" }, { ...volta(2, "Seconda volta"), key: "line:ending2" },
+      ottava("8va", "8va alta", "E511", true), ottava("8vb", "8va bassa", "E51C", false), ottava("15ma", "15ma alta", "E515", true), ottava("15mb", "15ma bassa", "E51D", false),
+      pedal("pedstar", "Pedal (with ped and asterisk)"), pedal("line", "Pedal (straight hooks)"),
     ] },
   ];
 }

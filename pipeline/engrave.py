@@ -12,6 +12,7 @@ from pathlib import Path
 import verovio
 
 from pipeline.musicxml import UnreadableScore
+from pipeline.rhythm import OCTAVE_SHIFTS, contexts, octave_lines, read_measure
 from pipeline.structure import BREAK_PREFIX, bars_per_line
 
 # Verovio keeps its font location per thread, so a web server's worker threads must set it.
@@ -203,10 +204,74 @@ def set_line_breaks(root: ET.Element) -> None:
                     measures[index].insert(0, ET.Element("print", {"new-system": "yes"}))
 
 
+def octave_direction(kind: str, size: str, number: str, staff: str) -> ET.Element:
+    direction = ET.Element("direction", placement="below" if kind == "up" else "above")
+    ET.SubElement(ET.SubElement(direction, "direction-type"), "octave-shift", type=kind, size=size, number=number)
+    ET.SubElement(direction, "staff").text = staff
+    return direction
+
+
+def place_octave_lines(root: ET.Element) -> None:
+    """Put each octave line where Verovio will read it right, and draw the notes under it in place.
+
+    Verovio starts a line at the next note it reads after the line's start, whichever staff that's
+    on, and ends it at the last note read before its stop. The notes of the line's staff it reads
+    in between are drawn an octave away. That goes by the order of the file, which is voice by
+    voice and staff by staff, not by time, so a line on a piano's lower staff, or one over two
+    voices, would be drawn on the wrong staff and move the wrong notes. Each line's ends are moved
+    beside the first and last notes it covers on its own staff, and any note Verovio would still
+    draw wrongly is given the octave that makes it come out where it belongs. This is only for the
+    drawing: the score keeps its notes' true pitches and its lines where they are.
+    """
+    for part in root.findall("part"):
+        lines = octave_lines(part)
+        if not lines and next(part.iter("octave-shift"), None) is None:
+            continue
+        for measure in part.findall("measure"):
+            for direction in measure.findall("direction"):
+                for holder in direction.findall("direction-type"):
+                    if holder.find("octave-shift") is not None:
+                        direction.remove(holder)
+                if direction.find("direction-type") is None:
+                    measure.remove(direction)
+        under: dict[ET.Element, int] = {}  # How many octaves each note is drawn below its pitch.
+        covered: dict[int, list] = {number: [] for number in range(len(lines))}
+        for context in contexts(part):
+            children = list(context.measure)
+            for (staff, _), voice in read_measure(context.measure, context.divisions).lines.items():
+                for event in voice:
+                    for number, line in enumerate(lines):
+                        if line.covers(staff, (context.index, event.onset)):
+                            covered[number].append(((context.index, event.onset, children.index(event.notes[0])), context.measure, event))
+                            for note in [*event.grace, *event.notes]:
+                                under[note] = line.octaves
+        for number, line in enumerate(lines):
+            if not covered[number]:
+                continue
+            kind, size = next(key for key, octaves in OCTAVE_SHIFTS.items() if octaves == line.octaves)
+            _, measure, first = min(covered[number], key=lambda item: item[0])
+            opening = [*first.grace, *first.notes][0]
+            measure.insert(list(measure).index(opening), octave_direction(kind, size, line.number, line.staff))
+            _, measure, last = max(covered[number], key=lambda item: item[0])
+            measure.insert(list(measure).index(last.notes[-1]) + 1, octave_direction("stop", size, line.number, line.staff))
+        drawn: dict[str, int] = {}  # What Verovio is drawing each staff's notes as, where it's read to.
+        for measure in part.findall("measure"):
+            for child in measure:
+                if child.tag == "direction":
+                    for shift in child.iter("octave-shift"):
+                        drawn[child.findtext("staff") or "1"] = OCTAVE_SHIFTS.get((shift.get("type"), shift.get("size", "8")), 0)
+                elif child.tag == "note" and child.find("pitch/octave") is not None:
+                    wrong = drawn.get(child.findtext("staff") or "1", 0) - under.get(child, 0)
+                    if wrong:
+                        octave = child.find("pitch/octave")
+                        octave.text = str(int(octave.text) + wrong)
+
+
 def prepare_for_drawing(musicxml: str) -> str:
     root = ET.fromstring(musicxml)
     add_beams(root)
     set_line_breaks(root)
+    place_octave_lines(root)
     return drop_spelled_degrees(ET.tostring(root, encoding="unicode"))
 
 
@@ -294,6 +359,7 @@ def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970)
             "breaks": "smart" if 'new-system="yes"' in prepared else "auto",
             "breaksSmartSb": 0.0,  # A break someone asked for always counts, however short the line.
             "lyricWordSpace": LYRIC_WORD_SPACE,
+            "octaveAlternativeSymbols": True,  # "8va" and "8vb", as MuseScore writes them, not a bare 8.
         })
         if not toolkit.loadData(prepared):
             raise UnreadableScore("Could not read this MusicXML")

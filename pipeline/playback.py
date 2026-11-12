@@ -2,7 +2,8 @@
 
 Hearing a score is the fastest way to catch a wrong note or chord, so chord symbols are played
 too. Repeats, endings and D.C. and D.S. jumps are followed, and the marks that shape a performance
-are heard: dynamics, hairpins, articulations, ornaments, fermatas, tempo changes and swing.
+are heard: dynamics, hairpins, articulations, ornaments, fermatas, tempo changes, swing and the
+sustain pedal. Notes under an 8va line need nothing done, as MusicXML gives them the pitch they sound.
 """
 
 import re
@@ -459,6 +460,45 @@ def play_grace(event: Event, begins: float, length: float, shift: int, loudness:
     return each * len(sounding)
 
 
+def pedal_spans(bars: list[tuple[Context, Timeline, float]], end: float) -> list[tuple[float, float]]:
+    """Return when a part's sustain pedal is held down. A change lets it up and puts it down again."""
+    moments = []
+    for _, timeline, start in bars:
+        for mark in timeline.marks:
+            if mark.element.tag == "direction":
+                moments.extend((start + float(mark.onset), pedal.get("type")) for pedal in mark.element.iter("pedal"))
+    spans = []
+    down = None
+    for at, kind in sorted(moments, key=lambda item: item[0]):
+        if kind in ("stop", "change", "discontinue") and down is not None:
+            spans.append((down, at))
+            down = None
+        if kind in ("start", "change", "resume"):
+            down = at if down is None else down
+    if down is not None:
+        spans.append((down, end))
+    return spans
+
+
+def sustained(notes: list[dict], spans: list[tuple[float, float]]) -> list[dict]:
+    """Hold each note let go while the pedal is down until the pedal comes up, or the key is played again."""
+    if not spans:
+        return notes
+    starts: dict[int, list[float]] = {}
+    for note in notes:
+        starts.setdefault(note["midi"], []).append(note["start"])
+    for midi in starts:
+        starts[midi].sort()
+    for note in notes:
+        let_go = note["start"] + note["length"]
+        held = next((up for down, up in spans if down <= let_go < up), None)
+        if held is None:
+            continue
+        again = starts[note["midi"]][bisect_right(starts[note["midi"]], note["start"]):]
+        note["length"] = min(held, again[0] if again else held) - note["start"]
+    return notes
+
+
 def programs_of(root: ET.Element) -> list[int]:
     """Return each part's General MIDI sound, counted from 1, so a file can say what plays it."""
     found = []
@@ -481,7 +521,8 @@ def playback(root: ET.Element) -> dict:
     for part_number, part in enumerate(parts):
         bars, end = laid_out(part, order)
         total = max(total, end)
-        notes.extend(item | {"part": part_number} for item in play_part(bars, transposed_bars(part), swings, holds))
+        played = sustained(play_part(bars, transposed_bars(part), swings, holds), pedal_spans(bars, end))
+        notes.extend(item | {"part": part_number} for item in played)
         if part_number == 0:
             for _, timeline, start in bars:
                 for mark in sorted(timeline.marks, key=lambda mark: mark.onset):

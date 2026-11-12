@@ -753,6 +753,8 @@ MARK_ACTIONS: dict[str, Callable[[ET.Element, MarkEdit], dict | None]] = {
     "toggle": lambda root, body: marks.toggle_mark(root, body.notes, body.name),
     "slur": lambda root, body: marks.toggle_slur(root, *first_and_last(body)),
     "hairpin": lambda root, body: marks.toggle_hairpin(root, *first_and_last(body), body.name),
+    "ottava": lambda root, body: marks.toggle_ottava(root, *first_and_last(body), body.name),
+    "pedal": lambda root, body: marks.toggle_pedal(root, *first_and_last(body), body.name),
     "dynamic": lambda root, body: marks.set_dynamic(root, first_and_last(body)[0], body.name),
     "tempo": lambda root, body: marks.set_tempo(root, first_and_last(body)[0], body.text, body.unit, body.dots),
     "text": lambda root, body: marks.add_text(root, first_and_last(body)[0], body.text, body.name or "staff"),

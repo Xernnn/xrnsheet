@@ -208,6 +208,14 @@ function addItems() {
       { label: "Slur", keys: "S", run: () => markAction("slur") },
       { label: "Crescendo", keys: "<", run: () => markAction("hairpin", { name: "crescendo" }) },
       { label: "Diminuendo", keys: ">", run: () => markAction("hairpin", { name: "diminuendo" }) },
+      null,
+      { label: "Ottava 8va alta", run: () => markAction("ottava", { name: "8va" }) },
+      { label: "Ottava 8va bassa", run: () => markAction("ottava", { name: "8vb" }) },
+      { label: "Ottava 15ma alta", run: () => markAction("ottava", { name: "15ma" }) },
+      { label: "Ottava 15ma bassa", run: () => markAction("ottava", { name: "15mb" }) },
+      null,
+      { label: "Pedal", run: () => markAction("pedal", { name: "pedstar" }) },
+      { label: "Pedal (straight hooks)", run: () => markAction("pedal", { name: "line" }) },
     ] },
   ];
 }

@@ -20,9 +20,9 @@ from pipeline.rhythm import (
     line_end,
     make_bar_rest,
     read_measure,
+    repair_lines,
     repair_slurs,
     repair_ties,
-    repair_wedges,
     respell,
     rests,
     units,
@@ -300,7 +300,7 @@ def delete_measure(root: ET.Element, index: int) -> None:
         renumber(part)
         repair_ties(part, max(index - 1, 0))
         repair_slurs(part)
-        repair_wedges(part)
+        repair_lines(part)
 
 
 def key_offset(steps: int, semitones: int) -> int:

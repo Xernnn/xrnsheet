@@ -772,22 +772,77 @@ def remove_wedge_end(measure: ET.Element, direction: ET.Element, wedge: ET.Eleme
         measure.remove(direction)
 
 
-def repair_wedges(part: ET.Element) -> None:
-    """Remove hairpins that have lost their start or their end."""
-    waiting: dict[str, tuple[ET.Element, ET.Element, ET.Element]] = {}
-    unmatched = []
-    for measure in part.findall("measure"):
-        for direction in measure.findall("direction"):
-            for wedge in direction.iter("wedge"):
-                number = wedge.get("number", "1")
-                if wedge.get("type") == "stop":
-                    if number in waiting:
-                        del waiting[number]
-                    else:
-                        unmatched.append((measure, direction, wedge))
-                elif wedge.get("type") in ("crescendo", "diminuendo"):
-                    if number in waiting:
-                        unmatched.append(waiting[number])
-                    waiting[number] = (measure, direction, wedge)
-    for measure, direction, wedge in [*unmatched, *waiting.values()]:
-        remove_wedge_end(measure, direction, wedge)
+# Lines that are directions with two ends, and the types that start each. A pedal can also change
+# partway, which is neither end.
+LINE_STARTS = {"wedge": {"crescendo", "diminuendo"}, "octave-shift": {"up", "down"}, "pedal": {"start", "sostenuto"}}
+# An octave line moves the notes under it this many octaves from where they're drawn: 8va is +1.
+OCTAVE_SHIFTS = {("down", "8"): 1, ("down", "15"): 2, ("up", "8"): -1, ("up", "15"): -2}
+
+
+def repair_lines(part: ET.Element) -> None:
+    """Remove hairpins, octave lines and pedals that have lost their start or their end."""
+    for tag, starts in LINE_STARTS.items():
+        waiting: dict[str, tuple[ET.Element, ET.Element, ET.Element]] = {}
+        unmatched = []
+        for measure in part.findall("measure"):
+            for direction in measure.findall("direction"):
+                for line in direction.iter(tag):
+                    number = line.get("number", "1")
+                    if line.get("type") == "stop":
+                        if number in waiting:
+                            del waiting[number]
+                        else:
+                            unmatched.append((measure, direction, line))
+                    elif line.get("type") in starts:
+                        if number in waiting:
+                            unmatched.append(waiting[number])
+                        waiting[number] = (measure, direction, line)
+        for measure, direction, line in [*unmatched, *waiting.values()]:
+            remove_wedge_end(measure, direction, line)
+
+
+@dataclass(frozen=True)
+class OctaveLine:
+    """An 8va, 8vb, 15ma or 15mb line over one staff, from one moment until another.
+
+    Moments are a bar's index and a place in it. The notes under the line keep their true pitch,
+    as MusicXML has it, and are drawn this many octaves lower than it, or higher if it's below 0.
+    """
+
+    staff: str
+    start: tuple[int, Fraction]
+    stop: tuple[int, Fraction]
+    octaves: int
+    number: str
+
+    def covers(self, staff: str, at: tuple[int, Fraction]) -> bool:
+        return staff == self.staff and self.start <= at < self.stop
+
+
+def octave_lines(part: ET.Element) -> list[OctaveLine]:
+    """Read a part's octave lines. One left open runs to the end of the part."""
+    found: list[OctaveLine] = []
+    opened: dict[tuple[str, str], tuple[tuple[int, Fraction], int]] = {}
+    end = (len(part.findall("measure")), Fraction(0))
+    for context in contexts(part):
+        for mark in sorted(read_measure(context.measure, context.divisions).marks, key=lambda item: item.onset):
+            if mark.element.tag != "direction":
+                continue
+            staff = mark.element.findtext("staff") or "1"
+            for shift in mark.element.iter("octave-shift"):
+                where = (staff, shift.get("number", "1"))
+                at = (context.index, mark.onset)
+                if shift.get("type") == "stop":
+                    if where in opened:
+                        begun, octaves = opened.pop(where)
+                        found.append(OctaveLine(staff, begun, at, octaves, where[1]))
+                elif (shift.get("type"), shift.get("size", "8")) in OCTAVE_SHIFTS:
+                    opened[where] = ((context.index, mark.onset), OCTAVE_SHIFTS[shift.get("type"), shift.get("size", "8")])
+    found.extend(OctaveLine(where[0], begun, end, octaves, where[1]) for where, (begun, octaves) in opened.items())
+    return sorted(found, key=lambda line: line.start)
+
+
+def octave_shift_at(part: ET.Element, index: int, onset: Fraction, staff: str) -> int:
+    """Return how many octaves above where it's drawn a note at this moment sounds, under an 8va or the like."""
+    return next((line.octaves for line in octave_lines(part) if line.covers(staff, (index, onset))), 0)
+
