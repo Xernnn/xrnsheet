@@ -206,6 +206,7 @@ function buildPalettes() {
       ottava("8va", "8va alta", "E511", true), ottava("8vb", "8va bassa", "E51C", false), ottava("15ma", "15ma alta", "E515", true), ottava("15mb", "15ma bassa", "E51D", false),
       pedal("pedstar", "Pedal (with ped and asterisk)"), pedal("line", "Pedal (straight hooks)"),
     ] },
+    ...techniquePalettes(),
   ];
 }
 

@@ -649,3 +649,77 @@ def test_a_guitar_with_tablature_opens_from_musicxml_with_its_frets(client):
     second = [note.get("id") for note in again.iter("note") if note.findtext("staff") is None and note.find("pitch") is not None][1]
     assert string_and_fret(again, second) == (2, 10)
     assert client.get(url).json()["fretted"][0]["tab"] is True
+
+
+def typed(root, *steps):
+    """Type letters from the start of the standard staff, as the keys A to G do, and return each pitch written."""
+    cursor = next(note for note in root.iter("note") if (note.findtext("staff") or "1") == "1").get("id")
+    found = []
+    for step in steps:
+        done = edit.write_note(root, cursor, "quarter", 0, step)
+        synced(root)
+        note = next(note for note in root.iter("note") if note.get("id") == done["written"])
+        found.append(f"{note.findtext('pitch/step')}{note.findtext('pitch/octave')}")
+        cursor = done["cursor"]
+    return found
+
+
+def test_a_letter_typed_into_a_guitar_starts_at_the_middle_of_its_staff():
+    # A guitar's music sounds an octave below its treble clef, whose middle line is B3 here.
+    assert typed(guitar(), "C") == ["C4"]
+    assert typed(guitar(name="guitar"), "B") == ["B3"]
+
+
+def test_letters_typed_into_a_guitar_stay_where_it_plays():
+    # Going up by the nearest note each time would climb past the frets; a guitar plays E2 to E5 most.
+    assert typed(guitar(measures=4), "E", "G", "C", "E", "G", "C", "E", "G", "C") == ["E4", "G4", "C5", "E5", "G4", "C5", "E5", "G4", "C5"]
+    assert typed(guitar(measures=2), "E", "C", "A", "F", "D", "B", "G") == ["E4", "C4", "A3", "F3", "D3", "B2", "G2"]
+
+
+def test_a_letter_typed_into_a_bass_guitar_lands_on_its_staff():
+    assert typed(guitar(name="bass-guitar-tab"), "E", "A") == ["E3", "A3"]
+
+
+def test_a_note_written_from_the_fretboard_keeps_the_string_it_was_played_on(client):
+    url = new_score(client)
+    cursor = first_note(client.get(f"{url}/score.musicxml").text.encode())
+    done = client.post(f"{url}/notes/{cursor}", json={"action": "write", "type": "quarter", "midi": 64, "string": 2}).json()
+    root = ET.fromstring(client.get(f"{url}/score.musicxml").text.encode())
+    assert string_and_fret(root, done["written"]) == (2, 5)
+    assert done["notes"][done["written"]][5] == {"string": 2, "fret": 5}
+    stacked = client.post(f"{url}/notes/{done['written']}", json={"action": "stack", "midi": 57, "string": 3}).json()
+    assert string_and_fret(ET.fromstring(client.get(f"{url}/score.musicxml").text.encode()), stacked["written"]) == (3, 2)
+    busy = client.post(f"{url}/notes/{done['written']}", json={"action": "stack", "midi": 59, "string": 2}).json()
+    assert "String 2 is already playing" in busy["message"], "the note is still written, on a string of its own"
+    client.post(f"{url}/undo")
+    client.post(f"{url}/undo")
+    client.post(f"{url}/undo")
+    assert client.get(url).json()["notes"][done["written"]][:3] == ["", 0, 0], "a note and its string are one undo"
+
+
+def test_a_violin_note_written_on_a_string_gets_its_number(client):
+    url = new_score(client, clef="violin")
+    cursor = first_note(client.get(f"{url}/score.musicxml").text.encode())
+    done = client.post(f"{url}/notes/{cursor}", json={"action": "write", "type": "quarter", "midi": 71, "string": 3}).json()
+    note = next(note for note in ET.fromstring(client.get(f"{url}/score.musicxml").text.encode()).iter("note") if note.get("id") == done["written"])
+    assert note.findtext("notations/technical/string") == "3"
+    assert done["notes"][done["written"]][5] == {"mark": 3}
+
+
+def test_the_page_is_told_how_each_note_is_played(client):
+    url = new_score(client, clef="violin", measures=2)
+    written, _ = write_through(client, url, 67, 71, 74)
+    client.post(f"{url}/marks", json={"action": "fingering", "notes": written[:2], "text": "13"})
+    client.post(f"{url}/marks", json={"action": "position", "notes": [written[1]], "number": 3})
+    data = client.post(f"{url}/marks", json={"action": "sul", "notes": [written[1], written[2]], "text": "G"}).json()
+    assert data["notes"][written[0]][5] == {"finger": "1"}
+    assert data["notes"][written[1]][5] == {"finger": "3", "position": 3, "sul": "G"}
+    assert data["notes"][written[2]][5] == {"position": 3, "sul": "G"}
+    guitar_url = new_score(client)
+    notes, _ = write_through(client, guitar_url, 64, 67)
+    client.post(f"{guitar_url}/marks", json={"action": "pluck", "notes": notes[:1], "text": "i"})
+    client.post(f"{guitar_url}/marks", json={"action": "bend", "notes": notes[1:], "name": "full"})
+    shown = client.post(f"{guitar_url}/marks", json={"action": "harmonic", "notes": notes[:1], "name": "natural"}).json()
+    assert shown["notes"][notes[0]][5] == {"string": 1, "fret": 0, "pluck": "i", "harmonic": "natural"}
+    assert shown["notes"][notes[1]][5] == {"string": 1, "fret": 3, "bend": "full"}
+    assert len(shown["notes"][f"{notes[0]}{TAB_COPY}"]) == 5, "a fret number's copy says nothing of its own"

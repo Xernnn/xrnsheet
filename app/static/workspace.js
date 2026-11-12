@@ -226,6 +226,7 @@ const CELL_KEYS = {
   "hairpin:crescendo": "<", "hairpin:diminuendo": ">", "line:crescendo": "<", "line:diminuendo": ">", grace: "/",
   "text:staff": "Ctrl+T", "text:expression": "Ctrl+E", "text:rehearsal": "Ctrl+M", "layout:break": "Enter",
   "accidental:sharp": "+", "accidental:flat": "-", "accidental:natural": "=",
+  "finger:type": "Ctrl+F",
 };
 
 function cellCommands() {
@@ -268,7 +269,7 @@ function allCommands() {
     { label: "Rewind", where: "Playback", keys: "", enabled: Boolean(score), run: rewind },
     { label: "Metronome", where: "Playback", keys: "", enabled: Boolean(score), checked: playState.metronome, run: toggleMetronome },
   ];
-  return [...modes, ...flatten(menuList(), [], []), ...inspectorItems, ...parts, ...noteCommands(), ...cellCommands(), ...practiceCommands(), ...scores];
+  return [...modes, ...flatten(menuList(), [], []), ...inspectorItems, ...parts, ...noteCommands(), ...cellCommands(), ...techniqueCommands(), ...practiceCommands(), ...scores];
 }
 
 // Every word typed must start a word of the command, or be inside it; a command whose name starts

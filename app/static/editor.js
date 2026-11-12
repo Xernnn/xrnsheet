@@ -19,7 +19,12 @@ const CHORD_WINDOW_MS = 40; // Keys of a MIDI keyboard pressed this close togeth
 const DRAG_START_PX = 4;
 const CURVE_REACH_PX = 6; // A slur is hair-thin, so a click this close to it counts.
 const CURVE_SAMPLE_PX = 4;
-const MARK_NAMES = { dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin", ottava: "Ottava", pedal: "Pedal" };
+const MARK_NAMES = {
+  dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin", ottava: "Ottava", pedal: "Pedal",
+  textline: "Line", fingering: "Fingering", pluck: "Right-hand finger", string: "String number", bend: "Bend", hammer: "Hammer-on", pull: "Pull-off",
+};
+// Words a mark is known by, where its kind alone doesn't say: a line's, or a position's.
+const MARK_WORDS = [[/^P\.M\.$/, "Palm mute"], [/^let ring$/, "Let ring"], [/^sul (pont\.|tasto)$/, "Sul ponticello or tasto"], [/^sul /, "String to play on"], [/ pos\.$/, "Position"], [/^(pizz\.|arco)$/, "Pizzicato or arco"], [/^[RL]\.H\.$/, "Hand"]];
 const EXPRESSIONS = { staff: "Text, e.g. solo", expression: "Expression, e.g. dolce" };
 const editor = { on: false, type: "quarter", dots: 0, voice: 1, cursor: null, last: null, trail: [], future: [] };
 let range = null; // A selected stretch: { first, last, ids }.
@@ -115,7 +120,7 @@ function updateTools() {
   $("caret").dataset.voice = editor.voice;
   const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
   const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
-  const chosen = mark ? `${MARK_NAMES[mark.kind] ?? "Mark"}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : selection;
+  const chosen = mark ? `${markName(mark)}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : selection;
   const practising = currentMode() === "practice" ? "Space plays from the selected note. A and B set the loop's ends there, and Hear and Wait for choose a part or a hand." : null;
   $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : practising ?? chosen);
   hint = "";
@@ -199,9 +204,10 @@ function drawRange() {
   range.ids.forEach(id => markSelected(document.getElementById(id)));
 }
 
+// Measures that don't add up, and notes no string can play, each a chip that goes there.
 function drawBarChecks() {
   const checks = score.barChecks ?? [];
-  $("barChecks").hidden = checks.length === 0;
+  $("barChecks").hidden = checks.length === 0 && !(score.fretProblems ?? []).length;
   const chips = checks.slice(0, 40).map(check => {
     const chip = document.createElement("button");
     chip.className = "chip";
@@ -212,7 +218,7 @@ function drawBarChecks() {
     }));
     return chip;
   });
-  $("barChecks").replaceChildren(...chips);
+  $("barChecks").replaceChildren(...chips, ...fretChips());
 }
 
 function drawTitle() {
@@ -267,10 +273,13 @@ function writeAt(step) {
   });
 }
 
+// The staff and place a click lands on, while entering notes. A tablature staff's lines are strings,
+// not pitches, so a click there finds the staff above it instead.
 function placeUnder(x, y) {
   let found = null;
   let smallest = Infinity;
   for (const staff of document.querySelectorAll("#pages g.staff")) {
+    if (isTabStaff(staffNumber(staff))) continue;
     const lines = staffLines(staff);
     if (x < lines.left || x > lines.right) continue;
     const gap = Math.max(lines.top - y, y - lines.bottom, 0);
@@ -399,9 +408,15 @@ function deleteBars() {
   });
 }
 
-// A mark with words can be retyped. A jump's words are fixed, and a sign, slur or hairpin has none.
+// A mark with words can be retyped. A jump's words are fixed, a hammer-on's H and a pull-off's P
+// come with them, and a sign, slur or hairpin has none.
 function markEditable(mark) {
-  return Boolean(mark?.text) && mark.kind !== "jump" && mark.kind !== "repeat-sign";
+  return Boolean(mark?.text) && !["jump", "repeat-sign", "hammer", "pull"].includes(mark.kind);
+}
+
+function markName(mark) {
+  if (mark.kind === "text" || mark.kind === "textline") return MARK_WORDS.find(([words]) => words.test(mark.text ?? ""))?.[1] ?? MARK_NAMES[mark.kind];
+  return MARK_NAMES[mark.kind] ?? "Mark";
 }
 
 function selectMark(element) {
@@ -1026,6 +1041,7 @@ function handleControlKey(event) {
     v: pasteHere,
     a: selectEverything,
     l: startLyrics,
+    f: askForFingers,
     3: () => toggleTuplet(3),
     5: () => toggleTuplet(5),
     6: () => toggleTuplet(6),
@@ -1147,6 +1163,7 @@ setUpDock();
 setUpInstruments();
 setUpInspector();
 setUpPractice();
+setUpTechnique();
 setUpToolbar();
 setUpWorkspace();
 updateTools();

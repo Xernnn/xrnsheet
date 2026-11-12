@@ -6,8 +6,8 @@ const ALTERATIONS = { "-2": "𝄫", "-1": "♭", 0: "", 1: "♯", 2: "𝄪" };
 const ACCIDENTAL_ACTIONS = [["doubleFlat", "Double flat", "E264"], ["flat", "Flat (-)", "E260"], ["natural", "Natural (=)", "E261"], ["sharp", "Sharp (+)", "E262"], ["doubleSharp", "Double sharp", "E263"]];
 const GROUPS_KEY = "inspectorGroups";
 const inspector = { pane: "selection", chosen: null, groups: new Set(readSetting(GROUPS_KEY, "articulations,dynamics").split(",").filter(Boolean)) };
-// The marks each kind of instrument has a place for, beside the note. Fingering, hands, strings and
-// bowing come here as the score learns to keep them.
+// The marks each kind of instrument has a place for, beside the note. Below them come the player's
+// own rows: a guitar's string and fret, techniques, fingers and strings (technique.js).
 const INSTRUMENT_CELLS = {
   piano: ["line:pedal-pedstar", "line:pedal-line", "line:8va", "line:8vb", "mark:arpeggio"],
   guitar: ["mark:arpeggio", "line:slur"],
@@ -174,6 +174,7 @@ function drawParts() {
     return row;
   }));
   $("partRemove").disabled = chosenPart === null || names.length < 2;
+  drawPartSettings();
 }
 
 function drawInstrumentMarks(element) {
@@ -185,7 +186,7 @@ function drawInstrumentMarks(element) {
   if (holder.hidden) return;
   holder.dataset.kind = kind;
   $("propInstrumentName").innerHTML = `${icon(KINDS[kind].icon)}<span></span>`;
-  $("propInstrumentName").lastChild.textContent = `For the ${KINDS[kind].player}`;
+  $("propInstrumentName").lastChild.textContent = `For the ${playerOf(part)}`;
   if ($("instrumentCells").dataset.kind !== kind) {
     $("instrumentCells").dataset.kind = kind;
     $("instrumentCells").replaceChildren(...keys.map(findCell).filter(Boolean).map(cell => {
@@ -196,6 +197,8 @@ function drawInstrumentMarks(element) {
       return button;
     }));
   }
+  drawTechnique(element, kind, part);
+  drawSwitches();
 }
 
 function drawInspector() {
@@ -209,11 +212,12 @@ function drawInspector() {
   $("propMark").hidden = pane !== "selection" || !mark;
   $("propNote").hidden = $("propMeasure").hidden = pane !== "selection" || !element;
   if (mark && pane === "selection") {
-    $("propMarkKind").textContent = MARK_NAMES[mark.kind] ?? "Mark";
+    $("propMarkKind").textContent = markName(mark);
     $("propMarkText").textContent = mark.text ? `“${mark.text}”` : "";
     $("markEdit").hidden = !markEditable(mark);
   }
   if (element && pane === "selection") drawSelection(element);
+  drawSwitches();
   if (!editor.on && element) {
     const part = partOfStaff(staffNumber(element));
     if (part !== null && part !== chosenPart) choosePart(part, false);

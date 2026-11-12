@@ -280,7 +280,7 @@ function showSounding(data, note, at, until) {
   element?.classList.add("playing");
   followNote(element);
   const timers = player?.timers ?? practice.follower?.timers;
-  if (timers && instrumentShown() && (note.part ?? 0) === activePart()) timers.push(soundKey(note.midi, at(Math.min(note.start + note.length, until)) - at(note.start)));
+  if (timers && instrumentShown() && (note.part ?? 0) === activePart()) timers.push(soundKey(note.midi, at(Math.min(note.start + note.length, until)) - at(note.start), note.id));
 }
 
 function playCycle(from, until, zero) {
@@ -471,6 +471,8 @@ function refreshPosition() {
       drawPosition(playState.place);
       refreshKinds();
       lightKeys();
+      // A transposing instrument's sound is only known now, and the inspector's strings follow it.
+      if (actionTarget()) drawInspector();
     }
   }, 400);
 }

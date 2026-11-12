@@ -140,7 +140,7 @@ function stepsBetween(data, yours, from, until) {
     if (!yours(note) || note.start < from - EARLY || note.start >= until - EARLY) continue;
     const pitch = keyOfSound(data, note.midi, note.part ?? 0);
     const last = steps.at(-1);
-    if (last && Math.abs(last.start - note.start) < EARLY * 1000) { last.pitches.add(pitch); last.sounding.add(note.midi); last.ids.push(note.id); } else steps.push({ start: note.start, pitches: new Set([pitch]), sounding: new Set([note.midi]), ids: [note.id] });
+    if (last && Math.abs(last.start - note.start) < EARLY * 1000) { last.pitches.add(pitch); last.sounding.add(note.midi); last.ids.push(note.id); last.notes.push({ id: note.id, midi: note.midi }); } else steps.push({ start: note.start, pitches: new Set([pitch]), sounding: new Set([note.midi]), ids: [note.id], notes: [{ id: note.id, midi: note.midi }] });
   }
   return steps;
 }
@@ -150,6 +150,7 @@ function waitAtStep() {
   const follower = practice.follower;
   const step = follower.steps[follower.index];
   keyboard.expected = new Set(step?.sounding ?? []);
+  keyboard.expectedNotes = step?.notes ?? [];
   lightKeys();
   const ends = step ? step.start : follower.until;
   flow(follower.place, ends, () => {
@@ -244,6 +245,7 @@ function stopFollowing(finished = false) {
   follower.audio.close();
   document.querySelectorAll("#pages .awaited").forEach(element => element.classList.remove("awaited"));
   keyboard.expected = new Set();
+  keyboard.expectedNotes = [];
   clearPlaying();
   quietKeys();
   showWait("");

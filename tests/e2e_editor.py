@@ -2744,6 +2744,189 @@ def test_new_scores_for_players(page, base: str, shots: Path | None, created: li
     check("and a guitar with tablature can be added to a score", both["parts"] == ["Bass Guitar", "Guitar"] and both["fretted"][1]["tab"] is True and both["partStaves"] == [2, 2], (both["parts"], both["partStaves"]))
 
 
+def own_notes(root: ET.Element, part: int = 0, staff: str = "1") -> list[ET.Element]:
+    """A part's notes with a pitch on one of its staves, in order: the standard staff of a guitar, not its tablature."""
+    return [note for note in root.findall("part")[part].iter("note") if note.find("pitch") is not None and (note.findtext("staff") or "1") == staff]
+
+
+def string_and_fret(root: ET.Element, note_id: str) -> tuple:
+    copy = next((note for note in root.iter("note") if note.get("id") == f"{note_id}-tab"), None)
+    return (copy.findtext("notations/technical/string"), copy.findtext("notations/technical/fret")) if copy is not None else None
+
+
+def spots(page, holder: str, kind: str) -> list[list[int]]:
+    return page.evaluate("([holder, kind]) => [...document.querySelectorAll(`#${holder} .spot.${kind}`)].map(spot => [Number(spot.dataset.string), Number(spot.dataset.stop)])", [holder, kind])
+
+
+def slot_cell(page, cell: str):
+    return page.locator(f'#instrumentSlots [data-cell="{cell}"]')
+
+
+def test_guitar_notation(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """A guitarist's score: letters in the guitar's range, strings from the fretboard and the inspector, techniques, tuning and capo."""
+    score_id = open_blank(page, base, created, bars=3, staff="guitar-tab")
+    page.keyboard.press("5")
+    page.keyboard.type("egc", delay=0)
+    settle(page)
+    played = [f"{note.findtext('pitch/step')}{note.findtext('pitch/octave')}" for note in own_notes(saved_score(base, score_id))]
+    check("letters typed for a guitar land where it plays, from the middle of its staff", played == ["E4", "G4", "C5"], played)
+    show_instrument(page)
+    page.locator('#fretboard .spot[data-string="4"][data-stop="7"]').click()
+    settle(page)
+    page.keyboard.down("Shift")
+    page.locator('#fretboard .spot[data-string="2"][data-stop="1"]').click()
+    page.keyboard.up("Shift")
+    settle(page)
+    root = saved_score(base, score_id)
+    notes = own_notes(root)
+    check("a fret clicked while writing writes its note on that string", [string_and_fret(root, note.get("id")) for note in notes[3:5]] == [("4", "7"), ("2", "1")], [string_and_fret(root, note.get("id")) for note in notes[3:5]])
+    page.keyboard.press("Escape")
+    settle(page)
+    page.wait_for_function("() => Object.keys(playState.data?.events ?? {}).length >= 5")
+    a3 = notes[3].get("id")
+    click_on(page, page.locator(f"[id='{a3}']"))
+    settle(page)
+    check("the fretboard shows a note where the tablature has it", spots(page, "fretboard", "chosen") == [[4, 7]], spots(page, "fretboard", "chosen"))
+    check("and the inspector says its string and fret", page.inner_text("#stringInfo") == "String 4, fret 7" and page.get_attribute('#stringButtons [data-string="4"]', "aria-pressed") == "true", page.inner_text("#stringInfo"))
+    page.click('#stringButtons [data-string="3"]')
+    settle(page)
+    check("another string can be chosen for it", string_and_fret(saved_score(base, score_id), a3) == ("3", "2") and spots(page, "fretboard", "chosen") == [[3, 2]])
+    page.click('#stringButtons [data-string="1"]')
+    settle(page)
+    check("a string that can't play it says why", "String 1 can't play A3" in page.inner_text("#message") and page.locator('#stringButtons [data-string="1"].cannot').count() == 1, page.inner_text("#message"))
+    press(page, "Control+z")
+    check("and undo puts it back on its first string", string_and_fret(saved_score(base, score_id), a3) == ("4", "7"))
+    if shots:
+        page.screenshot(path=str(shots / "guitar-strings.png"))
+
+    # Every technique the inspector offers beside a guitar's note: it's written, drawn, and undone.
+    techniques = [
+        ("join:hammerOn", 0, 1, "notations/technical/hammer-on", "#pages g.xrn-joined"),
+        ("join:pullOff", 1, 2, "notations/technical/pull-off", "#pages g.xrn-joined"),
+        ("join:slide", 0, 1, "notations/slide", "#pages g.slide, #pages g.gliss"),
+        ("bend:full", 1, None, "notations/technical/bend", "#pages g.xrn-bend"),
+        ("vibrato", 2, None, "notations/ornaments/wavy-line", "#pages g.trill, #pages g.vibrato, #pages g.ornam"),
+        ("line:palmMute", 0, 2, None, "#pages g.dir"),
+        ("line:letRing", 0, 2, None, "#pages g.dir"),
+        ("harmonic:natural", 0, None, "notations/technical/harmonic", "#pages g.harm-circle, #pages g.artic, #pages g.fing"),
+        ("harmonic:artificial", 0, None, "notations/technical/harmonic/artificial", "#pages text"),
+        ("deadNote", 1, None, "notehead", "#pages g.note"),
+        ("pluck:i", 2, None, "notations/technical/pluck", "#pages g.fing[data-mark]"),
+        ("finger:2", 2, None, "notations/technical/fingering", "#pages g.fing[data-mark]"),
+        ("string:3", 1, None, "notations/technical/string", "#pages g.fing[data-mark]"),
+    ]
+    for cell, first, last, saved_at, drawn in techniques:
+        select_notes(page, first, last)
+        before = page.locator(drawn).count()
+        words_before = page.inner_text("#pages")
+        slot_cell(page, cell).click()
+        settle(page)
+        root = saved_score(base, score_id)
+        if saved_at:
+            written = len([note for note in own_notes(root) if note.find(saved_at) is not None and (saved_at != "notehead" or note.findtext("notehead") == "x")])
+        else:
+            written = sum(1 for words in root.iter("words") if words.text in ("P.M.", "let ring"))
+        shown = page.locator(drawn).count() > before or page.inner_text("#pages") != words_before
+        press(page, "Control+z")
+        root = saved_score(base, score_id)
+        gone = (len([note for note in own_notes(root) if note.find(saved_at) is not None and (saved_at != "notehead" or note.findtext("notehead") == "x")]) if saved_at else sum(1 for words in root.iter("words") if words.text in ("P.M.", "let ring"))) == 0
+        check(f"{cell} beside a guitar's note is written, shown and undone", written >= 1 and shown and gone, (written, shown, gone))
+    select_notes(page, 1)
+    slot_cell(page, "bend:half").click()
+    settle(page)
+    check("a bend's button is pressed while the note has it", slot_cell(page, "bend:half").get_attribute("aria-pressed") == "true" and slot_cell(page, "bend:full").get_attribute("aria-pressed") == "false")
+    page.keyboard.press("Escape")
+    settle(page)
+    bend = page.locator("#pages g.xrn-bend").first
+    bend.evaluate("element => element.scrollIntoView({ block: 'center' })")
+    box = bend.bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + 2)
+    settle(page)
+    check("a bend on the page can be selected", page.inner_text("#propMarkKind") == "Bend" and page.is_visible("#markEdit"), page.inner_text("#toolLabel"))
+    page.keyboard.press("F2")
+    page.fill("#chordInput", "1½")
+    page.keyboard.press("Enter")
+    settle(page)
+    check("and retyped", [bend.findtext("bend-alter") for bend in saved_score(base, score_id).iter("bend")] == ["3"])
+    page.locator("#pages g.xrn-bend").first.evaluate("element => element.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: element.getBoundingClientRect().x + 3, clientY: element.getBoundingClientRect().y + 3 }))")
+    settle(page)
+    page.keyboard.press("Delete")
+    settle(page)
+    check("and deleted", not list(saved_score(base, score_id).iter("bend")) and page.locator("#pages g.xrn-bend").count() == 0)
+
+    # Ctrl+F types fingers for the selected notes, one each in turn.
+    select_notes(page, 0, 2)
+    page.keyboard.press("Control+f")
+    page.keyboard.type("013")
+    page.keyboard.press("Enter")
+    settle(page)
+    check("Ctrl+F then 013 fingers three notes in turn", [note.findtext("notations/technical/fingering") for note in own_notes(saved_score(base, score_id))[:3]] == ["0", "1", "3"])
+    page.keyboard.press("Escape")
+    settle(page)
+    page.locator("#pages g.fing[data-mark]").first.evaluate("element => element.scrollIntoView({ block: 'center' })")
+    finger = page.locator("#pages g.fing[data-mark]").first.bounding_box()
+    page.mouse.click(finger["x"] + finger["width"] / 2, finger["y"] + finger["height"] / 2)
+    settle(page)
+    check("a fingering on the page is selected by a click", page.inner_text("#propMarkKind") == "Fingering")
+    page.keyboard.press("Delete")
+    settle(page)
+    check("and Delete takes it off", [note.findtext("notations/technical/fingering") for note in own_notes(saved_score(base, score_id))[:3]] == [None, "1", "3"])
+    press(page, "Control+z")
+
+    # The tuning and capo, from the Score tab, and the fretboard follows them.
+    page.keyboard.press("Escape")
+    settle(page)
+    score_pane(page)
+    check("the Score tab has the guitar's tuning and capo", page.is_visible("#partSettings") and page.input_value("#tuningChoice") == "standard" and page.input_value("#capoChoice") == "0")
+    page.select_option("#tuningChoice", "dropD")
+    settle(page)
+    check("a tuning chosen there tunes the guitar", score_data(base, score_id)["fretted"][0]["strings"][0] == "D2" and page.locator("#fretboard .stringName").all_inner_texts()[-1] == "D")
+    page.select_option("#capoChoice", "2")
+    settle(page)
+    check("a capo puts a capo on the fretboard, with the frets behind it out of reach", page.locator("#fretboard .capo").count() == 1 and page.locator('#fretboard .spot.blocked[data-stop="1"]').count() == 6)
+    click_on(page, page.locator(f"[id='{a3}']"))
+    settle(page)
+    page.click('#inspectorTabs [data-pane="selection"]')
+    check("and a note's place is its fret from the capo", spots(page, "fretboard", "chosen") == [[4, 7]] and page.inner_text("#stringInfo") == "String 4, fret 5 from the capo on fret 2", (spots(page, "fretboard", "chosen"), page.inner_text("#stringInfo")))
+    if shots:
+        page.screenshot(path=str(shots / "guitar-capo.png"))
+    page.keyboard.press("Escape")
+    score_pane(page)
+    page.select_option("#tuningChoice", "custom")
+    page.fill("#customStrings", "C2 G2 D3 G3 C4 E4")
+    page.keyboard.press("Enter")
+    settle(page)
+    check("a tuning can be typed string by string", score_data(base, score_id)["fretted"][0]["tuning"] == "custom" and page.locator("#fretboard .stringName").all_inner_texts() == ["E", "C", "G", "D", "G", "C"])
+    page.click("#tabSwitch")
+    settle(page)
+    check("the tablature can be taken away", score_data(base, score_id)["partStaves"] == [1] and page.locator("#pages g.measure").first.locator(":scope > g.staff").count() == 1)
+    page.click("#tabSwitch")
+    settle(page)
+    check("and brought back", score_data(base, score_id)["partStaves"] == [2])
+    page.click("#diagramsSwitch")
+    settle(page)
+    check("chord diagrams are switched on there", score_data(base, score_id)["diagrams"] is True and page.get_attribute("#diagramsSwitch", "aria-pressed") == "true")
+    press(page, "Control+z")
+    check("and undone", score_data(base, score_id)["diagrams"] is False)
+
+    # A note no string can play is listed, and a click goes to it.
+    last = own_notes(saved_score(base, score_id))[-1].get("id")
+    page.evaluate("id => enqueue(() => send(`notes/${id}`, { action: 'write', type: 'quarter', dots: 0, midi: 30 }))", last)
+    settle(page)
+    chip = page.locator("#barChecks [data-fret-problem]")
+    check("a note no string can play is listed with the bar checks", chip.count() == 1 and "below this instrument's lowest string" in chip.inner_text(), chip.all_inner_texts())
+    chip.click()
+    settle(page)
+    check("and a click selects it", page.evaluate("() => selected") == chip.get_attribute("data-fret-problem"))
+    command(page, "hammer-on")
+    check("the techniques are in the command palette", True)
+    page.keyboard.press("Control+Shift+P")
+    page.fill("#commandInput", "type fingers")
+    found = page.locator("#commandList li").first.inner_text()
+    check("and the fingering box with its key", "Ctrl" in found and "F" in found, found)
+    page.keyboard.press("Escape")
+
+
 def test_practice(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()
     page.add_init_script("""
@@ -2967,6 +3150,7 @@ def main() -> None:
             test_fretboard(page, base, arguments.shots, created)
             test_fingerboard_and_switcher(page, base, arguments.shots, created)
             test_new_scores_for_players(page, base, arguments.shots, created)
+            test_guitar_notation(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)

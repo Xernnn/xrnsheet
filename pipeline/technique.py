@@ -26,7 +26,7 @@ from pipeline import fretted
 from pipeline.concert import transposition_at
 from pipeline.edit import Spot, context_of, events_between, find_note, locate, next_note_id
 from pipeline.marks import add_at, drop_if_empty, free_number, make_direction, notations_of, several_staves
-from pipeline.rhythm import EditError, place, read_measure, repair_lines, repair_slurs, respell
+from pipeline.rhythm import TAB_COPY, EditError, contexts, place, read_measure, repair_lines, repair_slurs, respell
 from pipeline.structure import element_with_text, instrument_of, pitch_of_name
 from pipeline.transpose import Interval, move_pitch
 
@@ -589,3 +589,80 @@ def keep_cross_staff(root: ET.Element) -> None:
                             place(note, element_with_text("staff", home))
                         else:
                             found.text = home
+
+
+BEND_KINDS = {str(alter): name for name, alter in BENDS.items()}
+
+
+def position_marks(part: ET.Element) -> list[tuple[tuple[int, Fraction], int]]:
+    """List where a part's "III pos." marks are, each with its position, in order."""
+    found = []
+    for context in contexts(part):
+        for mark in read_measure(context.measure, context.divisions).marks:
+            words = words_of(mark.element) if mark.element.tag == "direction" else ""
+            if words.endswith(POSITION_WORDS) and words.removesuffix(POSITION_WORDS) in ROMAN:
+                found.append(((context.index, mark.onset), ROMAN.index(words.removesuffix(POSITION_WORDS))))
+    return sorted(found, key=lambda item: item[0])
+
+
+def sul_lines(part: ET.Element) -> list[tuple[tuple[int, Fraction], tuple[int, Fraction] | None, str]]:
+    """List a part's "sul G" lines: where each starts and stops, and its string."""
+    return [(begun[3], ended[3] if ended is not None else None, said.removeprefix("sul ")) for begun, ended, said in text_lines(part) if said.startswith("sul ") and said.removeprefix("sul ") not in SUL_PLACES]
+
+
+def how_played(root: ET.Element) -> dict[str, dict]:
+    """Say how each note is played, by its id, where the score says: for the inspector and the instrument below.
+
+    A guitar's string and fret come from its tablature, counted from the capo. A string number, a
+    finger, a pluck, a bend, a harmonic, a dead note and a note drawn on another staff come from the
+    note. A bowed instrument's notes also have the position in force and a "sul G" over them.
+    """
+    found: dict[str, dict] = {}
+    for part, board in zip(root.findall("part"), fretted.boards(root)):
+        copies = {}
+        if board is not None and board.linked:
+            copies = {note.get("id"): note for note in part.iter("note") if (note.findtext("staff") or "1") == board.linked}
+        bowed = family_of(root, part) == BOWED
+        positions = position_marks(part) if bowed else []
+        suls = sul_lines(part) if bowed else []
+        for context in contexts(part):
+            timeline = read_measure(context.measure, context.divisions)
+            for key, line in timeline.lines.items():
+                if board is not None and key[0] in board.tab:
+                    continue
+                for event in line:
+                    for note in [*event.grace, *event.notes]:
+                        if note.find("pitch") is None or not note.get("id"):
+                            continue
+                        details: dict = {}
+                        carrier = copies.get(note.get("id") + TAB_COPY)
+                        if carrier is not None and fretted.string_of(carrier) is not None:
+                            details["string"] = fretted.string_of(carrier)
+                            details["fret"] = int(carrier.findtext("notations/technical/fret") or 0)
+                        for tag, name in (("fingering", "finger"), ("pluck", "pluck")):
+                            if marks_of(note, tag):
+                                details[name] = marks_of(note, tag)[0]
+                        marked = fretted.string_of(note)
+                        if marked is not None:
+                            details["mark"] = marked
+                        bend = note.findtext("notations/technical/bend/bend-alter")
+                        if bend:
+                            details["bend"] = BEND_KINDS.get(bend.strip(), bend.strip())
+                        kind, which = harmonic_kind(note)
+                        if kind and which != "touching-pitch":
+                            details["harmonic"] = kind
+                        if note.findtext("notehead") == "x":
+                            details["dead"] = True
+                        if note.get(CROSS_STAFF):
+                            details["cross"] = int(note.get(CROSS_STAFF))
+                        at = (context.index, event.onset)
+                        if bowed:
+                            position = next((number for place_at, number in reversed(positions) if place_at <= at), None)
+                            if position is not None:
+                                details["position"] = position
+                            sul = next((string for begins, stops, string in suls if begins <= at and (stops is None or at < stops)), None)
+                            if sul:
+                                details["sul"] = sul
+                        if details:
+                            found[note.get("id")] = details
+    return found

@@ -163,7 +163,7 @@
         <div id="propInstrument" class="instrumentMarks" hidden>
           <h4 id="propInstrumentName"></h4>
           <div id="instrumentCells" class="cells"></div>
-          <!-- Fingering, hand, string and fret, and bowing go here, by the instrument's kind. -->
+          <!-- A guitar's string and fret, and each player's techniques, fingers, strings and hands (technique.js). -->
           <div id="instrumentSlots"></div>
         </div>
         <div id="noteGroups" class="groups"></div>
@@ -196,10 +196,18 @@
             <button id="partsButton" title="Open or print one instrument's part"><span data-icon="parts"></span>Parts</button>
           </div>
         </div>
+        <div class="field instrumentMarks" id="partSettings" hidden>
+          <h4 id="partSettingsName"></h4>
+          <label class="field"><span class="label">Tuning</span><select id="tuningChoice" aria-label="Tuning"></select></label>
+          <input id="customStrings" hidden placeholder="Each string from the lowest, e.g. D2 A2 D3 G3 B3 E4, then Enter" aria-label="Custom tuning, each string from the lowest" autocomplete="off" spellcheck="false">
+          <label class="field"><span class="label">Capo</span><select id="capoChoice" aria-label="Capo"></select></label>
+          <div class="row"><button id="tabSwitch" class="toggle" aria-pressed="false" title="A tablature staff under the staff, with each note's string and fret">Tablature</button></div>
+        </div>
         <div id="scoreGroups" class="groups"></div>
         <div class="field"><span class="label">Show</span><div class="row">
           <button id="concertPitch" class="toggle" aria-pressed="false" title="Show transposing instruments at the pitch they sound"><span data-icon="fork"></span>Concert pitch</button>
           <button id="originalShow" class="toggle" aria-pressed="false" title="The photo or PDF this score was read from">Original sheet</button>
+          <button id="diagramsSwitch" class="toggle" aria-pressed="false" data-switch="diagrams" title="A fretboard diagram over each chord symbol, for the score's guitar">Chord diagrams</button>
         </div></div>
         <div class="field"><span class="label">Page</span><div class="row">
           <button id="pageOpen">Page settings…</button>
@@ -430,6 +438,7 @@
 <script src="playback.js"></script>
 <script src="dock.js"></script>
 <script src="instruments.js"></script>
+<script src="technique.js"></script>
 <script src="inspector.js"></script>
 <script src="practice.js"></script>
 <script src="workspace.js"></script>

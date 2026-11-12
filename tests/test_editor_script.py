@@ -85,7 +85,7 @@ def run_script(program: str) -> object:
 
 
 def test_the_page_loads_the_scripts_these_tests_read():
-    assert page_scripts() == ["page.js", "palettes.js", "shell.js", "playback.js", "dock.js", "instruments.js", "inspector.js", "practice.js", "workspace.js", "editor.js"]
+    assert page_scripts() == ["page.js", "palettes.js", "shell.js", "playback.js", "dock.js", "instruments.js", "technique.js", "inspector.js", "practice.js", "workspace.js", "editor.js"]
 
 
 def playback_program(body: str) -> str:
@@ -143,11 +143,16 @@ def test_a_loop_goes_round_the_selection_wherever_it_is_first_played():
 
 
 def palettes() -> list[dict]:
-    """Build the palettes as the page does, with the engraver's own symbols to draw from."""
+    """Build the palettes as the page does, with the engraver's own symbols and icons to draw from.
+
+    The players' own cells are built in technique.js, which only defines things when it loads.
+    """
     functions = page_functions()
-    drawing = "\n".join(re.findall(r"^function (?:setGlyphs|glyphIcon)\(.*?^\}$", functions, re.S | re.M))
+    drawing = "\n".join(re.findall(r"^function (?:setGlyphs|glyphIcon|icon)\(.*?^\}$", functions, re.S | re.M))
+    icons = re.search(r"^const ICONS = \{.*?^\};", (STATIC / "shell.js").read_text(encoding="utf-8"), re.S | re.M).group(0)
     program = (
-        glyph_script() + "const UNITS_PER_SPACE = 250;\n" + drawing + (STATIC / "palettes.js").read_text(encoding="utf-8")
+        glyph_script() + "const UNITS_PER_SPACE = 250;\n" + icons + "\n" + drawing + (STATIC / "palettes.js").read_text(encoding="utf-8")
+        + (STATIC / "technique.js").read_text(encoding="utf-8")
         + "console.log(JSON.stringify(buildPalettes().map(palette => ({ ...palette, cells: palette.cells.map(cell => ({ ...cell, runs: typeof cell.run === 'function' })) }))));\n"
     )
     return run_script(program)
@@ -160,7 +165,7 @@ def test_the_inspector_shows_each_group_of_marks_where_it_applies():
     assert [name for name, shown in where.items() if "measure" in shown] == ["Clefs", "Key signatures", "Time signatures", "Tempo", "Repeats & jumps", "Barlines"]
     assert [name for name, shown in where.items() if "score" in shown] == ["Key signatures", "Time signatures"]
     # The rest have buttons of their own beside the note, and the command palette finds every cell.
-    assert [name for name, shown in where.items() if not shown] == ["Accidentals", "Layout", "Grace notes"]
+    assert [name for name, shown in where.items() if not shown] == ["Accidentals", "Layout", "Grace notes", "Guitar techniques", "Fingers and strings"]
 
 
 def test_every_palette_cell_is_named_drawn_and_does_something():

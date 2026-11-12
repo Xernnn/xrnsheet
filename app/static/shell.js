@@ -83,6 +83,7 @@ const SHORTCUTS = [
   ["Ctrl+L", "Lyrics. Space moves on, - joins syllables, ↓ ↑ change verse, Enter finishes"],
   ["Ctrl+K", "Chord symbol"],
   ["Ctrl+T, Ctrl+E, Ctrl+M", "Staff text, expression text, rehearsal mark"],
+  ["Ctrl+F", "Type fingers for the selected notes: one for them all, or one each in turn, as 135"],
   ["Alt+Shift+T", "Tempo marking"],
   ["Space", "Play or stop"],
   ["Ctrl+Shift+P", "Find any action by name, with its key. / also opens it when no note is chosen"],

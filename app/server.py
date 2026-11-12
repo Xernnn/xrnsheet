@@ -616,8 +616,12 @@ def note_details(root: ET.Element) -> dict[str, list]:
     """Say what each note and rest is, by its id, for the inspector to name it as it's shown.
 
     A note has its step, alteration and octave, then its written type and dots; a rest has no pitch.
+    A note the score says something about how to play has a sixth item: its string and fret on a
+    guitar's tablature, its finger, string number and the rest (see technique.how_played), which the
+    inspector shows and the fretboard and fingerboard place it by.
     Reading them from the score is far quicker than having the engraver write them into the pages.
     """
+    played = technique.how_played(root)
     found = {}
     for note in root.iter("note"):
         if not note.get("id"):
@@ -625,6 +629,8 @@ def note_details(root: ET.Element) -> dict[str, list]:
         pitch = note.find("pitch")
         named = [pitch.findtext("step") or "", round(float(pitch.findtext("alter") or 0)), int(pitch.findtext("octave") or 0)] if pitch is not None else ["", 0, 0]
         found[note.get("id")] = [*named, note.findtext("type") or "", len(note.findall("dot"))]
+        if note.get("id") in played:
+            found[note.get("id")].append(played[note.get("id")])
     return found
 
 
@@ -676,6 +682,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
         "transposing": concert.is_transposing(root),
         "notes": note_details(shown),
         "fretted": [board.describe() if board is not None else None for board in fretted.boards(root)],
+        "strings": [list(technique.string_names(root, part)) or None for part in root.findall("part")],
         "fretProblems": fretted.problems(root),
         "diagrams": diagrams.shown(root),
     } | structure.title_of(root)
@@ -773,8 +780,12 @@ def mark_checked(score_id: str, body: CheckedMark) -> dict:
     return describe(folder, read_status(folder))
 
 
-def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None]) -> dict:
-    """Run one edit and save it. Anything the edit returns is passed on to the page."""
+def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None], then: Callable[[ET.Element, dict], None] | None = None) -> dict:
+    """Run one edit and save it. Anything the edit returns is passed on to the page.
+
+    `then` finishes the edit once the TAB staves have caught up with it, as written for the player
+    whatever is shown, and is given what the edit returned to add to.
+    """
     folder = job_folder(score_id)
     with edit_lock:
         root = current_root(folder)
@@ -789,8 +800,13 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None])
         edit.ensure_note_ids(root)
         marks.ensure_mark_ids(root)
         fretted.sync(root)  # Every TAB staff shows its standard staff's notes as they now are.
+        extra = extra if isinstance(extra, dict) else {}
+        if then is not None:
+            then(root, extra)
+            marks.ensure_mark_ids(root)
+            fretted.sync(root)
         text = save_version(folder, root)
-        return describe(folder, read_status(folder), text) | (extra or {})
+        return describe(folder, read_status(folder), text) | extra
 
 
 @app.post("/api/scores/{score_id}/notes/{note_id}")
@@ -833,7 +849,29 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
     }
     if body.action not in actions:
         raise HTTPException(422, "Unknown note action")
-    return apply_edit(score_id, actions[body.action])
+    on_string = body.string if body.action in ("write", "stack") and body.string else None
+    return apply_edit(score_id, actions[body.action], (lambda root, extra: play_on_string(root, extra, on_string)) if on_string else None)
+
+
+def play_on_string(root: ET.Element, extra: dict, string: int) -> None:
+    """Keep the string a note was played on, on the fretboard or the fingerboard below the score.
+
+    A guitar with tablature plays it there, and a bowed instrument gets the string's number over
+    it. A guitar without tablature has nowhere to keep it. Should the string be busy, the note keeps
+    the one chosen for it, and the page is told why.
+    """
+    note_id = extra.get("written")
+    if not note_id:
+        return
+    part, _ = edit.context_of(root, edit.find_note(root, note_id))
+    board = fretted.boards(root)[root.findall("part").index(part)]
+    try:
+        if board is not None and board.tab:
+            fretted.choose_string(root, note_id, string)
+        elif board is None and technique.family_of(root, part) == technique.BOWED:
+            technique.set_string_number(root, [note_id], string)
+    except edit.EditError as error:
+        extra["message"] = str(error)
 
 
 GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {

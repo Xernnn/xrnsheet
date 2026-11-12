@@ -244,6 +244,7 @@ function draw() {
   drawRange();
   if (dockOpen("mixer")) drawMixer();
   if (dockOpen("timeline")) drawTimeline();
+  if (instrumentShown()) drawInstrument(); // A new tuning or capo changes the neck.
   drawPartSwitch();
   drawPracticeChoices();
   drawPageCount();
