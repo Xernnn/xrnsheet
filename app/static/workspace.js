@@ -44,17 +44,22 @@ function setMode(mode, remember = true) {
   if (score) updateTools();
   drawMidiState();
   drawPageCount();
+  $("libraryToggle").setAttribute("aria-pressed", String(libraryShown()));
+  $("inspectorToggle").setAttribute("aria-pressed", String(inspectorShown()));
 }
 
-// The library sits beside an open score on a wide window, and over it on a narrow one.
+// The library sits beside an open score on a wide window, and over it on a narrow one. Read shows
+// the score alone, so there it's away.
 function libraryShown() {
   if (document.body.classList.contains("atHome")) return true;
+  if (reading()) return false;
   return innerWidth > 1180 ? !document.body.classList.contains("libraryHidden") : document.body.classList.contains("libraryOpen");
 }
 
 function toggleLibrary() {
   if (document.body.classList.contains("atHome")) return;
   const on = !libraryShown();
+  if (on && reading()) setMode("write"); // The library is shown beside the score, as in Write.
   if (innerWidth > 1180) {
     document.body.classList.toggle("libraryHidden", !on);
     keepSetting("library", on ? "shown" : "hidden");
@@ -131,6 +136,7 @@ function turnPage(by) {
   if (by > 0 && desk.scrollTop + desk.clientHeight < bottom - 4) { desk.scrollTop += desk.clientHeight * TURN_SHARE; drawPageCount(); return; }
   if (by < 0 && desk.scrollTop > 4) { desk.scrollTop -= desk.clientHeight * TURN_SHARE; drawPageCount(); return; }
   const target = Math.min(Math.max(shown[0] + by * shown.length, 0), pages.length - 1);
+  if (target === shown[0]) return; // The end of the score, or its start: nowhere further to turn.
   desk.scrollLeft = pages[target].offsetLeft - parseFloat(getComputedStyle($("pagesFrame")).paddingLeft);
   desk.scrollTop = 0;
   drawPageCount();
@@ -254,16 +260,16 @@ function practiceCommands() {
     { label: "End the loop here (B)", where: "Practice", keys: "B", enabled: Boolean(actionTarget()), run: go(() => setLoopEnd("last")) },
     ...[0, 1, 2].map(bars => ({ label: bars ? `Count in ${bars} ${bars === 1 ? "bar" : "bars"}` : "No count-in", where: "Practice", keys: "", checked: practice.countIn === bars, run: go(() => setCountIn(bars)) })),
     ...[50, 75, 100].map(percent => ({ label: `Speed ${percent}%`, where: "Practice", keys: "", run: go(() => setSpeed(percent)) })),
-    ...[["all", "Everything"], ...practiceChoices()].map(([key, label]) => ({ label: `Hear ${label === "Everything" ? "everything" : label}`, where: "Practice", keys: "", checked: practice.hear === key, run: go(() => { practice.hear = key; drawPracticeChoices(); }) })),
-    ...practiceChoices().map(([key, label]) => ({ label: `Wait for me: ${label}`, where: "Practice", keys: "", checked: practice.waitFor === key, run: go(() => { practice.waitFor = key; drawPracticeChoices(); setUpMidi(); drawMidiState(); }) })),
-    { label: "Stop waiting for me", where: "Practice", keys: "", run: go(() => { practice.waitFor = "off"; drawPracticeChoices(); drawMidiState(); }) },
-  ];
+    ...[["all", "Everything"], ...practiceChoices()].map(([key, label]) => ({ label: `Hear ${label === "Everything" ? "everything" : label}`, where: "Practice", keys: "", checked: practice.hear === key, run: go(() => setHear(key)) })),
+    ...practiceChoices().map(([key, label]) => ({ label: `Wait for me: ${label}`, where: "Practice", keys: "", checked: practice.waitFor === key, run: go(() => setWaitFor(key)) })),
+    { label: "Stop waiting for me", where: "Practice", keys: "", run: go(() => setWaitFor("off")) },
+  ].map(item => ({ enabled: true, ...item }));
 }
 
 function allCommands() {
   const modes = Object.entries(MODES).map(([name, mode]) => ({ label: `${mode.label} mode`, where: "Mode", keys: mode.keys, enabled: Boolean(score), checked: currentMode() === name, run: () => setMode(name) }));
-  const parts = score ? (score.parts ?? []).map((_, index) => ({ label: `Work with ${partLabel(index)}`, where: "Instrument", keys: "", checked: index === activePart(), run: () => choosePart(index) })) : [];
-  const scores = sheets.map(sheet => ({ label: `Open ${sheet.title || "Untitled score"}`, where: "Library", keys: "", run: () => openScore(sheet.id) }));
+  const parts = score ? (score.parts ?? []).map((_, index) => ({ label: `Work with ${partLabel(index)}`, where: "Instrument", keys: "", enabled: true, checked: index === activePart(), run: () => choosePart(index) })) : [];
+  const scores = sheets.map(sheet => ({ label: `Open ${sheet.title || "Untitled score"}`, where: "Library", keys: "", enabled: true, run: () => openScore(sheet.id) }));
   const inspectorItems = [
     { label: "Inspector on the score", where: "View", keys: "F7", enabled: Boolean(score), run: () => showInspector(true, "score") },
     { label: "Play or stop", where: "Playback", keys: "Space", enabled: Boolean(score), run: togglePlaying },
@@ -347,6 +353,8 @@ function setUpCommands() {
   $("commandOpen").addEventListener("click", () => openCommands());
   $("commandInput").addEventListener("input", () => { commands.chosen = 0; drawCommands(); });
   $("commandInput").addEventListener("keydown", event => {
+    // The palette's keys are its own, and mustn't go on to the score once it has closed.
+    if (["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) event.stopPropagation();
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const count = commands.shown.length;

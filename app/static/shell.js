@@ -712,7 +712,22 @@ function setUpShell() {
     if (chosenPart === null) return;
     const index = chosenPart;
     chosenPart = null;
-    await send("parts", { action: "remove", index });
+    // Practice's choices name parts by their place, which moves up for those below, so they're
+    // moved before the score comes back without the part.
+    const moved = (choice, none) => {
+      const [kind, part, ...rest] = choice.split(":");
+      if (kind !== "part" && kind !== "staff") return choice;
+      if (Number(part) === index) return none;
+      return Number(part) > index ? [kind, Number(part) - 1, ...rest].join(":") : choice;
+    };
+    const before = { hear: practice.hear, waitFor: practice.waitFor };
+    Object.assign(practice, { hear: moved(practice.hear, "all"), waitFor: moved(practice.waitFor, "off") });
+    try {
+      await send("parts", { action: "remove", index });
+    } catch (error) {
+      Object.assign(practice, before);
+      throw error;
+    }
   }));
   $("partDialog").querySelector("form").addEventListener("submit", () => {
     const names = [...partChooser.picked];

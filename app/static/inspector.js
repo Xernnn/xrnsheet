@@ -15,8 +15,9 @@ const INSTRUMENT_CELLS = {
   other: [],
 };
 
+// The inspector is Write's: in Read and Practice it's away, and asking for it goes to Write.
 function inspectorShown() {
-  return !document.body.classList.contains("inspectorHidden") && (innerWidth > 1180 || document.body.classList.contains("inspectorOpen"));
+  return writing() && !document.body.classList.contains("inspectorHidden") && (innerWidth > 1180 || document.body.classList.contains("inspectorOpen"));
 }
 
 // Show the inspector, on the selection or on the score, or put it away.

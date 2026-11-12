@@ -3847,6 +3847,123 @@ def test_practice_details(context, base: str, shots: Path | None, created: list[
     page.close()
 
 
+def test_found_by_the_bug_hunt(context, base: str, created: list[str]) -> None:
+    """Things the bug hunt over the instrument workspace found, each as a person would meet it."""
+    page = context.new_page()
+    page.add_init_script("""
+        window.fakeMidi = { inputs: new Map([["key", { type: "input", state: "connected" }]]), onstatechange: null };
+        navigator.requestMIDIAccess = async () => window.fakeMidi;
+        window.press = number => window.fakeMidi.inputs.get("key").onmidimessage({ data: [0x90, number, 90] });
+    """)
+    score_id = open_blank(page, base, created, bars=8, staff="piano")
+    page.click('#modeSwitch [data-mode="write"]')
+    if not page.evaluate("() => editor.on"):
+        page.keyboard.press("n")
+    page.keyboard.press("5")
+    page.keyboard.type("cdefgabc", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    select_notes(page, 5)
+    command(page, "staccato")
+    settle(page)
+    check("Enter in the command palette runs its command and nothing else", 'new-system="yes"' not in fetch_text(base, f"/api/scores/{score_id}/score.musicxml") and len(list(saved_score(base, score_id).iter("staccato"))) == 1)
+    page.keyboard.press("Escape")
+    page.click('#modeSwitch [data-mode="practice"]')
+    page.select_option("#waitFor", "part:0")
+    page.click("#rewind")
+    page.keyboard.press(" ")
+    page.wait_for_function("() => practice.follower?.arrived")
+    press(page, "Control+z")
+    page.wait_for_timeout(300)
+    check("an undo while playback waits for you keeps the notes it waits for marked", page.locator("#pages g.awaited").count() >= 1)
+    page.keyboard.press(" ")
+    wait_playing(page, False)
+    page.select_option("#waitFor", "off")
+    page.click('#modeSwitch [data-mode="write"]')
+    post_json(base, f"/api/scores/{score_id}/parts", {"action": "add", "names": ["violin", "guitar"]})
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    page.keyboard.press("Control+Shift+P")
+    page.fill("#commandInput", "work with violin")
+    offered = page.get_attribute("#commandList li:first-child", "aria-disabled")
+    page.keyboard.press("Enter")
+    check("the palette's instruments and practice commands can be run", offered == "false" and page.inner_text("#partName") == "Violin", (offered, page.inner_text("#partName")))
+    page.click('#modeSwitch [data-mode="practice"]')
+    page.select_option("#practiceHear", "part:1")
+    page.click("#inspectorToggle")
+    check("the inspector's button in Practice shows the inspector, in Write", page.evaluate("() => currentMode()") == "write" and page.is_visible("#inspector"))
+    page.click('#modeSwitch [data-mode="read"]')
+    page.keyboard.press("F6")
+    check("and F6 in Read shows the library beside the score, in Write", page.evaluate("() => currentMode()") == "write" and page.is_visible("#library"))
+    page.click('#modeSwitch [data-mode="practice"]')
+    page.evaluate("() => { choosePart(0); $('partRemove').click(); }")
+    settle(page)
+    page.wait_for_function("() => score.parts.length === 2")
+    check("removing the instrument above the one heard keeps hearing that one", page.evaluate("() => practice.hear") == "part:0" and page.evaluate("() => score.parts[0]") == "Violin", page.evaluate("() => [practice.hear, score.parts]"))
+
+    # Playback: a count-in isn't heard again when the speed changes, and Stop before it starts stops it.
+    page.select_option("#practiceHear", "all")
+    page.select_option("#countIn", "1")
+    page.click("#rewind")
+    page.click("#play")
+    wait_playing(page, True)
+    page.wait_for_timeout(2600)
+    page.locator("#practiceSpeed").fill("80")
+    page.wait_for_function("() => player?.cycles.length")
+    lead = page.evaluate("() => player.cycles[0].zero - player.audio.currentTime")
+    check("a new speed while playing carries on without counting in again", lead < 0.5, lead)
+    page.click("#play")
+    wait_playing(page, False)
+    page.select_option("#countIn", "0")
+    page.locator("#practiceSpeed").fill("100")
+    page.route("**/playback", lambda route: (page.wait_for_timeout(300), route.continue_()))
+    page.click("#play")
+    page.click("#play")
+    page.wait_for_timeout(800)
+    check("Play and Stop at once leave nothing playing", page.evaluate("() => player === null && practice.follower === null") and page.get_attribute("#play", "aria-pressed") == "false")
+    page.unroute("**/playback")
+
+    page.close()
+
+    # Read: the end of the score is the end.
+    reader = context.new_page()
+    reader.set_viewport_size({"width": 700, "height": 900})
+    long_id = open_blank(reader, base, created, bars=60, staff="piano")
+    reader.click('#modeSwitch [data-mode="read"]')
+    reader.evaluate("() => setZoom('width')")  # A page taller than the window, read down before it's turned.
+    reader.keyboard.press("End")
+    reader.wait_for_timeout(200)
+    places = []
+    for _ in range(5):
+        reader.keyboard.press(" ")
+        places.append(reader.evaluate("() => [$('desk').scrollLeft, $('desk').scrollTop]"))
+    check("Space at the bottom of the last page stays there", places[-1][1] > 0 and places[-1] == places[-2], places)
+    reader.evaluate("() => closeScore()")
+    check("a score closed in Read leaves the library to open another", reader.is_visible("#library") and reader.is_visible("#blankOpen"))
+    reader.evaluate("() => setMode('write')")
+    reader.close()
+
+    # A line over a page break stays clickable when only the second page is drawn again.
+    pages = context.new_page()
+    two = open_blank(pages, base, created, bars=120, staff="treble")
+    pages.keyboard.press("7")
+    pages.keyboard.type("cd" * 60, delay=0)
+    settle(pages)
+    pages.keyboard.press("Escape")
+    settle(pages)
+    ends = pages.evaluate("""() => {
+        const drawn = [...document.querySelectorAll('#pages > .page')];
+        return [[...drawn[0].querySelectorAll('g.note')].at(-1).id, drawn[1].querySelector('g.note').id, [...drawn[1].querySelectorAll('g.note')].at(-1).id];
+    }""")
+    pages.evaluate("ids => enqueue(() => send('marks', { action: 'pedal', notes: [ids[0], ids[1]], name: 'line' }))", ends)
+    settle(pages)
+    pages.evaluate("id => enqueue(() => send(`notes/${id}`, { action: 'repitch', step: 'F' }))", ends[2])
+    settle(pages)
+    check("a line over a page break is named on both pages after the second is drawn again", pages.evaluate("() => [...document.querySelectorAll('#pages g.pedal')].every(piece => piece.dataset.mark)"))
+    pages.close()
+
+
 def test_phone(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()
     page.set_viewport_size({"width": 390, "height": 800})
@@ -3922,6 +4039,15 @@ def test_recognized(page, base: str, shots: Path | None, created: list[str]) -> 
     check("chords after the new bar moved along", after[0]["measure"] == chords[0]["measure"] + 1, (chords[0]["measure"], after[0]["measure"]))
     if shots:
         page.screenshot(path=str(shots / "recognized.png"), full_page=True)
+    size = page.viewport_size
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.click('#modeSwitch [data-mode="read"]')
+    page.wait_for_timeout(200)
+    check("on a phone, Read shows a sheet read from a photo without scrolling the window sideways", page.evaluate("() => document.documentElement.scrollWidth <= innerWidth") and page.is_hidden("#original"))
+    if shots:
+        page.screenshot(path=str(shots / "phone-read-recognized.png"))
+    page.click('#modeSwitch [data-mode="write"]')
+    page.set_viewport_size(size)
 
 
 def main() -> None:
@@ -4007,6 +4133,7 @@ def main() -> None:
             test_chord_diagram_editing(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
             test_practice_details(context, base, arguments.shots, created)
+            test_found_by_the_bug_hunt(context, base, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])

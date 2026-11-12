@@ -31,6 +31,7 @@ const playState = {
   data: null, // The latest playback, for the position and tempo shown while nothing plays.
   wanted: 0,
   chosen: null, // A note or rest selected since, which playback starts from instead, as in MuseScore.
+  starting: null, // Playback on its way, while its notes are fetched: Stop before then stops it starting.
 };
 let player = null;
 
@@ -321,9 +322,13 @@ function playFromNote(id) {
   if (found && !player) drawPosition(found.start);
 }
 
-// Play from a place given, or from the playback position.
-async function startPlaying(place = null) {
+// Play from a place given, or from the playback position. Started again where it was playing, as a
+// new speed or a part to hear does, it's not counted in again.
+async function startPlaying(place = null, counted = true) {
+  const starting = playState.starting = {};
   const data = await fetchPlayback();
+  if (playState.starting !== starting) return; // Stopped, or started again, while its notes came.
+  playState.starting = null;
   if (!data) { message("This sheet couldn't be played."); return; }
   // While entering notes it's where the next note goes, as it always was.
   const fromNote = editor.on ? plainId(editor.cursor) : playState.chosen;
@@ -337,7 +342,7 @@ async function startPlaying(place = null) {
   const nodes = mixerNodes(audio, mixerForPlayback());
   player = { audio, data, nodes, speed: playState.speed, clock: clockFor(data, playState.speed), timers: [], cycles: [], loop };
   // In Practice a bar or two can be counted in first.
-  const lead = countIn(audio, data, from, audio.currentTime + START_DELAY, nodes);
+  const lead = counted ? countIn(audio, data, from, audio.currentTime + START_DELAY, nodes) : 0;
   playCycle(from, loop ? loop.end : data.total, audio.currentTime + START_DELAY + lead);
   showPlaying(true);
   followPlaying();
@@ -363,6 +368,7 @@ function stopPlaying(finished = false) {
 // In Practice, with someone's notes to wait for, playback waits for you to play them.
 function togglePlaying() {
   if (player || practice.follower) return stopPlaying();
+  if (playState.starting) { playState.starting = null; return; }
   return practising() && practice.waitFor !== "off" ? startFollowing() : startPlaying();
 }
 
@@ -371,7 +377,7 @@ function playFrom(place) {
   playState.chosen = null;
   if (practice.follower) {
     stopPlaying();
-    startFollowing(place);
+    startFollowing(place, false);
     return;
   }
   if (!player) {
@@ -380,7 +386,7 @@ function playFrom(place) {
     return;
   }
   stopPlaying();
-  startPlaying(place);
+  startPlaying(place, false);
 }
 
 function rewind() {

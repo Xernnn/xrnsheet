@@ -153,8 +153,11 @@ function showWait(text, waiting = false) {
 }
 
 // Waiting for you: the notes you play, grouped by when they're played, from where playback starts.
-async function startFollowing(place = null) {
+async function startFollowing(place = null, counted = true) {
+  const starting = playState.starting = {};
   const data = await fetchPlayback();
+  if (playState.starting !== starting) return; // Stopped, or started again, while its notes came.
+  playState.starting = null;
   if (!data) { message("This sheet couldn't be played."); return; }
   const fromNote = playState.chosen;
   const chosen = place === null && fromNote ? placeOf(data, fromNote) : null;
@@ -174,8 +177,9 @@ async function startFollowing(place = null) {
   drawTiming("");
   showPlaying(true);
   setUpMidi();
-  const lead = countIn(audio, data, from, audio.currentTime + START_DELAY, nodes);
-  practice.follower.timers.push(setTimeout(() => { if (practice.follower) waitAtStep(); }, lead * 1000));
+  const lead = counted ? countIn(audio, data, from, audio.currentTime + START_DELAY, nodes) : 0;
+  const follower = practice.follower;
+  follower.timers.push(setTimeout(() => { if (practice.follower === follower) waitAtStep(); }, lead * 1000));
   followFollower();
   drawDock();
 }
@@ -187,7 +191,8 @@ function stepsBetween(data, yours, from, until) {
     if (!yours(note) || note.start < from - EARLY || note.start >= until - EARLY) continue;
     const pitch = keyOfSound(data, note.midi, note.part ?? 0);
     const last = steps.at(-1);
-    if (last && Math.abs(last.start - note.start) < EARLY * 1000) { last.pitches.add(pitch); last.sounding.add(note.midi); last.ids.push(note.id); last.notes.push({ id: note.id, midi: note.midi }); } else steps.push({ start: note.start, pitches: new Set([pitch]), sounding: new Set([note.midi]), ids: [note.id], notes: [{ id: note.id, midi: note.midi }] });
+    const entry = { id: note.id, midi: note.midi, part: note.part ?? 0 };
+    if (last && Math.abs(last.start - note.start) < EARLY * 1000) { last.pitches.add(pitch); last.sounding.add(note.midi); last.ids.push(note.id); last.notes.push(entry); } else steps.push({ start: note.start, pitches: new Set([pitch]), sounding: new Set([note.midi]), ids: [note.id], notes: [entry] });
   }
   return steps;
 }
@@ -362,6 +367,38 @@ function midiNoteOff(number) {
   practiseReleased(number);
 }
 
+// What playback sounds, from the bar or the command palette: what plays changes at once.
+function setHear(choice) {
+  practice.hear = choice;
+  drawPracticeChoices();
+  if (player) playFrom(playingPlace());
+}
+
+// Whose notes playback waits for: their instrument is chosen, and playing stops to start again so.
+function setWaitFor(choice) {
+  practice.waitFor = choice;
+  drawPracticeChoices();
+  if (practice.waitFor !== "off") {
+    setUpMidi();
+    const part = Number(practice.waitFor.split(":")[1]);
+    if (part !== activePart()) choosePart(part);
+  }
+  if (player || practice.follower) stopPlaying();
+  drawMidiState();
+}
+
+// The page drawn again while playback waits for you, as undo or concert pitch does: the notes waited
+// for are marked again, and the keys asked for are the ones the staves now show.
+function refreshFollower() {
+  const follower = practice.follower;
+  if (!follower) return;
+  for (const step of follower.steps) step.pitches = new Set(step.notes.map(note => keyOfSound(follower.data, note.midi, note.part)));
+  const step = follower.steps[follower.index];
+  if (!follower.arrived || !step) return;
+  step.ids.forEach(id => document.getElementById(id)?.classList.add("awaited"));
+  showWait(`Play ${[...step.pitches].sort((a, b) => a - b).map(noteName).join(" ")}`, true);
+}
+
 function drawMidiState() {
   if (practice.waitFor === "off") { showWait(""); return; }
   const words = { ready: "MIDI keyboard ready, or play the instrument below", none: "No MIDI keyboard found: play the instrument below", unknown: "Play on a MIDI keyboard or the instrument below" };
@@ -399,22 +436,8 @@ function setUpPractice() {
   $("speedSteps").addEventListener("click", () => { practice.stepUp = !practice.stepUp; keepSetting("speedSteps", practice.stepUp ? "on" : "off"); drawPracticeState(); });
   $("speedStep").addEventListener("change", event => { practice.step = Number(event.target.value); keepSetting("speedStep", event.target.value); event.target.blur(); });
   $("speedTarget").addEventListener("change", event => { practice.target = Number(event.target.value); keepSetting("speedTarget", event.target.value); event.target.blur(); });
-  $("practiceHear").addEventListener("change", event => {
-    practice.hear = event.target.value;
-    event.target.blur();
-    if (player) playFrom(playingPlace());
-  });
-  $("waitFor").addEventListener("change", event => {
-    practice.waitFor = event.target.value;
-    event.target.blur();
-    if (practice.waitFor !== "off") {
-      setUpMidi();
-      const part = Number(practice.waitFor.split(":")[1]);
-      if (part !== activePart()) choosePart(part);
-    }
-    if (player || practice.follower) { stopPlaying(); }
-    drawMidiState();
-  });
+  $("practiceHear").addEventListener("change", event => { event.target.blur(); setHear(event.target.value); });
+  $("waitFor").addEventListener("change", event => { event.target.blur(); setWaitFor(event.target.value); });
   $("practiceBar").addEventListener("click", event => event.target.closest("button")?.blur());
   drawPracticeState();
 }

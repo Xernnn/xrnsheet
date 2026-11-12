@@ -1211,6 +1211,7 @@ function practiceKey(event) {
 
 document.addEventListener("keydown", event => {
   const key = event.key;
+  if (event.defaultPrevented) return; // Already the key of whatever had it, such as the command palette.
   if (key === "Escape" && openMenus.length) { closeMenus(); return; }
   // A field keeps the focus for a moment after its dialog or box has closed. It isn't being typed in then.
   const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName) && event.target.getClientRects().length > 0;

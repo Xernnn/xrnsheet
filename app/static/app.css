@@ -469,7 +469,7 @@ body[data-mode="read"] #desk { background: var(--bg); }
 body[data-mode="read"] #pages g.note:hover, body[data-mode="read"] #pages g.rest:hover { fill: inherit; stroke: inherit; }
 body[data-mode="read"] #pages g.note, body[data-mode="read"] #pages g.rest, body[data-mode="read"] #pages g.mRest, body[data-mode="read"] #pages g.harm, body[data-mode="read"] #pages g[data-mark] { cursor: inherit; }
 body[data-mode="read"] #desk { cursor: pointer; }
-body[data-mode="read"] #hintBar, body[data-mode="read"] #library { display: none; }
+body[data-mode="read"] #hintBar, body[data-mode="read"]:not(.atHome) #library { display: none; }
 body[data-mode="read"] #pagesFrame { padding: 16px; }
 body[data-mode="read"] #pages { gap: 16px; justify-content: center; }
 
@@ -508,7 +508,7 @@ body[data-mode="read"] #pages { gap: 16px; justify-content: center; }
   #pianoKeys { height: 92px; }
   .neck { --stop: 34px; --nut: 38px; }
   #original { position: absolute; z-index: 15; top: 0; bottom: 0; right: 0; width: min(420px, 92vw); box-shadow: -6px 0 24px var(--shadow); }
-  body[data-mode="read"] #original { position: static; width: 40%; box-shadow: none; }
+  body[data-mode="read"] #original { display: none; } /* The score alone, as Read is; the sheet is a mode away. */
   #practiceBar { flex-wrap: nowrap; }
   #toolLabel { font-size: 11.5px; }
 }
