@@ -704,11 +704,15 @@ BEND_ALTERS = {name: alter for alter, name in BEND_NAMES.items()}
 
 
 def relabel_note_mark(root: ET.Element, mark_id: str, text: str) -> bool:
-    """Change a fingering, a pluck, a string number or a bend someone clicked on, if that's what it is."""
-    for technical in root.iter("technical"):
-        mark = next((found for found in technical if found.get("id") == mark_id), None)
-        if mark is None:
+    """Change a fingering, a pluck, a string number or a bend someone clicked on, if that's what it is.
+
+    A guitar's string number retyped moves its tablature to that string too, as choosing it does.
+    """
+    for note in root.iter("note"):
+        technical = next((found for found in note.iterfind("notations/technical") if any(mark.get("id") == mark_id for mark in found)), None)
+        if technical is None:
             continue
+        mark = next(found for found in technical if found.get("id") == mark_id)
         text = text.strip()
         if mark.tag == "bend":
             if text not in BEND_ALTERS:
@@ -718,6 +722,13 @@ def relabel_note_mark(root: ET.Element, mark_id: str, text: str) -> bool:
             if RELABELLED[mark.tag].fullmatch(text) is None:
                 raise EditError("That isn't a finger or a string.")
             mark.text = text
+            if mark.tag == "string":
+                from pipeline import fretted  # It needs nothing from here.
+
+                part = next(found for found in root.findall("part") if any(member is note for member in found.iter("note")))
+                board = fretted.boards(root)[root.findall("part").index(part)]
+                if board is not None and board.tab:
+                    fretted.choose_string(root, note.get("id"), int(text))
         else:
             raise EditError("This mark can only be removed.")
         return True

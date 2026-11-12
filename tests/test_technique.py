@@ -690,3 +690,15 @@ def test_a_hammer_ons_letter_goes_on_the_tablature_or_else_the_staff():
     finished(plain)
     svg = svg_of(plain)
     assert svg.count(">H</text>") == 1 and 'class="slur" data-mark=' in svg
+
+
+def test_a_guitars_string_number_retyped_moves_its_tablature(client):
+    url, ids = written_through(client, "guitar-tab", 55)
+    data = client.post(f"{url}/marks", json={"action": "stringNumber", "notes": ids, "number": 3}).json()
+    mark = next(item for item in data["marks"] if item["kind"] == "string")
+    assert note(saved(client, url), ids[0] + TAB_COPY).findtext("notations/technical/string") == "3"
+    assert client.post(f"{url}/marks", json={"action": "label", "id": mark["id"], "text": "4"}).status_code == 200
+    copy = note(saved(client, url), ids[0] + TAB_COPY)
+    assert (copy.findtext("notations/technical/string"), copy.findtext("notations/technical/fret")) == ("4", "5")
+    refused = client.post(f"{url}/marks", json={"action": "label", "id": mark["id"], "text": "1"})
+    assert refused.status_code == 422 and "String 1 can't play G3" in refused.json()["detail"]

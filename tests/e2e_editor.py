@@ -3129,6 +3129,164 @@ def test_piano_notation(page, base: str, shots: Path | None, created: list[str])
     page.click('#modeSwitch [data-mode="write"]')
 
 
+def click_drawn(page, locator) -> None:
+    """Click the middle of something drawn on the page, such as a fingering or the words of a line."""
+    locator.evaluate("element => element.scrollIntoView({ block: 'center' })")
+    box = locator.bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    settle(page)
+
+
+def marks_api(base: str, score_id: str, body: dict) -> dict:
+    request = urllib.request.Request(f"{base}/api/scores/{score_id}/marks", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(request) as response:
+        return json.loads(response.read())
+
+
+def test_every_technique_mark(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """Each mark a player's technique leaves on the page is selected by a click, named, retyped where it has words, deleted and undone."""
+    score_id = open_blank(page, base, created, bars=2, staff="guitar-tab")
+    page.keyboard.press("5")
+    page.keyboard.type("egab", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    ids = [note.get("id") for note in own_notes(saved_score(base, score_id))]
+    for body in [{"action": "pluck", "notes": ids[:1], "text": "p"}, {"action": "stringNumber", "notes": ids[1:2], "number": 3},
+                 {"action": "join", "notes": ids[2:4], "name": "pullOff"}, {"action": "line", "notes": ids[:2], "name": "palmMute"}]:
+        marks_api(base, score_id, body)
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    page.click('#modeSwitch [data-mode="write"]')
+    kinds = lambda: sorted(mark["kind"] for mark in score_data(base, score_id)["marks"])
+    check("the marks are listed for the page", kinds() == ["pluck", "pull", "string", "textline"], kinds())
+    # A pluck and a string number are retyped, as the inspector's Edit text does.
+    for drawn, name, retyped, path in [("p", "Right-hand finger", "a", "notations/technical/pluck"), ("3", "String number", "2", "notations/technical/string")]:
+        click_drawn(page, page.locator("#pages g.fing[data-mark]", has_text=drawn).first)
+        check(f"a drawn {name.lower()} is selected and named", page.inner_text("#propMarkKind") == name and page.is_visible("#markEdit"), page.inner_text("#toolLabel"))
+        page.click("#markEdit")
+        page.fill("#chordInput", retyped)
+        page.keyboard.press("Enter")
+        settle(page)
+        check(f"and retyped as {retyped}", [note.findtext(path) for note in own_notes(saved_score(base, score_id)) if note.find(path) is not None] == [retyped])
+        click_drawn(page, page.locator("#pages g.fing[data-mark]", has_text=retyped).first)
+        page.keyboard.press("Delete")
+        settle(page)
+        check("and deleted", not [note for note in own_notes(saved_score(base, score_id)) if note.find(path) is not None])
+        press(page, "Control+z")
+        check("and undone", len([note for note in own_notes(saved_score(base, score_id)) if note.find(path) is not None]) == 1)
+    check("a guitar's string number retyped moved its tablature to that string", string_and_fret(saved_score(base, score_id), ids[1]) == ("2", "8"), string_and_fret(saved_score(base, score_id), ids[1]))
+    page.keyboard.press("Escape")
+    settle(page)
+    spot = page.evaluate("""() => {
+        const path = document.querySelector("#pages g.slur[data-mark] path");
+        path.scrollIntoView({ block: "center" });
+        const { x, y } = path.getPointAtLength(path.getTotalLength() / 2);
+        return new DOMPoint(x, y).matrixTransform(path.getScreenCTM());
+    }""")
+    page.mouse.click(spot["x"], spot["y"])
+    settle(page)
+    check("a pull-off's slur is selected, and has no words to change", page.inner_text("#propMarkKind") == "Pull-off" and page.is_hidden("#markEdit"), page.inner_text("#toolLabel"))
+    page.keyboard.press("Delete")
+    settle(page)
+    check("Delete takes both its ends away", not notes_with(saved_score(base, score_id), "notations/technical/pull-off") and page.locator("#pages g.xrn-joined").count() == 0)
+    press(page, "Control+z")
+    check("and undo brings it back", len(notes_with(saved_score(base, score_id), "notations/technical/pull-off")) == 2)
+    click_drawn(page, page.locator("#pages g.dir", has_text="P.M.").first)
+    check("palm mute's words select its line", page.inner_text("#propMarkKind") == "Palm mute", page.inner_text("#toolLabel"))
+    page.keyboard.press("Delete")
+    settle(page)
+    check("which Delete takes away with its end", not words_in(saved_score(base, score_id), "P.M.") and not list(saved_score(base, score_id).iter("dashes")))
+    press(page, "Control+z")
+
+    # A violin's "sul G" line and pizz., and a pianist's hand, are words that are selected and changed too.
+    violin = open_blank(page, base, created, bars=2, staff="violin")
+    page.keyboard.press("5")
+    page.keyboard.type("gbd", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    notes = [note.get("id") for note in own_notes(saved_score(base, violin))]
+    marks_api(base, violin, {"action": "sul", "notes": notes[:2], "text": "G"})
+    marks_api(base, violin, {"action": "pizzicato", "notes": notes[2:3], "on": True})
+    marks_api(base, violin, {"action": "hand", "notes": notes[:1], "name": "RH"})
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    click_drawn(page, page.locator("#pages g.dir", has_text="sul G").first)
+    check("a sul line is selected by its words", page.inner_text("#propMarkKind") == "String to play on", page.inner_text("#toolLabel"))
+    page.keyboard.press("F2")
+    page.fill("#chordInput", "sul D")
+    page.keyboard.press("Enter")
+    settle(page)
+    check("and retyped", words_in(saved_score(base, violin), "sul D") == ["sul D"])
+    for words, name in [("pizz.", "Pizzicato or arco"), ("R.H.", "Hand")]:
+        click_drawn(page, page.locator("#pages g.dir", has_text=words).first)
+        check(f"{words} is selected and named", page.inner_text("#propMarkKind") == name, page.inner_text("#toolLabel"))
+        page.keyboard.press("Delete")
+        settle(page)
+        check(f"and {words} deleted", not words_in(saved_score(base, violin), words))
+        press(page, "Control+z")
+        check(f"and {words} undone", words_in(saved_score(base, violin), words) == [words])
+
+    # Every cell for a player's technique is in the command palette, with its key where it has one.
+    found = page.evaluate("""() => {
+        const listed = new Map(allCommands().filter(command => command.cell).map(command => [command.cell, command.keys]));
+        const wanted = catalogue().filter(palette => ["guitar", "fingers", "bowed", "hands"].includes(palette.id)).flatMap(palette => palette.cells.map(cell => cell.key));
+        return { missing: wanted.filter(key => !listed.has(key)), keys: ["mark:downbow", "mark:upbow", "finger:type", "cross:up", "cross:down"].map(key => listed.get(key)), count: wanted.length };
+    }""")
+    check("every technique is in the command palette, with its key", not found["missing"] and found["keys"] == ["[", "]", "Ctrl+F", "Ctrl+Shift+↑", "Ctrl+Shift+↓"] and found["count"] > 50, found)
+
+
+def test_techniques_at_concert_pitch(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """A bass guitar sounds an octave below its music: at concert pitch its marks, frets and strings stay as they are."""
+    score_id = open_blank(page, base, created, bars=2, staff="bass-guitar-tab")
+    show_instrument(page)
+    page.keyboard.press("5")
+    page.locator('#fretboard .spot[data-string="3"][data-stop="5"]').click()
+    settle(page)
+    page.locator('#fretboard .spot[data-string="2"][data-stop="2"]').click()
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    ids = [note.get("id") for note in own_notes(saved_score(base, score_id))]
+    written = [(note.findtext("pitch/step"), note.findtext("pitch/octave")) for note in own_notes(saved_score(base, score_id))]
+    check("a bass's fret writes the note an octave above its sound, on that string", written == [("D", "3"), ("E", "3")] and [string_and_fret(saved_score(base, score_id), note_id) for note_id in ids] == [("3", "5"), ("2", "2")], (written, [string_and_fret(saved_score(base, score_id), note_id) for note_id in ids]))
+    marks_api(base, score_id, {"action": "fingering", "notes": ids, "text": "12"})
+    marks_api(base, score_id, {"action": "bend", "notes": ids[1:], "name": "half"})
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    page.click('#modeSwitch [data-mode="write"]')
+    show_instrument(page)
+    drawn = lambda: page.locator("#pages g[data-mark]").count()
+    before = drawn()
+    page.click("#concertPitch") if page.is_visible("#concertPitch") else menu(page, "View", "Concert pitch")
+    settle(page)
+    check("at concert pitch the bass's fingerings and bend are still drawn and named", score_data(base, score_id)["concertPitch"] and drawn() == before and before >= 3, (before, drawn()))
+    page.wait_for_function("() => playState.data !== null")
+    select_notes(page, 0)
+    check("its note is still at its string and fret", spots(page, "fretboard", "chosen") == [[3, 5]], spots(page, "fretboard", "chosen"))
+    click_drawn(page, page.locator("#pages g.fing[data-mark]").first)
+    check("and a fingering is still selected by a click", page.inner_text("#propMarkKind") == "Fingering")
+    page.keyboard.press("Escape")
+    settle(page)
+    last = page.evaluate("() => allEvents().filter(element => staffNumber(element) === 0).at(-1).id")
+    click_on(page, page.locator(f"[id='{last}']"))
+    settle(page)
+    page.keyboard.press("n")
+    settle(page)
+    page.locator('#fretboard .spot[data-string="1"][data-stop="7"]').click()
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    root = saved_score(base, score_id)
+    newest = own_notes(root)[-1]
+    check("a fret clicked at concert pitch writes the same note for the player, on that string", (newest.findtext("pitch/step"), newest.findtext("pitch/octave")) == ("D", "4") and string_and_fret(root, newest.get("id")) == ("1", "7"), (newest.findtext("pitch/step"), newest.findtext("pitch/octave"), string_and_fret(root, newest.get("id"))))
+    if shots:
+        page.screenshot(path=str(shots / "bass-concert.png"))
+    page.click("#concertPitch") if page.is_visible("#concertPitch") else menu(page, "View", "Concert pitch")
+    settle(page)
+
+
 def test_practice(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()
     page.add_init_script("""
@@ -3355,6 +3513,8 @@ def main() -> None:
             test_guitar_notation(page, base, arguments.shots, created)
             test_violin_notation(page, base, arguments.shots, created)
             test_piano_notation(page, base, arguments.shots, created)
+            test_every_technique_mark(page, base, arguments.shots, created)
+            test_techniques_at_concert_pitch(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)

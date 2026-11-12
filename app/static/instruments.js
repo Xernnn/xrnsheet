@@ -82,13 +82,18 @@ function choosePart(index, redraw = true) {
 }
 
 // The pitch a staff shows for one that sounds, and back: they differ for a transposing instrument
-// unless the score is shown at concert pitch.
+// unless the score is shown at concert pitch. The score says how far each part transposes, so a
+// note played on a bass's fretboard lands right before playback has been fetched.
+function partShift(part) {
+  return playState.data?.transpositions?.[part] ?? score?.transpositions?.[part] ?? 0;
+}
+
 function shownPitch(sounding, part) {
-  return sounding - (score?.concertPitch ? 0 : playState.data?.transpositions?.[part] ?? 0);
+  return sounding - (score?.concertPitch ? 0 : partShift(part));
 }
 
 function soundingPitch(shown, part) {
-  return shown + (score?.concertPitch ? 0 : playState.data?.transpositions?.[part] ?? 0);
+  return shown + (score?.concertPitch ? 0 : partShift(part));
 }
 
 // The key a written note is shown on: as written, or where it sounds at concert pitch.
