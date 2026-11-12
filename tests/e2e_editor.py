@@ -1950,6 +1950,68 @@ def test_mixer(page, base: str, shots: Path | None, created: list[str]) -> None:
     check("and its close button closes it", page.is_hidden("#dock"))
 
 
+def lit_keys(page, kind: str) -> list[int]:
+    return page.evaluate("kind => [...document.querySelectorAll(`#pianoKeys .key.${kind}`)].map(key => Number(key.dataset.midi))", kind)
+
+
+def test_piano_keyboard(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, bars=2, tune="cdef")
+    page.wait_for_function("() => playState.data !== null")
+    page.keyboard.press("p")
+    check("P opens the piano keyboard below the score", page.is_visible("#pianoPanel"))
+    check("with a piano's 88 keys", page.locator("#pianoKeys .key").count() == 88 and page.locator("#pianoKeys .white").count() == 52)
+    select_notes(page, 0)
+    check("the selected note's key is lit", lit_keys(page, "chosen") == [72], lit_keys(page, "chosen"))
+    select_notes(page, 0, 2)
+    check("and every key of a selected stretch", lit_keys(page, "chosen") == [72, 74, 76], lit_keys(page, "chosen"))
+    page.keyboard.press("Escape")
+    page.keyboard.press("n")
+    settle(page)
+    page.locator('#pianoKeys [data-midi="64"]').click()
+    settle(page)
+    page.keyboard.down("Shift")
+    page.locator('#pianoKeys [data-midi="67"]').click()
+    page.keyboard.up("Shift")
+    settle(page)
+    notes = [(note.findtext("pitch/step"), note.findtext("pitch/octave"), note.find("chord") is not None) for note in saved_score(base, score_id).iter("note") if note.find("pitch") is not None]
+    check("in note input a key writes its note, and Shift adds it to the chord", notes[:2] == [("E", "4", False), ("G", "4", True)], notes[:3])
+    page.keyboard.press("Escape")
+    settle(page)
+    page.keyboard.press("Escape")
+    page.click("#rewind")
+    page.click("#play")
+    page.wait_for_selector("#pianoKeys .key.sounding", timeout=4000)
+    check("keys light up as their notes play", len(lit_keys(page, "sounding")) >= 1, lit_keys(page, "sounding"))
+    if shots:
+        page.screenshot(path=str(shots / "piano.png"))
+    page.click("#play")
+    check("and go out when playback stops", lit_keys(page, "sounding") == [])
+    before = page.evaluate("() => document.querySelector('#pianoKeys .white').getBoundingClientRect().width")
+    box = page.locator("#pianoPanel").bounding_box()
+    page.mouse.move(box["x"] + 200, box["y"] + 40)
+    page.keyboard.down("Control")
+    page.mouse.wheel(0, -100)
+    page.keyboard.up("Control")
+    after = page.evaluate("() => document.querySelector('#pianoKeys .white').getBoundingClientRect().width")
+    check("Ctrl and the wheel make the keys wider", after > before, (before, after))
+    page.mouse.move(box["x"] + 200, box["y"] + 40)
+    page.keyboard.down("Control")
+    page.mouse.wheel(0, 100)
+    page.keyboard.up("Control")
+
+    written_melody(page, base, created, staff="trumpet", tune="c")
+    page.wait_for_function("() => playState.data && Object.keys(playState.data.events).length > 0")
+    page.keyboard.press("p")
+    select_notes(page, 0)
+    check("a trumpet's note lights its written key", lit_keys(page, "chosen") == [73], lit_keys(page, "chosen"))
+    page.click("#concertPitch")
+    settle(page)
+    page.wait_for_function("() => document.querySelector('#pianoKeys .key.chosen')?.dataset.midi === '71'")
+    check("and at concert pitch the key that sounds", lit_keys(page, "chosen") == [71], lit_keys(page, "chosen"))
+    page.keyboard.press("p")
+    check("P puts the keyboard away", page.is_hidden("#dock"))
+
+
 def test_midi_keyboard(context, base: str, created: list[str]) -> None:
     page = context.new_page()
     page.add_init_script("""
@@ -2264,6 +2326,7 @@ def main() -> None:
             test_pickup(page, base, created)
             test_audio_file(page, base, created)
             test_mixer(page, base, arguments.shots, created)
+            test_piano_keyboard(page, base, arguments.shots, created)
             test_midi_keyboard(context, base, created)
             test_opening_a_file(page, base, arguments.shots, created)
             test_sound_of_marks(page, base, created)

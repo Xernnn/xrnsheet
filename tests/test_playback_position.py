@@ -39,7 +39,13 @@ def test_every_note_and_rest_says_where_it_is_in_its_bar():
     written = edit.write_note(root, first, "half", 0, "C")
     edit.ensure_note_ids(root)
     events = playback(root)["events"]
-    assert events[written["written"]] == [0, 0.0, 2.0]
-    assert events[written["cursor"]] == [0, 2.0, 2.0], "the rest after it"
+    assert events[written["written"]] == [0, 0.0, 2.0, 72, 0], "its bar, place, length, written pitch and part"
+    assert events[written["cursor"]] == [0, 2.0, 2.0, None, 0], "the rest after it"
     second_bar = root.findall("part/measure")[1].find("note").get("id")
-    assert events[second_bar] == [1, 0.0, 4.0]
+    assert events[second_bar] == [1, 0.0, 4.0, None, 0]
+
+
+def test_each_part_says_how_far_it_sounds_from_how_it_is_written():
+    root = score(1, clef="trumpet")
+    structure.add_part(root, "bass-guitar")
+    assert playback(root)["transpositions"] == [-2, -12]

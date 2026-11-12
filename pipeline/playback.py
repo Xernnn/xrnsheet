@@ -521,15 +521,18 @@ def bars_played(bars: list[tuple[Context, Timeline, float]]) -> list[dict]:
 
 
 def event_places(root: ET.Element) -> dict[str, list]:
-    """Say where in its bar each note and rest is, and how long it lasts, so a stretch can be found to loop."""
+    """Say where in its bar each note and rest is, how long it lasts, its written pitch and its part.
+
+    The place finds a stretch to loop, and the pitch is the key the piano keyboard lights for it.
+    """
     found: dict[str, list] = {}
-    for part in root.findall("part"):
+    for number, part in enumerate(root.findall("part")):
         for context in contexts(part):
             for line in read_measure(context.measure, context.divisions).lines.values():
                 for event in line:
                     for note in event.notes:
                         if note.get("id"):
-                            found[note.get("id")] = [context.index, float(event.onset), float(event.length)]
+                            found[note.get("id")] = [context.index, float(event.onset), float(event.length), midi_of(note) if note.find("pitch") is not None else None, number]
     return found
 
 
@@ -569,4 +572,5 @@ def playback(root: ET.Element) -> dict:
         "programs": programs_of(root),
         "bars": bars_played(top_bars),
         "events": event_places(root),
+        "transpositions": [shifts[0] if (shifts := transposed_bars(part)) else 0 for part in parts],
     }

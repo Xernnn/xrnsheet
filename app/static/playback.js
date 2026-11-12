@@ -283,6 +283,7 @@ function playCycle(from, until, zero) {
       const element = document.getElementById(note.id);
       element?.classList.add("playing");
       element?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      if (dockOpen("piano")) player?.timers.push(soundKey(keyOfSound(data, note.midi, note.part ?? 0), at(Math.min(note.start + note.length, until)) - at(note.start)));
     }, (at(note.start) - audio.currentTime) * 1000));
   }
   if (player.cycles.length === 1) {
@@ -341,6 +342,7 @@ function stopPlaying(finished = false) {
   player.audio.close();
   player = null;
   clearPlaying();
+  quietKeys();
   showPlaying(false);
   drawPosition(playState.place);
 }
@@ -452,6 +454,7 @@ function refreshPosition() {
     if (data && !player) {
       playState.place = Math.min(playState.place, data.total);
       drawPosition(playState.place);
+      lightKeys();
     }
   }, 400);
 }

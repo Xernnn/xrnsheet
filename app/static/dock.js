@@ -1,6 +1,10 @@
 // The panels docked below the score, as MuseScore docks them, each one a tab when more than one is
-// open: the mixer (F10).
-const DOCK_PANELS = { mixer: { label: "Mixer", keys: "F10" } };
+// open: the mixer (F10) and the piano keyboard (P).
+const DOCK_PANELS = { mixer: { label: "Mixer", keys: "F10" }, piano: { label: "Piano keyboard", keys: "P" } };
+const LOWEST_KEY = 21, HIGHEST_KEY = 108; // A piano's 88 keys, A0 to C8.
+const BLACK_KEYS = new Set([1, 3, 6, 8, 10]);
+const NARROWEST_KEY = 10, WIDEST_KEY = 44; // A white key's width in pixels, which Ctrl and the wheel change.
+const PREVIEW_SECONDS = 0.4;
 const QUIETEST_DB = -60, LOUDEST_DB = 12;
 const MIXER_SAVE_MS = 300;
 const dock = { open: [], active: null };
@@ -25,6 +29,7 @@ function drawDock() {
   }));
   for (const name of Object.keys(DOCK_PANELS)) $(`${name}Panel`).hidden = !shown || name !== dock.active;
   if (shown && dock.active === "mixer") drawMixer();
+  if (shown && dock.active === "piano") drawKeyboard();
   drawCursor();
 }
 
@@ -124,6 +129,113 @@ function keepMixer(data) {
   if (mixerWaiting?.id === scoreId) data.mixer = structuredClone(mixerWaiting.settings);
 }
 
+// The piano keyboard shows the selected notes, and the notes sounding while the score plays. Its keys
+// are the pitches the staves show, which at concert pitch is how they sound, so a key clicked in note
+// input is the note it lights for, as a MIDI keyboard's key is.
+const keyboard = { width: Number(readSetting("keyWidth", "22")) || 22, sounding: new Map() };
+let keyPreview = null;
+
+function noteName(midi) {
+  return `${["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"][midi % 12]}${Math.floor(midi / 12) - 1}`;
+}
+
+// The key a written note is shown on: as written, or where it sounds at concert pitch.
+function shownKey(data, written, part) {
+  return written + (score?.concertPitch ? data.transpositions?.[part] ?? 0 : 0);
+}
+
+// And the key a sounding note is shown on, for playback.
+function keyOfSound(data, midi, part) {
+  return midi - (score?.concertPitch ? 0 : data.transpositions?.[part] ?? 0);
+}
+
+function drawKeyboard() {
+  const keys = $("pianoKeys");
+  keys.style.setProperty("--key", `${keyboard.width}px`);
+  if (!keys.childElementCount) {
+    let whites = 0;
+    for (let midi = LOWEST_KEY; midi <= HIGHEST_KEY; midi++) {
+      const key = document.createElement("button");
+      const black = BLACK_KEYS.has(midi % 12);
+      key.className = `key ${black ? "black" : "white"}`;
+      key.dataset.midi = midi;
+      key.tabIndex = -1;
+      key.setAttribute("aria-label", noteName(midi));
+      key.title = noteName(midi);
+      if (black) key.style.setProperty("--at", String(whites));
+      else key.style.setProperty("--at", String(whites++));
+      if (midi % 12 === 0) key.innerHTML = `<span>C${midi / 12 - 1}</span>`;
+      key.addEventListener("pointerdown", event => { event.preventDefault(); pressKey(midi, event.shiftKey); });
+      keys.append(key);
+    }
+    keys.style.setProperty("--whites", String(whites));
+    requestAnimationFrame(() => {
+      const middle = keys.querySelector('[data-midi="60"]');
+      $("pianoPanel").scrollLeft = middle.offsetLeft - $("pianoPanel").clientWidth / 2;
+    });
+  }
+  lightKeys();
+}
+
+// Light the keys of the selected notes, and of the notes playing.
+function lightKeys() {
+  if (!dockOpen("piano")) return;
+  const data = playState.data;
+  const chosen = new Set();
+  const ids = range ? range.ids : [actionTarget()].filter(Boolean);
+  for (const id of ids) {
+    const found = data?.events?.[id];
+    if (found && found[3] !== null) chosen.add(shownKey(data, found[3], found[4]));
+  }
+  document.querySelectorAll("#pianoKeys .key").forEach(key => {
+    const midi = Number(key.dataset.midi);
+    key.classList.toggle("chosen", chosen.has(midi));
+    key.classList.toggle("sounding", (keyboard.sounding.get(midi) ?? 0) > 0);
+  });
+}
+
+// Playback lights a key for as long as its note sounds.
+function soundKey(midi, seconds) {
+  keyboard.sounding.set(midi, (keyboard.sounding.get(midi) ?? 0) + 1);
+  lightKeys();
+  return setTimeout(() => {
+    keyboard.sounding.set(midi, Math.max(0, (keyboard.sounding.get(midi) ?? 1) - 1));
+    lightKeys();
+  }, Math.max(seconds, 0.05) * 1000);
+}
+
+function quietKeys() {
+  keyboard.sounding.clear();
+  lightKeys();
+}
+
+// A key pressed writes its note while entering notes, or adds it to the chord with Shift, as a MIDI
+// keyboard does. Otherwise it's only heard.
+function pressKey(midi, addToChord) {
+  hearKey(midi);
+  if (!editor.on) return;
+  enqueue(async () => {
+    if (addToChord && editor.last) await send(`notes/${editor.last}`, { action: "stack", midi });
+    else if (editor.cursor) await send(`notes/${editor.cursor}`, { action: "write", type: editor.type, dots: editor.dots, midi, voice: editor.voice });
+  });
+}
+
+function hearKey(midi) {
+  try {
+    keyPreview ??= new (window.AudioContext || window.webkitAudioContext)();
+    tone(keyPreview, midi, keyPreview.currentTime + 0.01, PREVIEW_SECONDS, 0.3, "triangle");
+  } catch {
+    // Without sound the key still writes its note.
+  }
+}
+
 function setUpDock() {
+  $("pianoPanel").addEventListener("wheel", event => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    keyboard.width = Math.min(WIDEST_KEY, Math.max(NARROWEST_KEY, keyboard.width + (event.deltaY < 0 ? 2 : -2)));
+    keepSetting("keyWidth", String(keyboard.width));
+    drawKeyboard();
+  }, { passive: false });
   $("dockClose").addEventListener("click", () => { if (dock.active) toggleDock(dock.active); });
 }

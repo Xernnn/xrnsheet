@@ -119,6 +119,7 @@ function updateTools() {
   $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : chosen);
   hint = "";
   drawProperties();
+  lightKeys();
 }
 
 function staffLines(staff) {
@@ -1039,6 +1040,7 @@ document.addEventListener("keydown", event => {
   if (key === " " && event.target.tagName === "BUTTON") return;
   if (PANEL_KEYS[key]) { handled(); toggleSide(PANEL_KEYS[key]); return; }
   if (key === "F10") { handled(); toggleDock("mixer"); return; }
+  if ((key === "p" || key === "P") && !event.shiftKey) { handled(); toggleDock("piano"); return; }
   if (key === "Insert") { handled(); barAction("insert"); return; }
   if (event.altKey && event.shiftKey && key.toLowerCase() === "t") { handled(); askForTempo(); return; }
   if (event.altKey && event.shiftKey && key === "ArrowUp") { handled(); noteAction("up"); return; }

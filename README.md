@@ -133,6 +133,7 @@ A score read from a photo or PDF also has the original sheet in a panel on the r
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | `F9`, `F7`, `F8` | Show or hide Palettes, Instruments, Properties |
 | `F10` | Show or hide the mixer |
+| `P` | Show or hide the piano keyboard |
 | Ctrl+`=`, Ctrl+`-`, Ctrl+`0` | Zoom in, zoom out, 100%. Ctrl and the mouse wheel also zoom |
 | Esc | Stop entering notes, clear the selection, or close a menu or box |
 | Click the staff | While entering notes, place a note there. Shift+click adds it to a chord |
@@ -152,6 +153,8 @@ An 8va line keeps the notes under it at the pitch they sound, which is how Music
 
 **Mixer.** View ▸ Mixer, or `F10`, opens MuseScore's mixer below the score, with a strip for each instrument, the chord symbols, the metronome and the master: a pan, a fader from −∞ to +12 dB, and mute and solo. Double-click a pan or fader to put it back. Playback follows it as it moves, and exported audio is mixed the same way, in stereo. The score keeps the mixer, but moving it isn't an edit to undo, as in MuseScore. MusicXML takes each instrument's volume and pan, and brings them back when it's opened, and MIDI takes them as volume and pan controllers. Mute and solo are only for listening, so no file keeps them.
 
+**Piano keyboard.** View ▸ Piano keyboard, or `P`, shows a piano's 88 keys below the score. The selected notes light up in blue, and while the score plays its notes light up in green as they sound. A key is the pitch the staff shows, so at concert pitch it's the one a transposing instrument sounds. While entering notes, clicking a key writes its note, and Shift+click adds it to the chord, as a MIDI keyboard does; otherwise a key is only heard. Ctrl and the mouse wheel over it make the keys wider or narrower.
+
 Tools ▸ Transpose moves the selection, or the whole score if nothing is selected, to a key or by an interval, and the chord symbols move with it. Format ▸ Add/remove system breaks sets how many measures go on a line.
 
 A staff can hold four voices. Choose one with the coloured buttons or Ctrl+Alt and a number, and the arrows stay in that voice. If you write a rest in an extra voice, it stays there so you can carry on, and Delete removes it.
@@ -162,7 +165,7 @@ Repeats & jumps starts or ends a repeat at the selected measure, and marks it as
 
 Click a chord symbol to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. Measures you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
 
-What MuseScore has and this editor doesn't yet: the piano keyboard, the timeline, continuous view, and page and style settings.
+What MuseScore has and this editor doesn't yet: the timeline, continuous view, and page and style settings.
 
 To recognize a sheet without the app:
 
