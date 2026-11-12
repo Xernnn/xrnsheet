@@ -168,7 +168,11 @@ async function poll() {
 }
 
 function draw() {
-  $("pages").innerHTML = score.pages.map(page => `<div class="page">${page}</div>`).join("");
+  // Each page as wide as it prints, which in a continuous view is as wide as its music.
+  $("pages").innerHTML = score.pages.map((page, index) => `<div class="page" style="width: calc(${score.pageSizes?.[index]?.[0] ?? 210}mm * var(--zoom))">${page}</div>`).join("");
+  $("viewMode").value = score.view ?? "page";
+  document.body.dataset.view = score.view ?? "page";
+  if (zoom === "width" || zoom === "page") setZoom(zoom);
   $("undo").disabled = !score.canUndo;
   $("concertPitch").setAttribute("aria-pressed", String(Boolean(score.concertPitch)));
   $("redo").disabled = !score.canRedo;

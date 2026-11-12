@@ -65,6 +65,11 @@ COMPOSER_BASELINE = 1670
 ONE_LINE_OF_TEXT = 353  # What Verovio has already left for the header.
 HEADER_ROOM = 2 + (FRAME_HEIGHT - ONE_LINE_OF_TEXT) / (STAFF_UNIT * 10)  # Under the header, in half staff spaces.
 FONT_SIZE = re.compile(r'font-size="(\d+)px"')
+SVG_SIZE = re.compile(r'<svg width="(\d+)px" height="(\d+)px"')
+SCALE = 45  # Verovio draws a page at this percent, so a millimetre of paper is 4.5 pixels of the drawing.
+VIEWS = ("page", "horizontal", "vertical")
+LONGEST_SYSTEM = 100000  # Verovio's widest page, ten metres, which a continuous view is cut down to fit.
+LONGEST_PAGE = 60000
 # A sharp or flat inside words, as in a chord symbol. Verovio sizes it for its music font, where a
 # sign is drawn small within a tall box, and the ordinary font that takes its place fills the box.
 SIGN_IN_TEXT = re.compile(r'(<tspan font-family="Noto Music" font-size=")(\d+)(px">[♭♮♯])')
@@ -334,16 +339,32 @@ def keep_spaces(svg: str) -> str:
     return PLACED_TEXT.sub(r'\1 xml:space="preserve"', svg)
 
 
-def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970) -> list[str]:
-    has_title = "<credit" in musicxml
+def page_size(svg: str) -> list[float]:
+    """Return a drawn page's width and height in millimetres, which is the size it prints at."""
+    found = SVG_SIZE.search(svg)
+    return [round(int(found.group(1)) / (SCALE / 100) / 10, 2), round(int(found.group(2)) / (SCALE / 100) / 10, 2)] if found else [210.0, 297.0]
+
+
+def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970, view: str = "page") -> list[str]:
+    """Draw a score's pages, or in a continuous view one long system across or one long page down.
+
+    MuseScore's continuous views leave out its frames, so the horizontal one has no title. The
+    vertical one is a single page as long as the music, which keeps its title at the top.
+    """
+    if view not in VIEWS:
+        raise ValueError(f"Unknown view {view}")
+    has_title = "<credit" in musicxml and view != "horizontal"
     prepared = prepare_for_drawing(musicxml)
     with RENDER_LOCK:
         toolkit = verovio.toolkit(False)  # It would look for fonts itself, and fail on a worker thread.
         toolkit.setResourcePath(RESOURCE_PATH)
+        breaks = "smart" if 'new-system="yes"' in prepared else "auto"
         toolkit.setOptions({
-            "pageWidth": page_width,
-            "pageHeight": page_height,
-            "scale": 45,
+            "pageWidth": LONGEST_SYSTEM if view == "horizontal" else page_width,
+            "pageHeight": LONGEST_PAGE if view == "vertical" else page_height,
+            "adjustPageWidth": view == "horizontal",
+            "adjustPageHeight": view != "page",
+            "scale": SCALE,
             "font": MUSIC_FONT,
             "unit": STAFF_UNIT,
             "pageMarginLeft": PAGE_MARGIN,
@@ -356,7 +377,7 @@ def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970)
             "header": "auto" if has_title else "none",
             "bottomMarginHeader": HEADER_ROOM,
             "footer": "none",
-            "breaks": "smart" if 'new-system="yes"' in prepared else "auto",
+            "breaks": "none" if view == "horizontal" else breaks,
             "breaksSmartSb": 0.0,  # A break someone asked for always counts, however short the line.
             "lyricWordSpace": LYRIC_WORD_SPACE,
             "octaveAlternativeSymbols": True,  # "8va" and "8vb", as MuseScore writes them, not a bare 8.

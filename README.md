@@ -77,7 +77,7 @@ The window is laid out like MuseScore Studio's, so what you know from there is w
 - **Menu bar:** File, Edit, View, Add, Format, Tools and Help. Help ▸ Keyboard shortcuts lists every key.
 - **Home:** your scores as pictures of their first pages, with a search box. "New" starts a blank score, "Open other…" opens a photo, PDF or MusicXML file, and "Take a photo" uses a phone's camera. You can also drop a file there.
 - **New score:** choose the instruments first, by family or by searching, then the key, time signature, tempo, number of measures, pickup, title and composer. The families and their instruments are MuseScore's common ones: woodwinds from piccolo to contrabassoon with the clarinets and saxophones, accordion, brass, pitched percussion, voices, keyboards, guitars, basses, harp, ukulele, mandolin and banjo, and the bowed strings, each with its clefs and transposition. A drum kit and other unpitched percussion aren't there yet, as the score only holds pitched notes.
-- **Score:** the note toolbar on top, a panel on the left with Palettes, Instruments and Properties, the pages at their printed size, and a status bar with the zoom.
+- **Score:** the note toolbar on top, a panel on the left with Palettes, Instruments and Properties, the pages at their printed size, and a status bar with Concert pitch, the view and the zoom.
 - **Publish:** Print, and Export to PDF, MusicXML, MIDI or audio.
 
 A score read from a photo or PDF also has the original sheet in a panel on the right, with a box round each chord it found, the chords to check, and "Mark as checked". View ▸ Original sheet hides or shows it.
@@ -89,6 +89,8 @@ A score read from a photo or PDF also has the original sheet in a panel on the r
 **Selecting.** Click a note or rest. Shift-click another to select the stretch between them, which gets a blue box. Click an empty part of a measure to select the whole measure. A stretch moves, deletes or copies as one undo step, within one voice. Click a dynamic, tempo, text, sign, slur or hairpin to select it: Delete removes it, and a double-click or `F2` changes its text. A right-click opens a menu for whatever is under the pointer.
 
 **Instruments and parts.** The Instruments panel adds and removes instruments, and a transposing instrument gets its own key: the key chosen for a new score is the one it sounds in, so a B♭ trumpet in concert C reads D major. "Parts" opens one instrument alone as a PDF.
+
+**Views.** The status bar, or the View menu, shows the score as pages, or in MuseScore's continuous views: one long system across, without the title, or one long page down. Selecting, entering notes and every key work the same in each, and the score keeps its view, which isn't an edit to undo. Printing and PDFs are always in pages. Unlike MuseScore's, the horizontal view doesn't keep the instrument names and clefs in sight as it scrolls.
 
 **Concert pitch.** The Concert pitch button in the status bar, or View ▸ Concert pitch, shows transposing instruments as they sound instead of as their players read them. An instrument written an octave from how it sounds, such as a bass guitar or a tenor saxophone, keeps its notes in place and takes a clef with an 8 below, as in MuseScore. Notes, chords and keys entered at concert pitch are the ones that sound, and the score keeps them written for the player. The choice is saved with the score and can be undone. Printing and PDFs follow it, while MusicXML is always written for the players, and MIDI and audio always sound the same. A key signature chosen for a transposing staff is the key that staff shows, and notes copied from one instrument and pasted into another sound the same.
 
@@ -165,7 +167,7 @@ Repeats & jumps starts or ends a repeat at the selected measure, and marks it as
 
 Click a chord symbol to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. Measures you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
 
-What MuseScore has and this editor doesn't yet: the timeline, continuous view, and page and style settings.
+What MuseScore has and this editor doesn't yet: the timeline, and page and style settings.
 
 To recognize a sheet without the app:
 

@@ -275,6 +275,7 @@ body.publishing #toolLabel { visibility: hidden; }
 #statusBar button.toggle { gap: 5px; padding: 2px 8px; white-space: nowrap; }
 #statusBar button.toggle svg.icon { width: 16px; height: 16px; }
 #zoomChoice { width: 84px; }
+#viewMode { max-width: 160px; }
 
 /* Small things that float: the box for a chord or a mark's words, and dialogs. */
 #editor { position: absolute; z-index: 30; display: flex; gap: 6px; padding: 8px; background: var(--popup); border: 1px solid var(--stroke); border-radius: 4px; box-shadow: 0 4px 16px var(--shadow); }
@@ -326,4 +327,5 @@ kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--stroke); borde
   .pickList { max-height: 150px; }
   #toolLabel { font-size: 12px; }
   #statusBar button.toggle > span { display: none; }
+  #viewMode { max-width: 92px; }
 }

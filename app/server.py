@@ -37,7 +37,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
 from pipeline import concert, edit, marks, mixer, structure, transpose
-from pipeline.engrave import export_pdf, glyph_script, render_pages
+from pipeline.engrave import VIEWS, export_pdf, glyph_script, page_size, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import UnreadableScore, read_score_file, to_text
@@ -283,6 +283,10 @@ class CheckedMark(BaseModel):
 
 class ConcertPitch(BaseModel):
     on: bool
+
+
+class ViewChoice(BaseModel):
+    view: str  # "page", or "horizontal" or "vertical" for MuseScore's continuous views.
 
 
 class MixerChannel(BaseModel):
@@ -552,6 +556,15 @@ def save_mixer(folder: Path, settings: dict | None, root: ET.Element) -> dict:
     return settled
 
 
+def view_of(folder: Path) -> str:
+    """Return how the score is shown: as pages, or one of MuseScore's continuous views."""
+    try:
+        found = json.loads((folder / "view.json").read_text(encoding="utf-8")).get("view")
+    except (OSError, ValueError, AttributeError):
+        return "page"
+    return found if found in VIEWS else "page"
+
+
 def describe(folder: Path, status: dict) -> dict:
     root = current_root(folder)
     edit.ensure_note_ids(root)
@@ -569,11 +582,15 @@ def describe(folder: Path, status: dict) -> dict:
             "box": found["box"] if found else None,
             "page": found["page"] if found else None,
         })
+    view = view_of(folder)
+    pages = render_pages(to_text(shown), view=view)
     return status | {
         "chords": chords,
         "canUndo": len(versions(folder)) > 1,
         "canRedo": bool(undone(folder)),
-        "pages": render_pages(to_text(shown)),
+        "pages": pages,
+        "pageSizes": [page_size(page) for page in pages],
+        "view": view,
         "sourcePages": source_pages(folder),
         "checked": (folder / "checked.json").exists(),
         "blank": not (folder / "recognized").exists(),
@@ -976,6 +993,17 @@ def redo(score_id: str) -> dict:
 def change_concert_pitch(score_id: str, body: ConcertPitch) -> dict:
     """Show the score at concert pitch or as written. It's an edit, so it can be undone, as in MuseScore."""
     return apply_edit(score_id, lambda root: concert.set_concert_pitch(root, body.on))
+
+
+@app.post("/api/scores/{score_id}/view")
+def change_view(score_id: str, body: ViewChoice) -> dict:
+    """Show the score as pages or in a continuous view. It's how the score is looked at, so it's no edit to undo."""
+    if body.view not in VIEWS:
+        raise HTTPException(422, "That isn't a view this app has.")
+    folder = job_folder(score_id)
+    with edit_lock:
+        write_whole(folder / "view.json", json.dumps({"view": body.view}))
+        return describe(folder, read_status(folder))
 
 
 @app.post("/api/scores/{score_id}/mixer")

@@ -27,6 +27,7 @@ const ICONS = {
 };
 const ZOOMS = [25, 50, 75, 100, 125, 150, 200, 300, 400];
 const PAGE_WIDTH_MM = 210, PAGE_HEIGHT_MM = 297, MM_TO_PX = 96 / 25.4;
+const VIEW_NAMES = { page: "Page view", horizontal: "Continuous view (horizontal)", vertical: "Continuous view (vertical)" };
 const DESK_PADDING_PX = 48;
 const FAMILIES = ["Woodwinds", "Free Reed", "Brass", "Percussion - Pitched", "Vocals", "Keyboards", "Strings - Plucked", "Strings - Bowed", "Plain staves"];
 const SHORTCUTS = [
@@ -266,6 +267,8 @@ function menuList() {
       null,
       { label: "Concert pitch", checked: open && Boolean(score.concertPitch), enabled: open, run: toggleConcertPitch },
       null,
+      ...Object.entries(VIEW_NAMES).map(([view, label]) => ({ label, checked: open && (score.view ?? "page") === view, enabled: open, run: () => setView(view) })),
+      null,
       { label: "Zoom in", keys: "Ctrl+=", enabled: open, run: () => stepZoom(1) },
       { label: "Zoom out", keys: "Ctrl+-", enabled: open, run: () => stepZoom(-1) },
       null,
@@ -363,11 +366,20 @@ function toggleSide(name) {
   drawCursor();
 }
 
-// Zoom. 100% draws a page at its printed size, as MuseScore does.
+// Pages as pages, or one long system across, or one long page down, as MuseScore's views are.
+function setView(view) {
+  return enqueue(() => send("view", { view }));
+}
+
+// Zoom. 100% draws a page at its printed size, as MuseScore does. In the horizontal view the one
+// system is fitted to the desk's height, as it can't be fitted across.
 function fitZoom(kind) {
   const desk = $("desk");
-  const wide = (desk.clientWidth - DESK_PADDING_PX) / (PAGE_WIDTH_MM * MM_TO_PX);
-  const tall = (desk.clientHeight - DESK_PADDING_PX) / (PAGE_HEIGHT_MM * MM_TO_PX);
+  const [width, height] = score?.pageSizes?.[0] ?? [PAGE_WIDTH_MM, PAGE_HEIGHT_MM];
+  const wide = (desk.clientWidth - DESK_PADDING_PX) / (width * MM_TO_PX);
+  const tall = (desk.clientHeight - DESK_PADDING_PX) / (height * MM_TO_PX);
+  if (score?.view === "horizontal") return Math.max(0.1, tall);
+  if (score?.view === "vertical") return Math.max(0.1, wide);
   return Math.max(0.1, kind === "width" ? wide : Math.min(wide, tall));
 }
 
@@ -622,6 +634,7 @@ function setUpShell() {
   for (const tab of document.querySelectorAll("#sideTabs button")) tab.addEventListener("click", () => showSide(tab.dataset.panel));
   $("partsButton").addEventListener("click", openParts);
   $("concertPitch").addEventListener("click", toggleConcertPitch);
+  $("viewMode").addEventListener("change", event => { setView(event.target.value); event.target.blur(); });
   $("partAdd").addEventListener("click", openAddPart);
   $("partRemove").addEventListener("click", () => enqueue(async () => {
     if (chosenPart === null) return;
