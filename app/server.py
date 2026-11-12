@@ -38,7 +38,7 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
-from pipeline import concert, edit, layout, marks, mixer, structure, transpose
+from pipeline import concert, diagrams, edit, fretted, layout, marks, mixer, structure, technique, transpose
 from pipeline.engrave import VIEWS, export_pdf, glyph_script, page_size, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
@@ -175,6 +175,7 @@ class NoteEdit(BaseModel):
     steps: int = 0
     actual: int = 3  # How many notes a tuplet holds.
     interval: int = 0  # A third is 3. Below the note if it's negative.
+    string: int | None = None  # Which string plays it, numbered from 1 for the highest.
 
 
 class GroupEdit(BaseModel):
@@ -191,6 +192,7 @@ class MarkEdit(BaseModel):
     unit: str = "quarter"
     dots: int = 0
     on: bool = True
+    number: int = 0  # A string, or a position, by its number.
 
 
 class TransposeEdit(BaseModel):
@@ -305,6 +307,16 @@ class PageLayout(BaseModel):
 
 class ViewChoice(BaseModel):
     view: str  # "page", or "horizontal" or "vertical" for MuseScore's continuous views.
+
+
+class StringsEdit(BaseModel):
+    """A fretted instrument's tuning, capo and tablature. Whatever is left out stays as it is."""
+
+    part: int = 0  # Counted from the top.
+    tuning: str | None = None  # A tuning's name, as "standard", "dropD" or "DADGAD".
+    strings: list[str] | None = None  # Or each string's sound, from the lowest string up, as ["D2", "A2", ...].
+    capo: int | None = None
+    tab: bool | None = None  # Show a tablature staff linked under the standard staff.
 
 
 class MixerChannel(BaseModel):
@@ -525,11 +537,14 @@ def open_score_file(data: bytes, suffix: str) -> dict:
     """Open a score written elsewhere. It's kept like one written here, with no photo behind it."""
     try:
         root = read_score_file(data, suffix)
+        technique.keep_cross_staff(root)  # A note drawn on the other staff stays in its own staff's voice.
         fit_divisions(root)
         edit.ensure_note_ids(root)
+        fretted.sync(root)  # A TAB staff from elsewhere is linked to its standard staff, keeping its frets.
         marks.ensure_mark_ids(root)
         structure.ensure_measure_ids(root)
         layout.keep_imported(root)  # On the page its file sets out, as MuseScore opens it.
+        diagrams.keep_imported(root)  # With its chord diagrams, if it has them.
         playback(root)
         render_pages(to_text(root))
     except (ValueError, TypeError, AttributeError, ZeroDivisionError) as error:
@@ -660,6 +675,9 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
         "mixer": mixer_of(folder, root),
         "transposing": concert.is_transposing(root),
         "notes": note_details(shown),
+        "fretted": [board.describe() if board is not None else None for board in fretted.boards(root)],
+        "fretProblems": fretted.problems(root),
+        "diagrams": diagrams.shown(root),
     } | structure.title_of(root)
 
 
@@ -681,6 +699,7 @@ def create_blank_score(body: BlankScore) -> dict:
     except edit.EditError as error:
         raise HTTPException(422, str(error)) from error
     edit.ensure_note_ids(root)
+    fretted.sync(root)
     marks.ensure_mark_ids(root)
     score_id = uuid.uuid4().hex
     folder = JOB_DIR / score_id
@@ -769,6 +788,7 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None])
             raise HTTPException(422, str(error)) from error
         edit.ensure_note_ids(root)
         marks.ensure_mark_ids(root)
+        fretted.sync(root)  # Every TAB staff shows its standard staff's notes as they now are.
         text = save_version(folder, root)
         return describe(folder, read_status(folder), text) | (extra or {})
 
@@ -807,6 +827,9 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "tie": lambda root: edit.toggle_tie(root, note_id),
         "close": lambda root: {"cursor": edit.close_gap(root, note_id)},
         "insert": lambda root: {"cursor": edit.insert_rest(root, note_id, body.type, body.dots)},
+        "string": lambda root: fretted.choose_string(root, note_id, body.string or 0),
+        "crossUp": lambda root: technique.cross_staff(root, note_id, -1),
+        "crossDown": lambda root: technique.cross_staff(root, note_id, 1),
     }
     if body.action not in actions:
         raise HTTPException(422, "Unknown note action")
@@ -829,6 +852,8 @@ GROUP_ACTIONS: dict[str, Callable[[ET.Element, str], None]] = {
     "clear": edit.clear_marks,
     "respell": edit.respell_note,
     "flip": edit.flip_stem,
+    "crossUp": lambda root, note: technique.cross_staff(root, note, -1),
+    "crossDown": lambda root, note: technique.cross_staff(root, note, 1),
 }
 
 
@@ -843,8 +868,10 @@ def change_group(score_id: str, body: GroupEdit) -> dict:
     def change(root: ET.Element) -> None:
         done = 0
         with indexed(root):  # Every chosen note is looked up, so they are found in one pass, not one search each.
+            # A note and its fret number on a TAB staff are one note, and moved once.
+            chosen = list(dict.fromkeys(edit.own_ids(root, body.notes)))
             # Respelling a note respells the notes tied to it, so a second one of those would undo it.
-            chosen = edit.one_note_per_tie(root, body.notes) if body.action == "respell" else body.notes
+            chosen = edit.one_note_per_tie(root, chosen) if body.action == "respell" else chosen
             for note_id in chosen:
                 try:
                     GROUP_ACTIONS[body.action](root, note_id)
@@ -878,6 +905,20 @@ MARK_ACTIONS: dict[str, Callable[[ET.Element, MarkEdit], dict | None]] = {
     "grace": lambda root, body: {"written": marks.add_grace(root, first_and_last(body)[0], body.on)},
     "remove": lambda root, body: marks.remove_placed(root, body.id or ""),
     "label": lambda root, body: marks.set_label(root, body.id or "", body.text),
+    # How guitarists, string players and pianists play: see docs/instrument-api.md.
+    "fingering": lambda root, body: technique.set_fingering(root, body.notes, body.text),
+    "pluck": lambda root, body: technique.set_pluck(root, body.notes, body.text or body.name),
+    "stringNumber": lambda root, body: technique.set_string_number(root, body.notes, body.number),
+    "bend": lambda root, body: technique.toggle_bend(root, body.notes, body.name),
+    "harmonic": lambda root, body: technique.toggle_harmonic(root, body.notes, body.name),
+    "deadNote": lambda root, body: technique.toggle_dead_note(root, body.notes),
+    "join": lambda root, body: technique.toggle_pair(root, *first_and_last(body), body.name),
+    "vibrato": lambda root, body: technique.toggle_vibrato(root, *first_and_last(body)),
+    "line": lambda root, body: technique.toggle_named_line(root, *first_and_last(body), body.name),
+    "sul": lambda root, body: technique.toggle_sul(root, *first_and_last(body), body.text or body.name),
+    "pizzicato": lambda root, body: technique.set_pizzicato(root, first_and_last(body)[0], body.on),
+    "position": lambda root, body: technique.set_position(root, first_and_last(body)[0], body.number),
+    "hand": lambda root, body: technique.toggle_hand(root, body.notes, body.name),
 }
 
 
@@ -886,6 +927,31 @@ def change_marks(score_id: str, body: MarkEdit) -> dict:
     if body.action not in MARK_ACTIONS:
         raise HTTPException(422, "Unknown mark")
     return apply_edit(score_id, lambda root: MARK_ACTIONS[body.action](root, body))
+
+
+@app.post("/api/scores/{score_id}/strings")
+def change_strings(score_id: str, body: StringsEdit) -> dict:
+    """Tune a fretted instrument, move its capo, or show or hide its tablature. The notes keep their sound."""
+
+    def change(root: ET.Element) -> None:
+        _, board = fretted.part_and_board(root, body.part)
+        changed = False
+        if body.tab is not None and body.tab != bool(board.tab):
+            fretted.set_tab(root, body.part, body.tab)
+            changed = True
+        if body.tuning is not None or body.strings is not None or body.capo is not None:
+            fretted.set_strings(root, body.part, body.tuning, body.strings, body.capo)
+            changed = True
+        if not changed:
+            raise edit.EditError("That's how this instrument is already set up.")
+
+    return apply_edit(score_id, change)
+
+
+@app.get("/api/tunings")
+def list_tunings() -> dict:
+    """List the tunings a guitar or a bass can be given by name, each string's sound from the lowest up."""
+    return {"guitar": {name: list(strings) for name, strings in fretted.TUNINGS[structure.GUITAR_STRINGS].items()}, "bass": {name: list(strings) for name, strings in fretted.TUNINGS[structure.BASS_STRINGS].items()}, "mostCapo": fretted.MOST_CAPO}
 
 
 @app.post("/api/scores/{score_id}/transpose")
@@ -1052,6 +1118,12 @@ def change_concert_pitch(score_id: str, body: ConcertPitch) -> dict:
     return apply_edit(score_id, lambda root: concert.set_concert_pitch(root, body.on))
 
 
+@app.post("/api/scores/{score_id}/diagrams")
+def change_diagrams(score_id: str, body: ConcertPitch) -> dict:
+    """Show chord diagrams over the chord symbols, or stop. It's an edit, so it can be undone."""
+    return apply_edit(score_id, lambda root: diagrams.set_shown(root, body.on))
+
+
 @app.post("/api/scores/{score_id}/layout")
 def change_layout(score_id: str, body: PageLayout) -> dict:
     """Set the page and its spacing, as Format ▸ Page settings and Style do. It's an edit, so it can be undone."""
@@ -1088,7 +1160,7 @@ def download_musicxml(score_id: str) -> Response:
     root = current_root(folder)
     if saved_mixer(folder) is not None:
         root = mixer.with_mixer(root, mixer_of(folder, root))
-    text = to_text(root)
+    text = to_text(technique.drawn_on_other_staves(diagrams.with_frames(root)))  # With its chord diagrams, and notes on the staff they're drawn on.
     headers = {"Content-Disposition": 'attachment; filename="score.musicxml"'}
     return Response(text, media_type="application/vnd.recordare.musicxml+xml", headers=headers)
 

@@ -627,6 +627,17 @@ def test_notes_move_back_to_the_first_voice():
     assert [note.get("id") for note in bars(root)[0].findall("note") if note.find("pitch") is not None] == ids[:4]
 
 
+def test_a_voice_of_one_note_moves_into_the_first_voice():
+    """Another program can write a second voice that's just one note, with no rests around it."""
+    second = '<note><pitch><step>E</step><octave>5</octave></pitch><duration>4</duration><voice>2</voice><type>half</type></note>'
+    root = parsed(note() * 4 + "<backup><duration>8</duration></backup>" + second)
+    edit.ensure_note_ids(root)
+    alone = root.findall(".//note")[4].get("id")
+    edit.move_to_voice(root, [alone], 1)
+    assert set(lines_of(root)) == {("1", "1")}
+    assert [item.findtext("pitch/step") for item in root.iter("note")] == ["E", "C", "C"], "the half note takes the place of two quarters"
+
+
 def test_moving_to_the_same_voice_says_so():
     root, ids = tune()
     with pytest.raises(EditError):

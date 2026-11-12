@@ -4,6 +4,7 @@ This is also where bars are checked against the time signature.
 """
 
 import copy
+import re
 import xml.etree.ElementTree as ET
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -60,6 +61,10 @@ class Instrument:
     The sound is MusicXML's name for the instrument, which other programs read to know what it is.
     A few instruments are shown at concert pitch in a clef of their own, as a baritone saxophone is
     shown in a bass clef. The rest take an octave clef there if they sound an octave away.
+
+    A string instrument has its strings' tuning, as they sound, from the bottom line of a TAB staff
+    up, which is the lowest string first except on a ukulele. A fretted one has its frets too, and a
+    "tab" clef is a tablature staff linked under its standard staff (see fretted.py).
     """
 
     label: str
@@ -72,9 +77,14 @@ class Instrument:
     family: str = "Plain staves"
     sound: str = ""
     concert_clefs: tuple[str, ...] = ()
+    strings: tuple[str, ...] = ()
+    frets: int = 0
 
 
 GRAND_STAFF = ("treble", "bass")
+TAB_CLEF = "tab"  # A tablature staff, which takes its lines from the instrument's strings.
+GUITAR_STRINGS = ("E2", "A2", "D3", "G3", "B3", "E4")
+BASS_STRINGS = ("E1", "A1", "D2", "G2")
 # MuseScore's common instruments, family by family in its order, with their clefs and transpositions.
 INSTRUMENTS = {
     "treble": Instrument("Music", hidden_name=True),
@@ -123,22 +133,29 @@ INSTRUMENTS = {
     "tenor": Instrument("Tenor", ("treble8",), program=53, family="Vocals", sound="voice.tenor"),
     "baritone": Instrument("Baritone", ("bass",), program=53, family="Vocals", sound="voice.baritone"),
     "bass-voice": Instrument("Bass", ("bass",), program=53, family="Vocals", sound="voice.bass"),
-    "guitar": Instrument("Guitar", ("treble8",), program=25, family="Strings - Plucked", sound="pluck.guitar.nylon-string"),
-    "acoustic-guitar": Instrument("Acoustic Guitar", ("treble8",), program=26, family="Strings - Plucked", sound="pluck.guitar.acoustic"),
-    "electric-guitar": Instrument("Electric Guitar", ("treble8",), program=28, family="Strings - Plucked", sound="pluck.guitar.electric"),
-    "bass-guitar": Instrument("Bass Guitar", ("bass",), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass"),
-    "electric-bass": Instrument("Electric Bass", ("bass",), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass.electric"),
+    "guitar": Instrument("Guitar", ("treble8",), program=25, family="Strings - Plucked", sound="pluck.guitar.nylon-string", strings=GUITAR_STRINGS, frets=19),
+    "guitar-tab": Instrument("Guitar", ("treble8", TAB_CLEF), program=25, family="Strings - Plucked", sound="pluck.guitar.nylon-string", strings=GUITAR_STRINGS, frets=19),
+    "acoustic-guitar": Instrument("Acoustic Guitar", ("treble8",), program=26, family="Strings - Plucked", sound="pluck.guitar.acoustic", strings=GUITAR_STRINGS, frets=20),
+    "acoustic-guitar-tab": Instrument("Acoustic Guitar", ("treble8", TAB_CLEF), program=26, family="Strings - Plucked", sound="pluck.guitar.acoustic", strings=GUITAR_STRINGS, frets=20),
+    "electric-guitar": Instrument("Electric Guitar", ("treble8",), program=28, family="Strings - Plucked", sound="pluck.guitar.electric", strings=GUITAR_STRINGS, frets=24),
+    "electric-guitar-tab": Instrument("Electric Guitar", ("treble8", TAB_CLEF), program=28, family="Strings - Plucked", sound="pluck.guitar.electric", strings=GUITAR_STRINGS, frets=24),
+    "bass-guitar": Instrument("Bass Guitar", ("bass",), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass", strings=BASS_STRINGS, frets=20),
+    "bass-guitar-tab": Instrument("Bass Guitar", ("bass", TAB_CLEF), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass", strings=BASS_STRINGS, frets=20),
+    "electric-bass": Instrument("Electric Bass", ("bass",), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass.electric", strings=BASS_STRINGS, frets=24),
     "harp": Instrument("Harp", GRAND_STAFF, program=47, family="Strings - Plucked", sound="pluck.harp"),
-    "ukulele": Instrument("Ukulele", program=25, family="Strings - Plucked", sound="pluck.ukulele"),
-    "mandolin": Instrument("Mandolin", program=26, family="Strings - Plucked", sound="pluck.mandolin"),
-    "banjo": Instrument("Banjo", ("treble8",), program=106, family="Strings - Plucked", sound="pluck.banjo"),
-    "violin": Instrument("Violin", program=41, family="Strings - Bowed", sound="strings.violin"),
-    "viola": Instrument("Viola", ("alto",), program=42, family="Strings - Bowed", sound="strings.viola"),
-    "cello": Instrument("Cello", ("bass",), program=43, family="Strings - Bowed", sound="strings.cello"),
-    "double-bass": Instrument("Double Bass", ("bass",), octaves=-1, program=44, family="Strings - Bowed", sound="strings.contrabass"),
+    "ukulele": Instrument("Ukulele", program=25, family="Strings - Plucked", sound="pluck.ukulele", strings=("G4", "C4", "E4", "A4"), frets=15),
+    "mandolin": Instrument("Mandolin", program=26, family="Strings - Plucked", sound="pluck.mandolin", strings=("G3", "D4", "A4", "E5"), frets=17),
+    "banjo": Instrument("Banjo", ("treble8",), program=106, family="Strings - Plucked", sound="pluck.banjo", strings=("G4", "D3", "G3", "B3", "D4"), frets=22),
+    "violin": Instrument("Violin", program=41, family="Strings - Bowed", sound="strings.violin", strings=("G3", "D4", "A4", "E5")),
+    "viola": Instrument("Viola", ("alto",), program=42, family="Strings - Bowed", sound="strings.viola", strings=("C3", "G3", "D4", "A4")),
+    "cello": Instrument("Cello", ("bass",), program=43, family="Strings - Bowed", sound="strings.cello", strings=("C2", "G2", "D3", "A3")),
+    "double-bass": Instrument("Double Bass", ("bass",), octaves=-1, program=44, family="Strings - Bowed", sound="strings.contrabass", strings=("E1", "A1", "D2", "G2")),
 }
 # The names a plain staff goes by where instruments are chosen, as "Music" says nothing there.
-STAFF_NAMES = {"treble": "Treble staff", "bass": "Bass staff"}
+STAFF_NAMES = {
+    "treble": "Treble staff", "bass": "Bass staff", "guitar-tab": "Guitar + tablature", "acoustic-guitar-tab": "Acoustic Guitar + tablature",
+    "electric-guitar-tab": "Electric Guitar + tablature", "bass-guitar-tab": "Bass Guitar + tablature",
+}
 BARLINE_ORDER = ["bar-style", "footnote", "level", "wavy-line", "segno", "coda", "fermata", "ending", "repeat"]
 # A time signature can be drawn as a sign instead of numbers: C for 4/4 and a struck-through C for 2/2.
 TIME_SYMBOLS = {"common": (4, 4), "cut": (2, 2)}
@@ -408,8 +425,8 @@ def reread_notes(context: Context, tied: dict[tuple[str, str, str], str | None])
 
 
 def write_clef(clef: ET.Element, name: str) -> None:
-    """Fill in a clef element as one of the clefs this app knows."""
-    sign, line, shift = CLEF_SHAPES[name]
+    """Fill in a clef element as one of the clefs this app knows, or as a tablature staff's TAB."""
+    sign, line, shift = ("TAB", "5", 0) if name == TAB_CLEF else CLEF_SHAPES[name]
     ET.SubElement(clef, "sign").text = sign
     if line:
         ET.SubElement(clef, "line").text = line
@@ -418,13 +435,18 @@ def write_clef(clef: ET.Element, name: str) -> None:
 
 
 def set_clef(root: ET.Element, index: int, part_number: int, staff: str, name: str) -> None:
-    """Change a staff's clef from this bar on. Notes keep their pitch, so they move on the staff."""
+    """Change a staff's clef from this bar on. Notes keep their pitch, so they move on the staff.
+
+    A tablature staff's clef isn't one to change: its lines are strings, not pitches.
+    """
     if name not in CLEF_SHAPES:
         raise EditError("That isn't a clef this app knows.")
     parts = root.findall("part")
     known = list(contexts(parts[part_number]))
     if not 0 <= index < len(known):
         raise EditError(f"No bar number {index + 1}")
+    if known[index].clefs.get(staff) == "TAB":
+        raise EditError("A tablature staff keeps its TAB clef.")
     measure = known[index].measure
     for attributes in measure.findall("attributes"):
         for found in attributes.findall("clef"):
@@ -722,8 +744,37 @@ def set_title(root: ET.Element, title: str, composer: str) -> None:
         root.insert(position + (offset if title else 0), credit)
 
 
+def pitch_of_name(name: str) -> tuple[str, int, int]:
+    """Read a pitch written as "E2", "F#3" or "Bb3": its letter, its sharps or flats and its octave."""
+    found = re.fullmatch(r"([A-Ga-g])(#{1,2}|b{1,2}|♯|♭)?(-?\d)", name.strip())
+    if found is None:
+        raise EditError(f"{name!r} isn't a note such as E2, F#3 or Bb3.")
+    sign = found.group(2) or ""
+    alter = {"#": 1, "##": 2, "♯": 1, "b": -1, "bb": -2, "♭": -1}.get(sign, 0)
+    return found.group(1).upper(), alter, int(found.group(3))
+
+
+def string_details(staff: str | None, strings: tuple[str, ...], capo: int = 0, lines: int | None = None) -> ET.Element:
+    """Say how a string instrument is tuned, as MusicXML's <staff-details> does: string by string from the bottom line up."""
+    details = ET.Element("staff-details", {"number": staff} if staff else {})
+    ET.SubElement(details, "staff-lines").text = str(len(strings) if lines is None else lines)
+    for line, name in enumerate(strings, start=1):
+        step, alter, octave = pitch_of_name(name)
+        tuning = ET.SubElement(details, "staff-tuning", line=str(line))
+        ET.SubElement(tuning, "tuning-step").text = step
+        if alter:
+            ET.SubElement(tuning, "tuning-alter").text = str(alter)
+        ET.SubElement(tuning, "tuning-octave").text = str(octave)
+    if capo:
+        ET.SubElement(details, "capo").text = str(capo)
+    return details
+
+
 def part_attributes(instrument: Instrument, divisions: int, fifths: int, beats: int, beat_type: int, symbol: str = "") -> ET.Element:
-    """Make the opening of a part: what it counts in, its key and time, and its clefs."""
+    """Make the opening of a part: what it counts in, its key and time, and its clefs.
+
+    A tablature staff has as many lines as the instrument has strings, and says how they're tuned.
+    """
     attributes = ET.Element("attributes")
     ET.SubElement(attributes, "divisions").text = str(divisions)
     ET.SubElement(ET.SubElement(attributes, "key"), "fifths").text = str(fifths)
@@ -733,6 +784,9 @@ def part_attributes(instrument: Instrument, divisions: int, fifths: int, beats: 
         ET.SubElement(attributes, "staves").text = str(staves)
     for number, name in enumerate(instrument.clefs, start=1):
         write_clef(ET.SubElement(attributes, "clef", number=str(number)) if staves > 1 else ET.SubElement(attributes, "clef"), name)
+    for number, name in enumerate(instrument.clefs, start=1):
+        if name == TAB_CLEF:
+            attributes.append(string_details(str(number), instrument.strings))
     if instrument.steps or instrument.semitones or instrument.octaves:
         transpose = ET.SubElement(attributes, "transpose")
         ET.SubElement(transpose, "diatonic").text = str(instrument.steps)

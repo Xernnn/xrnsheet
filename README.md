@@ -211,6 +211,32 @@ To recognize a sheet without the app:
 .venv/bin/python -m pipeline.recognize photo.jpg --out results/photo
 ```
 
+## Guitar, violin and piano notation
+
+What a score can hold for these players, all of it stored as MusicXML, so it opens in MuseScore and
+other programs. [docs/instrument-api.md](docs/instrument-api.md) lists the server's endpoints.
+
+- **Guitar and bass tablature.** "Guitar + tablature" and the acoustic, electric and bass versions
+  have a TAB staff under the standard staff, as in MuseScore. Every note on the TAB staff is
+  played by a string and fret, chosen as a player would (open strings low on the neck, near where
+  the hand already is, a chord on strings of its own) or set per note. Tunings: standard, drop D,
+  DADGAD, open G, open D, half a step down, or any other, and a capo from the 1st to the 12th
+  fret. A new tuning or capo keeps the notes' sound and moves their frets. Notes no string can play
+  are listed, and left off the tablature.
+- **Chord diagrams** over the chord symbols, which a score shows or doesn't: the open and barre
+  shapes guitarists learn, worked out for other chords and tunings, and fingered from the capo.
+  MusicXML files carry them as `<frame>`s.
+- **Guitar techniques:** hammer-ons and pull-offs with their H and P, slides and glissandos, bends
+  of ½, full or 1½ tones, vibrato, palm mute and let ring lines, natural and artificial harmonics,
+  dead notes, right-hand p-i-m-a, left-hand fingers 0 to 4 and string numbers in circles. They show
+  on the tablature too, and playback plays them.
+- **Violin:** up- and down-bows, strings as Roman numerals or "sul G", fingers 0 to 4, positions
+  ("III pos."), "pizz." and "arco", which playback follows, harmonics and open strings.
+- **Piano:** fingers 1 to 5, above the right hand and below the left, typed one note after another,
+  R.H. and L.H., and notes drawn on the other staff for the other hand, which stay in their own
+  staff's voice and are saved as MusicXML has them.
+- **Playback** says which part and staff each note is on, so one hand of a piano can be heard alone.
+
 ## Train the chord reader
 
 ```sh
