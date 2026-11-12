@@ -209,3 +209,78 @@ def test_the_composer_is_lifted_clear_of_the_first_diagrams():
     baselines = [int(found) for found in re.findall(r' y="(\d+)"', head[: head.find("</g>")])]
     tops = [int(found) for found in re.findall(r'class="xrn-diagram"><path d="M-?\d+ (-?\d+)', svg)]
     assert baselines and tops and max(baselines) < min(tops), (composer, baselines, tops)
+
+
+def test_a_chord_can_be_played_with_any_of_its_shapes():
+    shapes = diagrams.shapes_for("C")
+    assert shapes[0] == Shape(OPEN["C"]), "the open shape first"
+    assert Shape((None, 3, 5, 5, 5, 3)) in shapes and Shape((8, 10, 10, 9, 8, 8)) in shapes, "the barre chords on the A and the low E strings"
+    assert all(plays(shape, parse_chord("C")) for shape in shapes) and len(set(shapes)) == len(shapes)
+    assert all(min(shape.fretted, default=0) <= min(later.fretted, default=0) for shape, later in zip(shapes, shapes[1:])), "low on the neck first"
+    assert all(fret is None or fret <= 19 - 5 for shape in diagrams.shapes_for("D", capo=5) for fret in shape.frets), "within the frets left above a capo"
+
+
+def shown_diagram(client, url, index=0):
+    return client.get(url).json()["chords"][index]["diagram"]
+
+
+def test_a_chord_is_given_a_shape_of_its_own_and_its_usual_one_back(client):
+    opened = client.post("/api/scores", files={"file": ("chart.musicxml", io.BytesIO(to_text(chart("C", "G")).encode()))}).json()
+    url = f"/api/scores/{opened['id']}"
+    client.post(f"{url}/diagrams", json={"on": True})
+    assert shown_diagram(client, url) == {"frets": [None, 3, 2, 0, 1, 0], "barre": None, "first": 1, "custom": False}
+    offered = client.get(f"{url}/chords/0/shapes").json()
+    assert offered["strings"] == list(GUITAR_STRINGS) and offered["frets"] == 19 and {"frets": [None, 3, 5, 5, 5, 3], "barre": [3, 1, 5], "first": 3, "custom": False} in offered["shapes"]
+    barred = client.post(f"{url}/chords/0/frame", json={"frets": [None, 3, 5, 5, 5, 3], "barre": [3, 1, 5]}).json()
+    assert barred["chords"][0]["diagram"] == {"frets": [None, 3, 5, 5, 5, 3], "barre": [3, 1, 5], "first": 3, "custom": True}
+    assert "3fr" in barred["pages"][0] and client.get(f"{url}/score.musicxml").text.count("<barre") == 2, "drawn, and a file keeps it with its barre"
+    own = client.post(f"{url}/chords/0/frame", json={"frets": [None, 3, 2, 0, 1, 3]}).json()
+    assert own["chords"][0]["diagram"]["frets"] == [None, 3, 2, 0, 1, 3] and own["chords"][0]["diagram"]["custom"]
+    client.post(f"{url}/undo")
+    assert shown_diagram(client, url)["frets"] == [None, 3, 5, 5, 5, 3], "undone like any edit"
+    usual = client.post(f"{url}/chords/0/frame", json={"frets": None}).json()
+    assert usual["chords"][0]["diagram"]["custom"] is False
+    same = client.post(f"{url}/chords/0/frame", json={"frets": [None, 3, 2, 0, 1, 0]}).json()
+    assert same["chords"][0]["diagram"]["custom"] is False, "the usual shape chosen needs no frame of its own"
+    for wrong in ({"frets": [3, 2, 0, 1, 0]}, {"frets": [None] * 6}, {"frets": [None, 3, 2, 0, 1, 20]}, {"frets": [None, 3, 2, 0, 1, 0], "barre": [1, 3, 5]}):
+        assert client.post(f"{url}/chords/0/frame", json=wrong).status_code == 422
+
+
+def frame_frets(root, index=0):
+    found = edit.harmony_at(root, index)[1].find("frame")
+    return diagrams.shape_of_frame(found).frets if found is not None else None
+
+
+def test_a_chosen_shape_keeps_its_sound_through_a_capo_or_a_tuning_where_it_fits():
+    root = chart("D", "C")
+    diagrams.set_shown(root, True)
+    diagrams.set_frame(root, 0, [None, 5, 7, 7, 7, 5])  # D, barred at the fifth fret.
+    diagrams.set_frame(root, 1, [None, 3, 2, 0, 1, 0])
+    diagrams.set_frame(root, 1, [None, 3, 2, 0, 1, 3])
+    before = diagrams.board_for(root)
+    fretted.set_strings(root, 0, capo=2)
+    diagrams.refit(root, before)
+    assert frame_frets(root, 0) == (None, 3, 5, 5, 5, 3), "two frets nearer the capo, the same sound"
+    assert frame_frets(root, 1) is None, "an open string under the capo can't sound below it, so the usual shape it is"
+    before = diagrams.board_for(root)
+    fretted.set_strings(root, 0, "dropD")
+    diagrams.refit(root, before)
+    assert frame_frets(root, 0) == (None, 3, 5, 5, 5, 3), "the low string isn't played, so drop D changes nothing"
+
+
+def test_a_transposed_chord_takes_its_usual_shape():
+    from pipeline import transpose
+
+    root = chart("C")
+    diagrams.set_shown(root, True)
+    diagrams.set_frame(root, 0, [None, 3, 5, 5, 5, 3])
+    transpose.transpose_score(root, transpose.named_interval("M2", "up"))
+    assert frame_frets(root) is None and diagrams.chord_diagrams(root)[0]["frets"] == [None, None, 0, 2, 3, 2]
+
+
+def test_a_file_has_no_frames_while_diagrams_are_off():
+    root = chart("C")
+    diagrams.set_shown(root, True)
+    diagrams.set_frame(root, 0, [None, 3, 5, 5, 5, 3])
+    diagrams.set_shown(root, False)
+    assert next(diagrams.with_frames(root).iter("harmony")).find("frame") is None

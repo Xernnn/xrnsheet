@@ -315,6 +315,7 @@ function select(id) {
   document.querySelectorAll("#pages g.selected").forEach(element => element.classList.remove("selected"));
   range = null;
   selectedMark = null;
+  selectedChord = null;
   selected = id;
   const element = id && document.getElementById(id);
   if (element) markSelected(element);
@@ -424,6 +425,9 @@ function clickPages(event) {
   const chord = event.target.closest("g.harm") || nearest("#pages g.harm", event.clientX, event.clientY, 6);
   if (chord && chord.dataset.index !== undefined) {
     const index = Number(chord.dataset.index);
+    // The chord is selected too, and the inspector shows its diagram to change.
+    select(null);
+    chooseChord(index);
     openEditor(chord.getBoundingClientRect(), index, score.chords[index].text);
     return;
   }

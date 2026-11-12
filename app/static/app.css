@@ -509,3 +509,13 @@ body[data-mode="read"] #pages { gap: 16px; justify-content: center; }
 @media (min-width: 761px) {
   #modeSwitch > button svg.icon { display: none; }
 }
+
+/* A chord's diagram in the inspector, to click, and the other shapes it can be played with. */
+#chordDiagramTools { display: grid; gap: 10px; }
+#chordDiagram svg { display: block; margin: 4px auto 0; color: var(--ink); }
+#chordDiagram [data-string] { cursor: pointer; fill: transparent; }
+#chordDiagram [data-string]:hover { fill: var(--accent-soft); }
+#chordShapes { display: flex; flex-wrap: wrap; gap: 6px; }
+#chordShapes button { padding: 4px 5px; color: var(--ink); }
+#chordShapes button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+#chordShapes svg { display: block; }

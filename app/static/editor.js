@@ -125,7 +125,9 @@ function updateTools() {
   $("caret").dataset.voice = editor.voice;
   const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : tabSelected() ? "Selected on the tablature. Type a fret, Ctrl+↑ ↓ for another string, or Shift and a digit for a length." : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
   const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
-  const chosen = mark ? `${markName(mark)}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : selection;
+  const said = mark?.text ? `: ${mark.text}`.replace(/\.$/, "") : "";
+  const chord = selectedChord !== null && score?.chords?.[selectedChord];
+  const chosen = mark ? `${markName(mark)}${said}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : chord ? `Chord ${chord.text}. Type another, or change how it's played in the inspector.` : selection;
   const practising = currentMode() === "practice" ? "Space plays from the selected note. A and B set the loop's ends there, and Hear and Wait for choose a part or a hand." : null;
   const entering = tabInput() ? "Note input on the tablature. Type a fret for the string the cursor is on, ↑ ↓ for another string, Shift and a digit for a length, or click a string." : "Note input. Press A to G, 0 for a rest, or click the staff.";
   $("toolLabel").textContent = hint || (editor.on ? entering : practising ?? chosen);

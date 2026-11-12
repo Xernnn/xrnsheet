@@ -1453,13 +1453,18 @@ def require_chord(text: str):
     return chord
 
 
-def harmony_at(root: ET.Element, index: int) -> tuple[ET.Element, ET.Element]:
+def harmonies_in_order(root: ET.Element) -> list[tuple[ET.Element, ET.Element]]:
+    """Every chord symbol with its measure, in the order list_chords numbers them."""
     placed = []
     for part_number, part in enumerate(root.findall("part")):
         for measure_index, measure in enumerate(part.findall("measure")):
             placed.extend((measure_index, part_number, measure, harmony) for harmony in measure.findall("harmony"))
     placed.sort(key=lambda item: item[:2])
-    harmonies = [item[2:] for item in placed]
+    return [item[2:] for item in placed]
+
+
+def harmony_at(root: ET.Element, index: int) -> tuple[ET.Element, ET.Element]:
+    harmonies = harmonies_in_order(root)
     if not 0 <= index < len(harmonies):
         raise EditError(f"No chord number {index}")
     return harmonies[index]

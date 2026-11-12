@@ -164,6 +164,15 @@ class ChordAdd(BaseModel):
     text: str
 
 
+class ChordFrame(BaseModel):
+    """A chord diagram of its own: each string's fret from the lowest string up, counted from the capo,
+    0 for open and null for not played, and a barre as its fret and the strings it lies across,
+    counted from the lowest from 0. No frets gives the chord its usual shape again."""
+
+    frets: list[int | None] | None = None
+    barre: list[int] | None = None
+
+
 class NoteEdit(BaseModel):
     action: str
     type: str = "quarter"
@@ -655,6 +664,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
     for item in read_chord_file(folder):
         read_info.setdefault((item["measure"], round(float(item["onset"]), 3)), item)  # Only the first was placed.
     chords = []
+    shapes = diagrams.chord_diagrams(shown)
     for chord in edit.list_chords(shown):
         found = read_info.get((chord["origin"], chord["onset"])) if chord["part"] == 0 else None
         unchanged = found is not None and found["chord"] == chord["text"]
@@ -662,6 +672,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
             "confidence": found["confidence"] if unchanged else None,
             "box": found["box"] if found else None,
             "page": found["page"] if found else None,
+            "diagram": shapes[chord["index"]] if chord["index"] < len(shapes) else None,
         })
     view = view_of(folder)
     pages = list(drawn_pages(text if text is not None and shown is root else to_text(shown), view))
@@ -988,6 +999,7 @@ def change_strings(score_id: str, body: StringsEdit) -> dict:
 
     def change(root: ET.Element) -> None:
         _, board = fretted.part_and_board(root, body.part)
+        shown_for = diagrams.board_for(root)  # The chord diagrams' guitar, before it changes.
         changed = False
         if body.tab is not None and body.tab != bool(board.tab):
             fretted.set_tab(root, body.part, body.tab)
@@ -997,6 +1009,7 @@ def change_strings(score_id: str, body: StringsEdit) -> dict:
             changed = True
         if not changed:
             raise edit.EditError("That's how this instrument is already set up.")
+        diagrams.refit(root, shown_for)
 
     return apply_edit(score_id, change)
 
@@ -1144,6 +1157,22 @@ def change_bars(score_id: str, body: BarEdit) -> dict:
 @app.post("/api/scores/{score_id}/chords/{index}")
 def change_chord(score_id: str, index: int, body: ChordEdit) -> dict:
     return apply_edit(score_id, lambda root: edit.set_chord(root, index, body.text))
+
+
+@app.post("/api/scores/{score_id}/chords/{index}/frame")
+def change_chord_frame(score_id: str, index: int, body: ChordFrame) -> dict:
+    """Give a chord symbol a diagram of its own, or its usual one again. It's an edit, so it can be undone."""
+    return apply_edit(score_id, lambda root: diagrams.set_frame(root, index, body.frets, body.barre))
+
+
+@app.get("/api/scores/{score_id}/chords/{index}/shapes")
+def chord_shapes(score_id: str, index: int) -> dict:
+    """List the shapes a chord can be played with, for choosing its diagram. Nothing is changed."""
+    root = current_root(job_folder(score_id))
+    try:
+        return diagrams.chord_shapes(concert.shown(root), index)
+    except edit.EditError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 @app.post("/api/scores/{score_id}/chords")

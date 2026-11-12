@@ -147,9 +147,30 @@ They're drawn into the page SVG inside each chord symbol's `g.harm`, as `g.xrn-d
 click on a diagram is a click on its chord. Each system gets room above it for them, chords close
 together on a line get smaller diagrams, and the composer's line moves up out of their way.
 
-A downloaded MusicXML file has each chord's diagram as its `<harmony><frame>`. A file opened with
-`<frame>`s turns diagrams on; a frame that isn't the library's shape (someone's own fingering) is
-kept and drawn as it is.
+A downloaded MusicXML file has each chord's diagram as its `<harmony><frame>`, and none while
+diagrams are off. A file opened with `<frame>`s turns diagrams on; a frame that isn't the library's
+shape (someone's own fingering) is kept and drawn as it is.
+
+### Choosing a chord's shape
+
+While diagrams are shown, each entry of `chords` in `GET /api/scores/{id}` has its `diagram`:
+`{"frets": [null, 3, 2, 0, 1, 0], "barre": null, "first": 1, "custom": false}`, each string's fret
+from the lowest string up, counted from the capo (0 open, `null` not played), the barre as `[fret,
+lowest string, highest string]` counted from the lowest from 0, the fret the diagram starts at, and
+whether it's a shape of the chord's own.
+
+- `GET /api/scores/{id}/chords/{index}/shapes` lists the shapes the chord can be played with, low on
+  the neck first, as `{"chord": "C", "strings": [...], "capo": 0, "frets": 19, "current": {...},
+  "shapes": [{...}, ...]}` (`frets` is how many there are above the capo). Nothing is changed.
+- `POST /api/scores/{id}/chords/{index}/frame` with `{"frets": [null, 3, 5, 5, 5, 3], "barre": [3, 1,
+  5]}` gives the chord that shape, kept as its `<frame>` with its barre; `{"frets": null}` gives it
+  its usual shape again, and so does the usual shape sent as frets. It's an edit, so it can be undone.
+  Refused (422) for the wrong number of strings, no string played, a fret past the last, or a barre
+  that doesn't lie across strings fretted at its fret.
+
+A new tuning or capo (`/strings`) keeps each chosen shape's sound where the strings can still play
+it, moving its frets, and otherwise the chord takes its usual shape. A transposed chord takes its
+usual shape too, and a retyped one is a new chord.
 
 ## Techniques and markings: `POST /api/scores/{id}/marks`
 

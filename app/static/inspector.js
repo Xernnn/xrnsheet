@@ -39,7 +39,7 @@ function toggleInspector(pane = null) {
 
 function shownPane() {
   const target = score ? actionTarget() : null;
-  if (inspector.pane === "score" || (!target && !selectedMark)) return "score";
+  if (inspector.pane === "score" || (!target && !selectedMark && selectedChord === null)) return "score";
   return "selection";
 }
 
@@ -207,10 +207,12 @@ function drawInspector() {
   const target = score ? actionTarget() : null;
   const element = target && document.getElementById(target);
   const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
-  $("inspectorTabs").querySelector('[data-pane="selection"]').disabled = !element && !mark;
+  if (selectedChord !== null && (element || mark || !score?.chords?.[selectedChord])) selectedChord = null;
+  $("inspectorTabs").querySelector('[data-pane="selection"]').disabled = !element && !mark && selectedChord === null;
   $("propScore").hidden = pane !== "score";
   $("propMark").hidden = pane !== "selection" || !mark;
   $("propNote").hidden = $("propMeasure").hidden = pane !== "selection" || !element;
+  drawChordPane();
   if (mark && pane === "selection") {
     $("propMarkKind").textContent = markName(mark);
     $("propMarkText").textContent = mark.text ? `“${mark.text}”` : "";

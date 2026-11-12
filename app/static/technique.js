@@ -411,4 +411,138 @@ function setUpTechnique() {
   $("capoChoice").addEventListener("change", event => { event.target.blur(); setStrings({ capo: Number(event.target.value) }); });
   $("tabSwitch").addEventListener("click", () => switchTab(Number($("partSettings").dataset.part)));
   $("diagramsSwitch").addEventListener("click", switchDiagrams);
+  setUpChordPane();
+}
+
+// A chord symbol's diagram in the inspector: chosen from the other shapes the chord has, or set by
+// clicking a string at a fret for a finger, above the nut for an open or unplayed string, and a
+// barre. Each change is an edit the score keeps as the chord's <frame>.
+const DIAGRAM_ROWS = 5;
+const chordPane = { index: null, first: null, shapes: null, asked: "" };
+let selectedChord = null; // The chord symbol selected, by its index in score.chords.
+
+function chooseChord(index) {
+  selectedChord = index;
+  chordPane.first = null;
+  drawInspector();
+}
+
+// A diagram as an SVG: strings across, frets down from `first`, with dots, a barre and the marks
+// above the nut. With `clickable`, each place is a target that says its string and fret.
+function diagramSvg(diagram, count, { gap = 26, rows = DIAGRAM_ROWS, first = diagram?.first ?? 1, clickable = false } = {}) {
+  const fretGap = gap * 1.15, left = gap * 0.9, top = gap * 1.2, right = first > 1 ? gap * 1.2 : 0;
+  const width = left * 2 + gap * (count - 1) + right, height = top + fretGap * rows + gap * 0.5;
+  const frets = diagram?.frets ?? Array(count).fill(null);
+  const parts = [];
+  for (let string = 0; string < count; string++) parts.push(`<path d="M${left + string * gap} ${top}V${top + fretGap * rows}" stroke="currentColor" stroke-width="1"/>`);
+  for (let row = 0; row <= rows; row++) parts.push(`<path d="M${left}  ${top + row * fretGap}H${left + gap * (count - 1)}" stroke="currentColor" stroke-width="${row === 0 && first === 1 ? 3.5 : 1}"/>`);
+  if (first > 1) parts.push(`<text x="${left + gap * (count - 1) + gap * 0.3}" y="${top + fretGap * 0.75}" font-size="${Math.max(gap * 0.45, 8)}" fill="currentColor">${first}${gap >= 20 ? "fr" : ""}</text>`);
+  const barre = diagram?.barre;
+  if (barre && barre[0] >= first && barre[0] < first + rows) {
+    const y = top + (barre[0] - first + 0.5) * fretGap;
+    parts.push(`<path d="M${left + barre[1] * gap} ${y}H${left + barre[2] * gap}" stroke="currentColor" stroke-width="${gap * 0.6}" stroke-linecap="round"/>`);
+  }
+  frets.forEach((fret, string) => {
+    const x = left + string * gap, above = top - gap * 0.55, mark = gap * 0.22;
+    if (fret === null) parts.push(`<path d="M${x - mark} ${above - mark}L${x + mark} ${above + mark}M${x - mark} ${above + mark}L${x + mark} ${above - mark}" stroke="currentColor" stroke-width="1.3"/>`);
+    else if (fret === 0) parts.push(`<circle cx="${x}" cy="${above}" r="${mark}" fill="none" stroke="currentColor" stroke-width="1.3"/>`);
+    else if (fret >= first && fret < first + rows && !(barre && fret === barre[0] && string >= barre[1] && string <= barre[2])) parts.push(`<circle cx="${x}" cy="${top + (fret - first + 0.5) * fretGap}" r="${gap * 0.3}" fill="currentColor"/>`);
+  });
+  if (clickable) {
+    for (let string = 0; string < count; string++) {
+      const x = left + string * gap - gap / 2;
+      parts.push(`<rect data-string="${string}" data-fret="nut" x="${x}" y="0" width="${gap}" height="${top}"><title>String ${count - string}: open or not played</title></rect>`);
+      for (let row = 0; row < rows; row++) parts.push(`<rect data-string="${string}" data-fret="${first + row}" x="${x}" y="${top + row * fretGap}" width="${gap}" height="${fretGap}"><title>String ${count - string}, fret ${first + row}</title></rect>`);
+    }
+  }
+  return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="${!clickable}">${parts.join("")}</svg>`;
+}
+
+function sendFrame(body) {
+  const index = selectedChord;
+  return enqueue(() => send(`chords/${index}/frame`, body));
+}
+
+// A click on the diagram: a finger at a fret, or the same place again for an open string, and above
+// the nut an open string or, again, one not played.
+function clickDiagram(event) {
+  const target = event.target.closest("[data-string]");
+  const diagram = score?.chords?.[selectedChord]?.diagram;
+  if (!target || !diagram) return;
+  const frets = [...diagram.frets];
+  const string = Number(target.dataset.string);
+  if (target.dataset.fret === "nut") frets[string] = frets[string] === 0 ? null : 0;
+  else frets[string] = frets[string] === Number(target.dataset.fret) ? 0 : Number(target.dataset.fret);
+  const barre = diagram.barre && frets[diagram.barre[1]] === diagram.barre[0] && frets[diagram.barre[2]] === diagram.barre[0] && frets.slice(diagram.barre[1], diagram.barre[2] + 1).every(fret => fret !== null && fret >= diagram.barre[0]) ? diagram.barre : null;
+  if (frets.every(fret => fret === null)) { message("A diagram needs a string to play."); return; }
+  sendFrame({ frets, barre: diagram.custom ? barre : null });
+}
+
+// The first finger across the strings at the lowest fret, from the first string fretted there to the last.
+function toggleBarre() {
+  const diagram = score?.chords?.[selectedChord]?.diagram;
+  if (!diagram) return;
+  if (diagram.barre) { sendFrame({ frets: diagram.frets, barre: null }); return; }
+  const fretted = diagram.frets.filter(fret => fret);
+  const low = Math.min(...fretted);
+  const on = diagram.frets.flatMap((fret, string) => (fret === low ? [string] : []));
+  if (on.length < 2 || diagram.frets.slice(on[0], on.at(-1) + 1).some(fret => fret === null || fret < low)) {
+    message("A barre needs two strings at its fret, with every string between them fretted there or higher.");
+    return;
+  }
+  sendFrame({ frets: diagram.frets, barre: [low, on[0], on.at(-1)] });
+}
+
+async function loadShapes(index) {
+  const asked = `${scoreId}:${index}:${score.chords[index]?.text}:${(score.fretted ?? []).map(board => board && `${board.strings}/${board.capo}`).join("|")}`;
+  if (chordPane.asked === asked) return;
+  chordPane.asked = asked;
+  chordPane.shapes = null;
+  const response = await fetch(`/api/scores/${scoreId}/chords/${index}/shapes`);
+  if (response.ok && chordPane.asked === asked) {
+    chordPane.shapes = await response.json();
+    drawChordPane();
+  }
+}
+
+function drawChordPane() {
+  const chord = selectedChord === null ? null : score?.chords?.[selectedChord];
+  $("propChord").hidden = !chord || shownPane() !== "selection";
+  if (!chord) return;
+  $("propChordName").textContent = `Chord ${chord.text}`;
+  const diagram = chord.diagram;
+  $("chordDiagramTools").hidden = !score.diagrams || !diagram;
+  $("diagramShow").hidden = Boolean(score.diagrams);
+  if (!score.diagrams) { $("propChordWhat").textContent = "Show chord diagrams to choose how this chord is played."; return; }
+  if (!diagram) { $("propChordWhat").textContent = "This chord has no diagram."; return; }
+  const count = diagram.frets.length;
+  const most = chordPane.shapes?.frets ?? 19;
+  chordPane.first = Math.min(Math.max(chordPane.first ?? diagram.first, 1), Math.max(most - DIAGRAM_ROWS + 1, 1));
+  $("propChordWhat").textContent = diagram.custom ? "A shape of its own. Usual shape gives it the library's again." : "The usual shape. Click a string at a fret, or above the nut, to change it.";
+  $("chordDiagram").innerHTML = diagramSvg(diagram, count, { first: chordPane.first, clickable: true });
+  $("diagramNut").disabled = chordPane.first <= 1;
+  $("diagramBody").disabled = chordPane.first >= most - DIAGRAM_ROWS + 1;
+  $("diagramBarre").setAttribute("aria-pressed", String(Boolean(diagram.barre)));
+  $("diagramUsual").disabled = !diagram.custom;
+  const shapes = chordPane.shapes?.shapes ?? [];
+  $("chordShapes").replaceChildren(...shapes.map(shape => {
+    const button = document.createElement("button");
+    button.className = "flat";
+    const same = shape.frets.every((fret, string) => fret === diagram.frets[string]) && String(shape.barre) === String(diagram.barre);
+    button.setAttribute("aria-pressed", String(same));
+    button.title = `Play it ${shape.frets.map(fret => (fret === null ? "x" : fret)).join(" ")}`;
+    button.innerHTML = diagramSvg(shape, count, { gap: 10, rows: 4, first: shape.first });
+    button.addEventListener("click", () => { chordPane.first = shape.first; sendFrame({ frets: shape.frets, barre: shape.barre }); });
+    return button;
+  }));
+  loadShapes(selectedChord);
+}
+
+function setUpChordPane() {
+  $("chordDiagram").addEventListener("click", clickDiagram);
+  $("diagramNut").addEventListener("click", () => { chordPane.first -= 1; drawChordPane(); });
+  $("diagramBody").addEventListener("click", () => { chordPane.first += 1; drawChordPane(); });
+  $("diagramBarre").addEventListener("click", toggleBarre);
+  $("diagramUsual").addEventListener("click", () => { chordPane.first = null; sendFrame({ frets: null }); });
+  $("diagramShow").addEventListener("click", switchDiagrams);
 }

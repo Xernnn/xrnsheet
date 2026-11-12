@@ -3359,6 +3359,64 @@ def test_techniques_copied_and_the_capo(page, base: str, shots: Path | None, cre
     page.keyboard.press("Escape")
 
 
+def chord_diagram(base: str, score_id: str, index: int = 0) -> dict:
+    return score_data(base, score_id)["chords"][index]["diagram"]
+
+
+def test_chord_diagram_editing(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """A chord's diagram is changed in the inspector: another shape, a finger, an open or unplayed string, a barre."""
+    score_id = open_blank(page, base, created, bars=2, staff="guitar-tab")
+    page.keyboard.press("7")
+    page.keyboard.type("ee", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    notes = [note.get("id") for note in own_notes(saved_score(base, score_id))]
+    for note, text in zip(notes, ["C", "G7"]):
+        page.evaluate("([id, text]) => enqueue(() => send('chords', { note: id, text }))", [note, text])
+    settle(page)
+    click_drawn(page, page.locator("#pages g.harm").first)
+    check("a chord clicked without diagrams says how to show them", page.is_visible("#propChord") and page.is_visible("#diagramShow") and page.is_hidden("#chordDiagramTools"))
+    page.click("#diagramShow")
+    settle(page)
+    page.wait_for_selector("#chordShapes button")
+    check("with them, the inspector draws the chord's diagram and its other shapes", page.is_visible("#chordDiagram svg") and page.locator("#chordShapes button").count() >= 4 and page.locator('#chordShapes button[aria-pressed="true"]').count() == 1)
+    page.locator("#chordDiagram [data-string='5'][data-fret='3']").click()
+    settle(page)
+    check("a click on a string at a fret puts a finger there", chord_diagram(base, score_id) == {"frets": [None, 3, 2, 0, 1, 3], "barre": None, "first": 1, "custom": True}, chord_diagram(base, score_id))
+    frame = saved_score(base, score_id).find(".//harmony/frame")
+    check("and the score keeps it as the chord's frame", frame is not None and [(note.findtext("string"), note.findtext("fret")) for note in frame.findall("frame-note")][-1] == ("1", "3"))
+    page.locator("#chordDiagram [data-string='0'][data-fret='nut']").click()
+    settle(page)
+    check("above the nut, a string not played is played open", chord_diagram(base, score_id)["frets"][0] == 0)
+    press(page, "Control+z")
+    press(page, "Control+z")
+    check("and undo takes them back", chord_diagram(base, score_id)["custom"] is False)
+    click_drawn(page, page.locator("#pages g.harm").first)
+    page.wait_for_selector("#chordShapes button")
+    page.locator("#chordShapes button", has=page.locator("text")).first.click()
+    settle(page)
+    chosen = chord_diagram(base, score_id)
+    check("another shape is chosen from those offered", chosen["custom"] and chosen["first"] > 1 and "xrn-diagram" in "".join(score_data(base, score_id)["pages"]), chosen)
+    if shots:
+        page.screenshot(path=str(shots / "chord-diagram.png"))
+    page.click("#diagramUsual")
+    settle(page)
+    check("and Usual shape gives it the library's again", chord_diagram(base, score_id) == {"frets": [None, 3, 2, 0, 1, 0], "barre": None, "first": 1, "custom": False}, chord_diagram(base, score_id))
+    page.click("#diagramBody")
+    shown_from = page.evaluate("() => Number(document.querySelector('#chordDiagram [data-fret]:not([data-fret=nut])').dataset.fret)")
+    page.click("#diagramNut")
+    check("the diagram's window moves up the neck and back", shown_from == 2 and page.evaluate("() => chordPane.first") == 1, shown_from)
+    for string in range(2, 6):  # The A string is at the third fret already.
+        page.locator(f"#chordDiagram [data-string='{string}'][data-fret='3']").click()
+        settle(page)
+    page.click("#diagramBarre")
+    settle(page)
+    check("a barre lies across the strings at the lowest fret", chord_diagram(base, score_id)["barre"] == [3, 1, 5], chord_diagram(base, score_id))
+    page.keyboard.press("Escape")
+    settle(page)
+
+
 def test_words_copied_with_a_passage(page, base: str, created: list[str]) -> None:
     """A violinist's pizz., position and sul G come with a copied passage, and only where they belong."""
     score_id = open_blank(page, base, created, bars=3, staff="violin")
@@ -3804,6 +3862,7 @@ def main() -> None:
             test_tablature_editing(page, base, arguments.shots, created)
             test_marks_drawn_on_notes(page, base, arguments.shots, created)
             test_words_copied_with_a_passage(page, base, created)
+            test_chord_diagram_editing(page, base, arguments.shots, created)
             test_practice(context, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)
