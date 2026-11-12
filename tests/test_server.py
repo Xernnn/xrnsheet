@@ -1228,3 +1228,27 @@ def test_each_note_is_named_as_it_is_shown(client):
     client.post(f"/api/scores/{score_id}/concert", json={"on": True})
     shown = client.get(f"/api/scores/{score_id}").json()["notes"][written["written"]]
     assert shown[:2] == ["E", 0] and shown[2] == named[2], "a trumpet's F sharp sounds as E, a step lower"
+
+
+def test_the_window_is_sent_only_the_symbols_it_draws(client):
+    """The music font has hundreds of symbols, and the window draws a few dozen of them."""
+    response = client.get("/glyphs.js")
+    sent = json.loads(response.text.removeprefix("const GLYPHS = ").rstrip().removesuffix(";"))
+    everything = json.loads(server.glyph_script().removeprefix("const GLYPHS = ").rstrip().removesuffix(";"))
+    assert len(sent) < len(everything) / 3
+    assert {f"E08{digit}" for digit in range(10)} | {"E050", "E1D5", "E262"} <= set(sent), "time signature digits, a clef, a note, a sharp"
+    again = client.get("/glyphs.js", headers={"If-None-Match": response.headers["etag"]})
+    assert again.status_code == 304 and response.headers["cache-control"] == "no-cache", "the browser checks it has the latest"
+
+
+def test_a_drawing_just_made_is_kept_for_the_next_time_it_is_asked_for(client):
+    """Opening a score again, and undoing, ask for a drawing the server has just made."""
+    score_id = blank(client, measures=2)
+    client.get(f"/api/scores/{score_id}")
+    written = write(client, score_id, first_id(client, score_id), "C")
+    before = server.drawn_pages.cache_info()
+    client.get(f"/api/scores/{score_id}")
+    client.post(f"/api/scores/{score_id}/undo")
+    after = server.drawn_pages.cache_info()
+    assert after.hits - before.hits == 2 and after.misses == before.misses
+    assert client.get(f"/api/scores/{score_id}").json()["pages"] != written["pages"], "the drawing undone to is the earlier one"

@@ -173,9 +173,44 @@ async function poll() {
   if (opening && libraryShown()) drawHistory();
 }
 
+// The names Verovio makes up for what it draws differ every time a page is drawn: the page's own,
+// which its style sheet is written for, and those of everything without a name in the score. The
+// score's own names, of its notes, measures and marks, don't, so two drawings that differ in nothing
+// else are the same page.
+const MADE_UP_NAMES = /<style[^>]*>[^<]*<\/style>| id="(?!(?:note|mark|m|p\d+m)\d+")[^"]*"|xlink:href="#[^"]*"|\bid-(?!(?:note|mark|m|p\d+m)\d+\b)[\w-]+|(?<=Milestone)(?:End|Start)? [\w-]+/g;
+// What each page on the desk was drawn from, so a page an edit didn't change is left as it is.
+let drawnPages = [];
+
+// Only the pages an edit changed are drawn again. Laying out a page of music takes the browser far
+// longer than anything else a redraw does, and most edits change one page.
+function drawPages() {
+  const holder = $("pages");
+  const spare = new Map();
+  for (const drawn of drawnPages) spare.set(drawn.key, [...(spare.get(drawn.key) ?? []), drawn.element]);
+  drawnPages = score.pages.map((svg, index) => {
+    const key = svg.replace(MADE_UP_NAMES, "");
+    // Each page as wide as it prints, which in a continuous view is as wide as its music.
+    const width = `calc(${score.pageSizes?.[index]?.[0] ?? 210}mm * var(--zoom))`;
+    let element = spare.get(key)?.shift();
+    if (!element) {
+      element = document.createElement("div");
+      element.className = "page";
+      element.innerHTML = svg;
+    }
+    if (element.style.width !== width) element.style.width = width;
+    return { key, element };
+  });
+  // The pages that changed go first, then the new ones go in their places. Moving a page that
+  // stays would make the browser lay it out again.
+  const kept = new Set(drawnPages.map(drawn => drawn.element));
+  for (const child of [...holder.children]) if (!kept.has(child)) child.remove();
+  drawnPages.forEach(({ element }, index) => { if (holder.children[index] !== element) holder.insertBefore(element, holder.children[index] ?? null); });
+  // A page that stayed still shows what was selected or playing when it was drawn.
+  holder.querySelectorAll(".selected, .playing, .awaited, .unsure, .active").forEach(element => element.classList.remove("selected", "voice2", "voice3", "voice4", "playing", "awaited", "unsure", "active"));
+}
+
 function draw() {
-  // Each page as wide as it prints, which in a continuous view is as wide as its music.
-  $("pages").innerHTML = score.pages.map((page, index) => `<div class="page" style="width: calc(${score.pageSizes?.[index]?.[0] ?? 210}mm * var(--zoom))">${page}</div>`).join("");
+  drawPages();
   $("viewMode").value = score.view ?? "page";
   document.body.dataset.view = score.view ?? "page";
   if (fittedZoom()) setZoom(zoom);

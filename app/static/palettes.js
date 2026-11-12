@@ -44,8 +44,11 @@ function keyCell(fifths) {
   return staffCell(52, signs);
 }
 
+// The time signature digits 0 to 9, named in full so the server knows the window draws them.
+const TIME_DIGITS = ["E080", "E081", "E082", "E083", "E084", "E085", "E086", "E087", "E088", "E089"];
+
 function timeDigits(number) {
-  return [...String(number)].map(digit => `E08${digit}`).join(" ");
+  return [...String(number)].map(digit => TIME_DIGITS[digit]).join(" ");
 }
 
 function timeCell(beats, beatType) {

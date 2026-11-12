@@ -8,6 +8,8 @@ to read notes with our own reader instead of homr.
 """
 
 import argparse
+import functools
+import hashlib
 import json
 import os
 import re
@@ -28,7 +30,7 @@ from urllib.parse import urlsplit
 import uvicorn
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -59,6 +61,7 @@ MAX_PDF_PAGES = 40
 LONGEST_PDF_PAGE = 5000
 PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
+DRAWINGS_KEPT = 4  # A long score's drawing is a few megabytes, so only the last few are kept.
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
 OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
@@ -379,11 +382,13 @@ def undone(folder: Path) -> list[Path]:
     return sorted((folder / "undone").glob("version_*.musicxml"), key=version_number)
 
 
-def save_version(folder: Path, root: ET.Element) -> None:
-    """Save the next version. A new edit starts a new future, so anything undone is dropped."""
+def save_version(folder: Path, root: ET.Element) -> str:
+    """Save the next version, and return it as it was written. A new edit starts a new future, so anything undone is dropped."""
     number = version_number(versions(folder)[-1]) + 1 if versions(folder) else 0
-    write_whole(folder / f"version_{number:04d}.musicxml", to_text(root))
+    text = to_text(root)
+    write_whole(folder / f"version_{number:04d}.musicxml", text)
     shutil.rmtree(folder / "undone", ignore_errors=True)
+    return text
 
 
 def pdf_to_images(path: Path) -> tuple[list[Path], str]:
@@ -581,6 +586,17 @@ def view_of(folder: Path) -> str:
     return found if found in VIEWS else "page"
 
 
+@functools.lru_cache(maxsize=DRAWINGS_KEPT)
+def drawn_pages(musicxml: str, view: str) -> tuple[str, ...]:
+    """Draw a score's pages, keeping the last few drawings made.
+
+    Opening a score again, undoing and redoing, switching a view back, and the library's picture of
+    the score being edited each ask for a drawing that has just been made, and drawing takes longer
+    than everything else an edit does put together.
+    """
+    return tuple(render_pages(musicxml, view=view))
+
+
 def note_details(root: ET.Element) -> dict[str, list]:
     """Say what each note and rest is, by its id, for the inspector to name it as it's shown.
 
@@ -597,8 +613,14 @@ def note_details(root: ET.Element) -> dict[str, list]:
     return found
 
 
-def describe(folder: Path, status: dict) -> dict:
-    root = current_root(folder)
+def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
+    """Say everything the page shows of a score.
+
+    An edit hands over the version it has just saved, so it isn't written out again to be drawn:
+    with a long score that took as long as a twentieth of the reply.
+    """
+    root = ET.fromstring(saved) if saved is not None else current_root(folder)
+    text = saved
     edit.ensure_note_ids(root)
     marks.ensure_mark_ids(root)
     shown = concert.shown(root)  # The same score at concert pitch, if it's shown that way.
@@ -615,7 +637,7 @@ def describe(folder: Path, status: dict) -> dict:
             "page": found["page"] if found else None,
         })
     view = view_of(folder)
-    pages = render_pages(to_text(shown), view=view)
+    pages = list(drawn_pages(text if text is not None and shown is root else to_text(shown), view))
     return status | {
         "chords": chords,
         "canUndo": len(versions(folder)) > 1,
@@ -747,8 +769,8 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None])
             raise HTTPException(422, str(error)) from error
         edit.ensure_note_ids(root)
         marks.ensure_mark_ids(root)
-        save_version(folder, root)
-        return describe(folder, read_status(folder)) | (extra or {})
+        text = save_version(folder, root)
+        return describe(folder, read_status(folder), text) | (extra or {})
 
 
 @app.post("/api/scores/{score_id}/notes/{note_id}")
@@ -1113,14 +1135,42 @@ def get_thumbnail(score_id: str) -> FileResponse:
         if not path.exists():
             for old in folder.glob("thumbnail_*.svg"):
                 old.unlink(missing_ok=True)
-            write_whole(path, render_pages(to_text(concert.shown(ET.parse(saved[-1]).getroot())))[0])
+            write_whole(path, drawn_pages(to_text(concert.shown(ET.parse(saved[-1]).getroot())), "page")[0])
     return FileResponse(path, media_type="image/svg+xml")
 
 
+GLYPH_CODES = re.compile(r"""["'`]((?:[EF][0-9A-F]{3})(?: [EF][0-9A-F]{3})*)["'`]""")
+
+
+@functools.lru_cache(maxsize=1)
+def window_glyphs(written: tuple[tuple[str, int], ...]) -> tuple[str, str]:
+    """Return the script of the symbols the window draws, and a tag that changes when they do.
+
+    The window names each symbol it draws by its code in its own files, so only those are sent. The
+    whole music font is 352 symbols, and was 40% of everything the window loaded, for the few dozen
+    it uses. Its files are read again whenever one changes.
+    """
+    asked = set()
+    for name, _ in written:
+        for found in GLYPH_CODES.findall((STATIC_DIR / name).read_text(encoding="utf-8")):
+            asked.update(found.split())
+    script = glyph_script(asked)
+    return script, hashlib.sha256(script.encode()).hexdigest()[:20]
+
+
 @app.get("/glyphs.js")
-def music_glyphs() -> Response:
-    """Serve the shapes the pages are engraved with, so the toolbar and palettes show the same symbols."""
-    return Response(glyph_script(), media_type="text/javascript", headers={"Cache-Control": "max-age=86400"})
+def music_glyphs(request: Request) -> Response:
+    """Serve the shapes the pages are engraved with, so the window's buttons show the same symbols.
+
+    The browser asks each time whether it has the latest, as a window updated to draw another
+    symbol can't use a script from before that has it missing.
+    """
+    written = tuple(sorted((path.name, path.stat().st_mtime_ns) for path in [*STATIC_DIR.glob("*.js"), *STATIC_DIR.glob("*.html")]))
+    script, tag = window_glyphs(written)
+    headers = {"ETag": f'"{tag}"', "Cache-Control": "no-cache"}
+    if request.headers.get("if-none-match") == headers["ETag"]:
+        return Response(status_code=304, headers=headers)
+    return Response(script, media_type="text/javascript", headers=headers)
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

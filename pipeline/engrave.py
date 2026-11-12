@@ -99,18 +99,22 @@ def replace_private_glyphs(svg: str) -> str:
     return svg.replace(f'font-family="{MUSIC_FONT}"', 'font-family="Noto Music"').replace('font-family="Leipzig"', 'font-family="Noto Music"')
 
 
-def drop_spelled_degrees(musicxml: str) -> str:
+def drop_degrees(root: ET.Element) -> None:
     """Stop Verovio printing a chord twice.
 
     A chord like A7b9 stores its spelling and also its altered ninth as a degree. That
     detail is worth keeping in the file, but Verovio prints both and shows A7b9(b9).
     """
-    root = ET.fromstring(musicxml)
     for harmony in root.iter("harmony"):
         kind = harmony.find("kind")
         if kind is not None and kind.get("text") is not None:
             for degree in harmony.findall("degree"):
                 harmony.remove(degree)
+
+
+def drop_spelled_degrees(musicxml: str) -> str:
+    root = ET.fromstring(musicxml)
+    drop_degrees(root)
     return ET.tostring(root, encoding="unicode")
 
 
@@ -271,12 +275,14 @@ def place_octave_lines(root: ET.Element) -> None:
                         octave.text = str(int(octave.text) + wrong)
 
 
-def prepare_for_drawing(musicxml: str) -> str:
-    root = ET.fromstring(musicxml)
+def prepare_for_drawing(musicxml: str | ET.Element) -> str:
+    # Read and written once: with a long score, reading and writing it again took a third as long as Verovio's drawing.
+    root = ET.fromstring(musicxml) if isinstance(musicxml, str) else musicxml
     add_beams(root)
     set_line_breaks(root)
     place_octave_lines(root)
-    return drop_spelled_degrees(ET.tostring(root, encoding="unicode"))
+    drop_degrees(root)
+    return ET.tostring(root, encoding="unicode")
 
 
 @functools.lru_cache(maxsize=1)
@@ -298,9 +304,11 @@ def glyph_outlines() -> dict[str, list]:
     return found
 
 
-def glyph_script() -> str:
-    """The outlines as a script the page loads before its own."""
-    return f"const GLYPHS = {json.dumps(glyph_outlines(), separators=(',', ':'))};\n"
+def glyph_script(codes: set[str] | None = None) -> str:
+    """The outlines as a script the page loads before its own: all of them, or those of the codes given."""
+    outlines = glyph_outlines()
+    chosen = outlines if codes is None else {code: outlines[code] for code in sorted(codes) if code in outlines}
+    return f"const GLYPHS = {json.dumps(chosen, separators=(',', ':'))};\n"
 
 
 def set_text_font(svg: str) -> str:
@@ -358,9 +366,10 @@ def render_pages(musicxml: str, view: str = "page") -> list[str]:
     if view not in VIEWS:
         raise ValueError(f"Unknown view {view}")
     has_title = "<credit" in musicxml and view != "horizontal"
-    layout = page_layout(ET.fromstring(musicxml))
+    root = ET.fromstring(musicxml)
+    layout = page_layout(root)
     unit = layout.space * 10 / 2  # Half a staff space, in tenths of a millimetre, which is how Verovio counts.
-    prepared = prepare_for_drawing(musicxml)
+    prepared = prepare_for_drawing(root)
     with RENDER_LOCK:
         toolkit = verovio.toolkit(False)  # It would look for fonts itself, and fail on a worker thread.
         toolkit.setResourcePath(RESOURCE_PATH)
