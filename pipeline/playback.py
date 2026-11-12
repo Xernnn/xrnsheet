@@ -2,7 +2,8 @@
 
 Hearing a score is the fastest way to catch a wrong note or chord, so chord symbols are played
 too. Repeats, endings and D.C. and D.S. jumps are followed, and the marks that shape a performance
-are heard: dynamics, hairpins, articulations, ornaments, fermatas, tempo changes and swing.
+are heard: dynamics, hairpins, articulations, ornaments, fermatas, tempo changes, swing and the
+sustain pedal. Notes under an 8va line need nothing done, as MusicXML gives them the pitch they sound.
 """
 
 import re
@@ -459,6 +460,45 @@ def play_grace(event: Event, begins: float, length: float, shift: int, loudness:
     return each * len(sounding)
 
 
+def pedal_spans(bars: list[tuple[Context, Timeline, float]], end: float) -> list[tuple[float, float]]:
+    """Return when a part's sustain pedal is held down. A change lets it up and puts it down again."""
+    moments = []
+    for _, timeline, start in bars:
+        for mark in timeline.marks:
+            if mark.element.tag == "direction":
+                moments.extend((start + float(mark.onset), pedal.get("type")) for pedal in mark.element.iter("pedal"))
+    spans = []
+    down = None
+    for at, kind in sorted(moments, key=lambda item: item[0]):
+        if kind in ("stop", "change", "discontinue") and down is not None:
+            spans.append((down, at))
+            down = None
+        if kind in ("start", "change", "resume"):
+            down = at if down is None else down
+    if down is not None:
+        spans.append((down, end))
+    return spans
+
+
+def sustained(notes: list[dict], spans: list[tuple[float, float]]) -> list[dict]:
+    """Hold each note let go while the pedal is down until the pedal comes up, or the key is played again."""
+    if not spans:
+        return notes
+    starts: dict[int, list[float]] = {}
+    for note in notes:
+        starts.setdefault(note["midi"], []).append(note["start"])
+    for midi in starts:
+        starts[midi].sort()
+    for note in notes:
+        let_go = note["start"] + note["length"]
+        held = next((up for down, up in spans if down <= let_go < up), None)
+        if held is None:
+            continue
+        again = starts[note["midi"]][bisect_right(starts[note["midi"]], note["start"]):]
+        note["length"] = min(held, again[0] if again else held) - note["start"]
+    return notes
+
+
 def programs_of(root: ET.Element) -> list[int]:
     """Return each part's General MIDI sound, counted from 1, so a file can say what plays it."""
     found = []
@@ -468,8 +508,40 @@ def programs_of(root: ET.Element) -> list[int]:
     return found
 
 
+def bars_played(bars: list[tuple[Context, Timeline, float]]) -> list[dict]:
+    """Return each bar as it's played, for the playback position and the metronome.
+
+    A pickup is shorter than its time signature says, and its beats are the last ones of a bar.
+    """
+    found = []
+    for context, timeline, start in bars:
+        longest = max((line_end(line) for line in timeline.lines.values()), default=0)
+        found.append({"start": start, "length": float(longest or context.length), "full": float(context.length), "index": context.index, "beats": context.beats, "beatType": context.beat_type})
+    return found
+
+
+def event_places(root: ET.Element) -> dict[str, list]:
+    """Say where in its bar each note and rest is, how long it lasts, its written pitch and its part.
+
+    The place finds a stretch to loop, and the pitch is the key the piano keyboard lights for it.
+    """
+    found: dict[str, list] = {}
+    for number, part in enumerate(root.findall("part")):
+        for context in contexts(part):
+            for line in read_measure(context.measure, context.divisions).lines.values():
+                for event in line:
+                    for note in event.notes:
+                        if note.get("id"):
+                            found[note.get("id")] = [context.index, float(event.onset), float(event.length), midi_of(note) if note.find("pitch") is not None else None, number]
+    return found
+
+
 def playback(root: ET.Element) -> dict:
-    """Return notes and chords, timed in quarter notes from the start of the score."""
+    """Return notes and chords, timed in quarter notes from the start of the score.
+
+    The bars are listed as they're played, and each note and rest says where it is in its bar, so
+    the page can show the playback position as a measure and beat and loop over a selection.
+    """
     notes: list[dict] = []
     chords: list[dict] = []
     holds: list[tuple[float, float]] = []
@@ -481,7 +553,8 @@ def playback(root: ET.Element) -> dict:
     for part_number, part in enumerate(parts):
         bars, end = laid_out(part, order)
         total = max(total, end)
-        notes.extend(item | {"part": part_number} for item in play_part(bars, transposed_bars(part), swings, holds))
+        played = sustained(play_part(bars, transposed_bars(part), swings, holds), pedal_spans(bars, end))
+        notes.extend(item | {"part": part_number} for item in played)
         if part_number == 0:
             for _, timeline, start in bars:
                 for mark in sorted(timeline.marks, key=lambda mark: mark.onset):
@@ -497,4 +570,7 @@ def playback(root: ET.Element) -> dict:
         "chords": chords,
         "total": total,
         "programs": programs_of(root),
+        "bars": bars_played(top_bars),
+        "events": event_places(root),
+        "transpositions": [shifts[0] if (shifts := transposed_bars(part)) else 0 for part in parts],
     }

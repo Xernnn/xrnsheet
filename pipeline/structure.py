@@ -5,6 +5,7 @@ This is also where bars are checked against the time signature.
 
 import copy
 import xml.etree.ElementTree as ET
+from contextvars import ContextVar
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -19,9 +20,9 @@ from pipeline.rhythm import (
     line_end,
     make_bar_rest,
     read_measure,
+    repair_lines,
     repair_slurs,
     repair_ties,
-    repair_wedges,
     respell,
     rests,
     units,
@@ -32,7 +33,14 @@ START_DIVISIONS = 96  # Fits every plain, dotted and triplet length a person can
 MOST_BARS = 1000
 ATTRIBUTE_ORDER = ["footnote", "level", "divisions", "key", "time", "staves", "part-symbol", "instruments", "clef", "staff-details", "transpose", "for-part", "directive", "measure-style"]
 BEAT_TYPES = {1, 2, 4, 8, 16, 32}
-CLEF_SHAPES = {"treble": ("G", "2", 0), "treble8": ("G", "2", -1), "bass": ("F", "4", 0), "alto": ("C", "3", 0), "tenor": ("C", "4", 0)}
+# Each clef as MusicXML writes it: its sign, the line it sits on, and how many octaves its 8 or 15 moves
+# the music. A percussion clef has no line, and notes under it stand where a treble clef puts them.
+CLEF_SHAPES = {
+    "treble": ("G", "2", 0), "treble8va": ("G", "2", 1), "treble15ma": ("G", "2", 2), "treble8": ("G", "2", -1), "treble15mb": ("G", "2", -2),
+    "french": ("G", "1", 0), "soprano": ("C", "1", 0), "mezzo": ("C", "2", 0), "alto": ("C", "3", 0), "tenor": ("C", "4", 0),
+    "baritoneC": ("C", "5", 0), "baritoneF": ("F", "3", 0), "bass": ("F", "4", 0), "bass8va": ("F", "4", 1), "bass15ma": ("F", "4", 2),
+    "bass8vb": ("F", "4", -1), "bass15mb": ("F", "4", -2), "subbass": ("F", "5", 0), "percussion": ("percussion", "", 0),
+}
 # The voice numbers MusicXML files conventionally use, four to a staff.
 VOICES_PER_STAFF = 4
 MOST_KEY = 7
@@ -40,11 +48,19 @@ MOST_PARTS = 40
 BREAK_PREFIX = "linebreak"  # Marks a line break a person asked for, unlike those a page was read with.
 BARS_PER_LINE = "xrnsheet-bars-per-line"
 MOST_BARS_PER_LINE = 16
+# Set while a score shown at concert pitch is being edited there, where every part's notes and keys
+# already stand as they sound, so no part's key is offset from another's.
+at_sounding_pitch: ContextVar[bool] = ContextVar("at_sounding_pitch", default=False)
 
 
 @dataclass(frozen=True)
 class Instrument:
-    """What a part needs to know: its staves, and how far it sounds from how it's written."""
+    """What a part needs to know: its staves, and how far it sounds from how it's written.
+
+    The sound is MusicXML's name for the instrument, which other programs read to know what it is.
+    A few instruments are shown at concert pitch in a clef of their own, as a baritone saxophone is
+    shown in a bass clef. The rest take an octave clef there if they sound an octave away.
+    """
 
     label: str
     clefs: tuple[str, ...] = ("treble",)
@@ -54,28 +70,72 @@ class Instrument:
     program: int = 1  # General MIDI, counted from 1.
     hidden_name: bool = False
     family: str = "Plain staves"
+    sound: str = ""
+    concert_clefs: tuple[str, ...] = ()
 
 
+GRAND_STAFF = ("treble", "bass")
+# MuseScore's common instruments, family by family in its order, with their clefs and transpositions.
 INSTRUMENTS = {
     "treble": Instrument("Music", hidden_name=True),
     "bass": Instrument("Music", ("bass",), hidden_name=True),
-    "piano": Instrument("Piano", ("treble", "bass"), hidden_name=True, family="Keyboards"),
-    "voice": Instrument("Voice", program=53, family="Vocals"),
-    "guitar": Instrument("Guitar", ("treble8",), program=25, family="Strings - Plucked"),
-    "bass-guitar": Instrument("Bass Guitar", ("bass",), octaves=-1, program=34, family="Strings - Plucked"),
-    "violin": Instrument("Violin", program=41, family="Strings - Bowed"),
-    "viola": Instrument("Viola", ("alto",), program=42, family="Strings - Bowed"),
-    "cello": Instrument("Cello", ("bass",), program=43, family="Strings - Bowed"),
-    "double-bass": Instrument("Double Bass", ("bass",), octaves=-1, program=44, family="Strings - Bowed"),
-    "flute": Instrument("Flute", program=74, family="Woodwinds"),
-    "oboe": Instrument("Oboe", program=69, family="Woodwinds"),
-    "clarinet": Instrument("Clarinet in B♭", steps=-1, semitones=-2, program=72, family="Woodwinds"),
-    "alto-sax": Instrument("Alto Saxophone", steps=-5, semitones=-9, program=66, family="Woodwinds"),
-    "tenor-sax": Instrument("Tenor Saxophone", steps=-1, semitones=-2, octaves=-1, program=67, family="Woodwinds"),
-    "baritone-sax": Instrument("Baritone Saxophone", steps=-5, semitones=-9, octaves=-1, program=68, family="Woodwinds"),
-    "trumpet": Instrument("Trumpet in B♭", steps=-1, semitones=-2, program=57, family="Brass"),
-    "horn": Instrument("Horn in F", steps=-4, semitones=-7, program=61, family="Brass"),
-    "trombone": Instrument("Trombone", ("bass",), program=58, family="Brass"),
+    "piccolo": Instrument("Piccolo", octaves=1, program=73, family="Woodwinds", sound="wind.flutes.flute.piccolo"),
+    "flute": Instrument("Flute", program=74, family="Woodwinds", sound="wind.flutes.flute"),
+    "alto-flute": Instrument("Alto Flute", steps=-3, semitones=-5, program=74, family="Woodwinds", sound="wind.flutes.flute.alto"),
+    "soprano-recorder": Instrument("Soprano Recorder", ("treble8va",), program=75, family="Woodwinds", sound="wind.flutes.recorder.soprano"),
+    "alto-recorder": Instrument("Alto Recorder", program=75, family="Woodwinds", sound="wind.flutes.recorder.alto"),
+    "oboe": Instrument("Oboe", program=69, family="Woodwinds", sound="wind.reed.oboe"),
+    "english-horn": Instrument("English Horn", steps=-4, semitones=-7, program=70, family="Woodwinds", sound="wind.reed.english-horn"),
+    "eb-clarinet": Instrument("Clarinet in E♭", steps=2, semitones=3, program=72, family="Woodwinds", sound="wind.reed.clarinet.eflat"),
+    "clarinet": Instrument("Clarinet in B♭", steps=-1, semitones=-2, program=72, family="Woodwinds", sound="wind.reed.clarinet.bflat"),
+    "a-clarinet": Instrument("Clarinet in A", steps=-2, semitones=-3, program=72, family="Woodwinds", sound="wind.reed.clarinet.a"),
+    "bass-clarinet": Instrument("Bass Clarinet", steps=-1, semitones=-2, octaves=-1, program=72, family="Woodwinds", sound="wind.reed.clarinet.bass"),
+    "soprano-sax": Instrument("Soprano Saxophone", steps=-1, semitones=-2, program=65, family="Woodwinds", sound="wind.reed.saxophone.soprano"),
+    "alto-sax": Instrument("Alto Saxophone", steps=-5, semitones=-9, program=66, family="Woodwinds", sound="wind.reed.saxophone.alto"),
+    "tenor-sax": Instrument("Tenor Saxophone", steps=-1, semitones=-2, octaves=-1, program=67, family="Woodwinds", sound="wind.reed.saxophone.tenor"),
+    "baritone-sax": Instrument("Baritone Saxophone", steps=-5, semitones=-9, octaves=-1, program=68, family="Woodwinds", sound="wind.reed.saxophone.baritone", concert_clefs=("bass",)),
+    "bassoon": Instrument("Bassoon", ("bass",), program=71, family="Woodwinds", sound="wind.reed.bassoon"),
+    "contrabassoon": Instrument("Contrabassoon", ("bass",), octaves=-1, program=71, family="Woodwinds", sound="wind.reed.contrabassoon"),
+    "horn": Instrument("Horn in F", steps=-4, semitones=-7, program=61, family="Brass", sound="brass.french-horn"),
+    "c-trumpet": Instrument("Trumpet in C", program=57, family="Brass", sound="brass.trumpet.c"),
+    "trumpet": Instrument("Trumpet in B♭", steps=-1, semitones=-2, program=57, family="Brass", sound="brass.trumpet.bflat"),
+    "cornet": Instrument("Cornet in B♭", steps=-1, semitones=-2, program=57, family="Brass", sound="brass.cornet"),
+    "flugelhorn": Instrument("Flugelhorn", steps=-1, semitones=-2, program=57, family="Brass", sound="brass.flugelhorn"),
+    "trombone": Instrument("Trombone", ("bass",), program=58, family="Brass", sound="brass.trombone"),
+    "bass-trombone": Instrument("Bass Trombone", ("bass",), program=58, family="Brass", sound="brass.trombone.bass"),
+    "euphonium": Instrument("Euphonium", ("bass",), program=59, family="Brass", sound="brass.euphonium"),
+    "tuba": Instrument("Tuba", ("bass",), program=59, family="Brass", sound="brass.tuba"),
+    "timpani": Instrument("Timpani", ("bass",), program=48, family="Percussion - Pitched", sound="drum.timpani"),
+    "glockenspiel": Instrument("Glockenspiel", octaves=2, program=10, family="Percussion - Pitched", sound="pitched-percussion.glockenspiel"),
+    "xylophone": Instrument("Xylophone", octaves=1, program=14, family="Percussion - Pitched", sound="pitched-percussion.xylophone"),
+    "vibraphone": Instrument("Vibraphone", program=12, family="Percussion - Pitched", sound="pitched-percussion.vibraphone"),
+    "marimba": Instrument("Marimba", GRAND_STAFF, program=13, family="Percussion - Pitched", sound="pitched-percussion.marimba"),
+    "piano": Instrument("Piano", GRAND_STAFF, hidden_name=True, family="Keyboards", sound="keyboard.piano"),
+    "electric-piano": Instrument("Electric Piano", GRAND_STAFF, program=5, family="Keyboards", sound="keyboard.piano.electric"),
+    "harpsichord": Instrument("Harpsichord", GRAND_STAFF, program=7, family="Keyboards", sound="keyboard.harpsichord"),
+    "celesta": Instrument("Celesta", GRAND_STAFF, octaves=1, program=9, family="Keyboards", sound="keyboard.celesta"),
+    "organ": Instrument("Organ", ("treble", "bass", "bass"), program=20, family="Keyboards", sound="keyboard.organ"),
+    "accordion": Instrument("Accordion", GRAND_STAFF, program=22, family="Free Reed", sound="keyboard.accordion"),
+    "voice": Instrument("Voice", program=53, family="Vocals", sound="voice.vocals"),
+    "soprano": Instrument("Soprano", program=53, family="Vocals", sound="voice.soprano"),
+    "mezzo-soprano": Instrument("Mezzo-soprano", program=53, family="Vocals", sound="voice.mezzo-soprano"),
+    "alto": Instrument("Alto", program=53, family="Vocals", sound="voice.alto"),
+    "tenor": Instrument("Tenor", ("treble8",), program=53, family="Vocals", sound="voice.tenor"),
+    "baritone": Instrument("Baritone", ("bass",), program=53, family="Vocals", sound="voice.baritone"),
+    "bass-voice": Instrument("Bass", ("bass",), program=53, family="Vocals", sound="voice.bass"),
+    "guitar": Instrument("Guitar", ("treble8",), program=25, family="Strings - Plucked", sound="pluck.guitar.nylon-string"),
+    "acoustic-guitar": Instrument("Acoustic Guitar", ("treble8",), program=26, family="Strings - Plucked", sound="pluck.guitar.acoustic"),
+    "electric-guitar": Instrument("Electric Guitar", ("treble8",), program=28, family="Strings - Plucked", sound="pluck.guitar.electric"),
+    "bass-guitar": Instrument("Bass Guitar", ("bass",), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass"),
+    "electric-bass": Instrument("Electric Bass", ("bass",), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass.electric"),
+    "harp": Instrument("Harp", GRAND_STAFF, program=47, family="Strings - Plucked", sound="pluck.harp"),
+    "ukulele": Instrument("Ukulele", program=25, family="Strings - Plucked", sound="pluck.ukulele"),
+    "mandolin": Instrument("Mandolin", program=26, family="Strings - Plucked", sound="pluck.mandolin"),
+    "banjo": Instrument("Banjo", ("treble8",), program=106, family="Strings - Plucked", sound="pluck.banjo"),
+    "violin": Instrument("Violin", program=41, family="Strings - Bowed", sound="strings.violin"),
+    "viola": Instrument("Viola", ("alto",), program=42, family="Strings - Bowed", sound="strings.viola"),
+    "cello": Instrument("Cello", ("bass",), program=43, family="Strings - Bowed", sound="strings.cello"),
+    "double-bass": Instrument("Double Bass", ("bass",), octaves=-1, program=44, family="Strings - Bowed", sound="strings.contrabass"),
 }
 # The names a plain staff goes by where instruments are chosen, as "Music" says nothing there.
 STAFF_NAMES = {"treble": "Treble staff", "bass": "Bass staff"}
@@ -296,7 +356,7 @@ def delete_measure(root: ET.Element, index: int) -> None:
         renumber(part)
         repair_ties(part, max(index - 1, 0))
         repair_slurs(part)
-        repair_wedges(part)
+        repair_lines(part)
 
 
 def key_offset(steps: int, semitones: int) -> int:
@@ -310,7 +370,7 @@ def key_offset(steps: int, semitones: int) -> int:
 def key_for_part(part: ET.Element, fifths: int) -> int:
     """Return a part's written key, wrapped round to a key that exists if it goes past seven."""
     found = part.find("measure/attributes/transpose")
-    offset = 0 if found is None else key_offset(int(found.findtext("diatonic") or 0), int(found.findtext("chromatic") or 0))
+    offset = 0 if found is None or at_sounding_pitch.get() else key_offset(int(found.findtext("diatonic") or 0), int(found.findtext("chromatic") or 0))
     written = fifths + offset
     return written - 12 * (1 if written > 0 else -1) if abs(written) > MOST_KEY else written
 
@@ -347,6 +407,16 @@ def reread_notes(context: Context, tied: dict[tuple[str, str, str], str | None])
             tied[where] = str(alter) if is_tied(note, "start") else None
 
 
+def write_clef(clef: ET.Element, name: str) -> None:
+    """Fill in a clef element as one of the clefs this app knows."""
+    sign, line, shift = CLEF_SHAPES[name]
+    ET.SubElement(clef, "sign").text = sign
+    if line:
+        ET.SubElement(clef, "line").text = line
+    if shift:
+        ET.SubElement(clef, "clef-octave-change").text = str(shift)
+
+
 def set_clef(root: ET.Element, index: int, part_number: int, staff: str, name: str) -> None:
     """Change a staff's clef from this bar on. Notes keep their pitch, so they move on the staff."""
     if name not in CLEF_SHAPES:
@@ -362,12 +432,8 @@ def set_clef(root: ET.Element, index: int, part_number: int, staff: str, name: s
                 attributes.remove(found)
         if len(attributes) == 0:
             measure.remove(attributes)
-    sign, line, shift = CLEF_SHAPES[name]
     clef = ET.Element("clef", number=staff) if known[index].staves > 1 else ET.Element("clef")
-    ET.SubElement(clef, "sign").text = sign
-    ET.SubElement(clef, "line").text = line
-    if shift:
-        ET.SubElement(clef, "clef-octave-change").text = str(shift)
+    write_clef(clef, name)
     set_attribute(ensure_attributes(measure), clef)
 
 
@@ -666,12 +732,7 @@ def part_attributes(instrument: Instrument, divisions: int, fifths: int, beats: 
     if staves > 1:
         ET.SubElement(attributes, "staves").text = str(staves)
     for number, name in enumerate(instrument.clefs, start=1):
-        sign, line, shift = CLEF_SHAPES[name]
-        element = ET.SubElement(attributes, "clef", number=str(number)) if staves > 1 else ET.SubElement(attributes, "clef")
-        ET.SubElement(element, "sign").text = sign
-        ET.SubElement(element, "line").text = line
-        if shift:
-            ET.SubElement(element, "clef-octave-change").text = str(shift)
+        write_clef(ET.SubElement(attributes, "clef", number=str(number)) if staves > 1 else ET.SubElement(attributes, "clef"), name)
     if instrument.steps or instrument.semitones or instrument.octaves:
         transpose = ET.SubElement(attributes, "transpose")
         ET.SubElement(transpose, "diatonic").text = str(instrument.steps)
@@ -686,13 +747,19 @@ def score_part(part_id: str, instrument: Instrument) -> ET.Element:
     ET.SubElement(element, "part-name", {"print-object": "no"} if instrument.hidden_name else {}).text = instrument.label
     inner = ET.SubElement(element, "score-instrument", id=f"{part_id}-I1")
     ET.SubElement(inner, "instrument-name").text = instrument.label
+    if instrument.sound:
+        ET.SubElement(inner, "instrument-sound").text = instrument.sound
     midi = ET.SubElement(element, "midi-instrument", id=f"{part_id}-I1")
     ET.SubElement(midi, "midi-program").text = str(instrument.program)
     return element
 
 
 def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str = "treble", measures: int = 16, symbol: str = "") -> ET.Element:
-    """Make an empty score to write in from scratch, for a kind of staff or an instrument."""
+    """Make an empty score to write in from scratch, for a kind of staff or an instrument.
+
+    The key is the one the music sounds in, so a B flat trumpet asked for C major reads D major, as
+    any instrument added to it later would.
+    """
     if clef not in INSTRUMENTS:
         raise EditError("Choose a treble, bass or piano staff, or an instrument.")
     if not 1 <= measures <= MOST_BARS:
@@ -702,6 +769,8 @@ def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str =
     if not -MOST_KEY <= fifths <= MOST_KEY:
         raise EditError("A key has at most seven sharps or flats.")
     instrument = INSTRUMENTS[clef]
+    written = fifths + key_offset(instrument.steps, instrument.semitones)
+    written = written - 12 * (1 if written > 0 else -1) if abs(written) > MOST_KEY else written
     root = ET.Element("score-partwise", version="4.0")
     ET.SubElement(root, "part-list").append(score_part("P1", instrument))
     part = ET.SubElement(root, "part", id="P1")
@@ -709,12 +778,18 @@ def blank_score(fifths: int = 0, beats: int = 4, beat_type: int = 4, clef: str =
         measure = blank_measure(Fraction(beats * 4, beat_type), START_DIVISIONS, len(instrument.clefs))
         part.append(measure)
         if index == 0:
-            measure.insert(0, part_attributes(instrument, START_DIVISIONS, fifths, beats, beat_type, symbol))
+            measure.insert(0, part_attributes(instrument, START_DIVISIONS, written, beats, beat_type, symbol))
     # A piece ends with a final barline, which is how MuseScore starts a score too.
     set_barline_child(add_barline(measure, "right"), element_with_text("bar-style", FINAL_BARLINE))
     renumber(part)
     ensure_measure_ids(root)
     return root
+
+
+def instrument_of(part_entry: ET.Element | None) -> Instrument | None:
+    """Return which of this app's instruments a part is, by the sound MusicXML names for it."""
+    sound = part_entry.findtext("score-instrument/instrument-sound") if part_entry is not None else None
+    return next((instrument for instrument in INSTRUMENTS.values() if sound and instrument.sound == sound), None)
 
 
 def instrument_list() -> list[dict]:
@@ -744,7 +819,7 @@ def add_part(root: ET.Element, name: str) -> None:
     found = parts[0].find("measure/attributes/transpose")
     if found is not None:
         top_offset = key_offset(int(found.findtext("diatonic") or 0), int(found.findtext("chromatic") or 0))
-    offset = key_offset(instrument.steps, instrument.semitones) - top_offset
+    offset = 0 if at_sounding_pitch.get() else key_offset(instrument.steps, instrument.semitones) - top_offset
     part_id = new_part_id(root)
     root.find("part-list").append(score_part(part_id, instrument))
     part = ET.Element("part", id=part_id)

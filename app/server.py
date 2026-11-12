@@ -36,13 +36,14 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
-from pipeline import edit, marks, structure, transpose
-from pipeline.engrave import export_pdf, glyph_script, render_pages
+from pipeline import concert, edit, layout, marks, mixer, structure, transpose
+from pipeline.engrave import VIEWS, export_pdf, glyph_script, page_size, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import UnreadableScore, read_score_file, to_text
 from pipeline.playback import playback
 from pipeline.rhythm import fit_divisions, indexed
+from pipeline.timeline import timeline
 
 JOB_DIR = ROOT / "data" / "jobs"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -227,6 +228,7 @@ class CopiedEvent(BaseModel):
     marks: list[str] = []
     dynamic: str | None = None
     slur: list[int] = []
+    transposition: tuple[int, int] | None = None  # How far the copied part sounds from how it's written.
 
 
 class Paste(BaseModel):
@@ -278,6 +280,42 @@ class BlankScore(BaseModel):
 
 class CheckedMark(BaseModel):
     checked: bool
+
+
+class ConcertPitch(BaseModel):
+    on: bool
+
+
+class PageLayout(BaseModel):
+    """A page in millimetres, and the room between staves and systems in staff spaces."""
+
+    width: float = 210.0
+    height: float = 297.0
+    top: float = 15.0
+    bottom: float = 15.0
+    left: float = 15.0
+    right: float = 15.0
+    space: float = 1.75
+    staves: float = 6.0
+    systems: float = 6.0
+
+
+class ViewChoice(BaseModel):
+    view: str  # "page", or "horizontal" or "vertical" for MuseScore's continuous views.
+
+
+class MixerChannel(BaseModel):
+    volume: float = 0.0  # In decibels, 0 being the instrument's usual level.
+    pan: float = 0.0  # From -100, hard left, to 100, hard right.
+    mute: bool = False
+    solo: bool = False
+
+
+class MixerSettings(BaseModel):
+    parts: dict[str, MixerChannel] = {}  # By the part's id.
+    chords: MixerChannel = MixerChannel()
+    metronome: MixerChannel = MixerChannel()
+    master: MixerChannel = MixerChannel()
 
 
 def job_folder(score_id: str) -> Path:
@@ -486,6 +524,7 @@ def open_score_file(data: bytes, suffix: str) -> dict:
         edit.ensure_note_ids(root)
         marks.ensure_mark_ids(root)
         structure.ensure_measure_ids(root)
+        layout.keep_imported(root)  # On the page its file sets out, as MuseScore opens it.
         playback(root)
         render_pages(to_text(root))
     except (ValueError, TypeError, AttributeError, ZeroDivisionError) as error:
@@ -495,6 +534,8 @@ def open_score_file(data: bytes, suffix: str) -> dict:
     folder = JOB_DIR / score_id
     folder.mkdir(parents=True)
     save_version(folder, root)
+    if (levels := mixer.read_from_score(root)) is not None:
+        save_mixer(folder, levels, root)  # A file's instruments keep the volume and pan it gave them.
     write_status(folder, "ready")
     return {"id": score_id}
 
@@ -509,15 +550,47 @@ def source_pages(folder: Path) -> list[int]:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
+def part_ids(root: ET.Element) -> list[str]:
+    return [part.get("id") for part in root.findall("part")]
+
+
+def saved_mixer(folder: Path) -> dict | None:
+    path = folder / "mixer.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    except ValueError:
+        return None  # A mixer that can't be read is the usual one again, and the music is untouched.
+
+
+def mixer_of(folder: Path, root: ET.Element) -> dict:
+    return mixer.settled(saved_mixer(folder), part_ids(root))
+
+
+def save_mixer(folder: Path, settings: dict | None, root: ET.Element) -> dict:
+    settled = mixer.settled(settings, part_ids(root))
+    write_whole(folder / "mixer.json", json.dumps(settled))
+    return settled
+
+
+def view_of(folder: Path) -> str:
+    """Return how the score is shown: as pages, or one of MuseScore's continuous views."""
+    try:
+        found = json.loads((folder / "view.json").read_text(encoding="utf-8")).get("view")
+    except (OSError, ValueError, AttributeError):
+        return "page"
+    return found if found in VIEWS else "page"
+
+
 def describe(folder: Path, status: dict) -> dict:
     root = current_root(folder)
     edit.ensure_note_ids(root)
     marks.ensure_mark_ids(root)
+    shown = concert.shown(root)  # The same score at concert pitch, if it's shown that way.
     read_info: dict[tuple[int, float], dict] = {}
     for item in read_chord_file(folder):
         read_info.setdefault((item["measure"], round(float(item["onset"]), 3)), item)  # Only the first was placed.
     chords = []
-    for chord in edit.list_chords(root):
+    for chord in edit.list_chords(shown):
         found = read_info.get((chord["origin"], chord["onset"])) if chord["part"] == 0 else None
         unchanged = found is not None and found["chord"] == chord["text"]
         chords.append(chord | {
@@ -525,11 +598,15 @@ def describe(folder: Path, status: dict) -> dict:
             "box": found["box"] if found else None,
             "page": found["page"] if found else None,
         })
+    view = view_of(folder)
+    pages = render_pages(to_text(shown), view=view)
     return status | {
         "chords": chords,
         "canUndo": len(versions(folder)) > 1,
         "canRedo": bool(undone(folder)),
-        "pages": render_pages(to_text(root)),
+        "pages": pages,
+        "pageSizes": [page_size(page) for page in pages],
+        "view": view,
         "sourcePages": source_pages(folder),
         "checked": (folder / "checked.json").exists(),
         "blank": not (folder / "recognized").exists(),
@@ -538,6 +615,12 @@ def describe(folder: Path, status: dict) -> dict:
         "parts": structure.part_names(root),
         "partStaves": structure.part_staves(root),
         "barsPerLine": structure.bars_per_line(root),
+        "concertPitch": concert.shown_at_concert_pitch(root),
+        "partIds": part_ids(root),
+        "layout": layout.layout_of(root),
+        "timeline": timeline(shown),
+        "mixer": mixer_of(folder, root),
+        "transposing": concert.is_transposing(root),
     } | structure.title_of(root)
 
 
@@ -641,7 +724,8 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None])
         edit.ensure_note_ids(root)
         marks.ensure_mark_ids(root)
         try:
-            extra = change(root)
+            with concert.editing(root):  # At concert pitch the edit is made to what's shown.
+                extra = change(root)
         except edit.EditError as error:
             raise HTTPException(422, str(error)) from error
         edit.ensure_note_ids(root)
@@ -744,6 +828,8 @@ MARK_ACTIONS: dict[str, Callable[[ET.Element, MarkEdit], dict | None]] = {
     "toggle": lambda root, body: marks.toggle_mark(root, body.notes, body.name),
     "slur": lambda root, body: marks.toggle_slur(root, *first_and_last(body)),
     "hairpin": lambda root, body: marks.toggle_hairpin(root, *first_and_last(body), body.name),
+    "ottava": lambda root, body: marks.toggle_ottava(root, *first_and_last(body), body.name),
+    "pedal": lambda root, body: marks.toggle_pedal(root, *first_and_last(body), body.name),
     "dynamic": lambda root, body: marks.set_dynamic(root, first_and_last(body)[0], body.name),
     "tempo": lambda root, body: marks.set_tempo(root, first_and_last(body)[0], body.text, body.unit, body.dots),
     "text": lambda root, body: marks.add_text(root, first_and_last(body)[0], body.text, body.name or "staff"),
@@ -801,7 +887,13 @@ def change_parts(score_id: str, body: PartEdit) -> dict:
         else:
             raise HTTPException(422, "Unknown instrument action")
 
-    return apply_edit(score_id, change)
+    done = apply_edit(score_id, change)
+    if body.action == "remove" and saved_mixer(job_folder(score_id)) is not None:
+        # The next instrument added may be given the removed one's id, and mustn't take its levels.
+        with edit_lock:
+            folder = job_folder(score_id)
+            done["mixer"] = save_mixer(folder, saved_mixer(folder), current_root(folder))
+    return done
 
 
 @app.post("/api/scores/{score_id}/range")
@@ -851,7 +943,9 @@ def change_bars(score_id: str, body: BarEdit) -> dict:
             for doomed in range(structure.bar_of(root, body.last) if body.last else index, index - 1, -1):
                 structure.delete_measure(root, doomed)
         elif body.action == "key":
-            structure.set_key(root, index or 0, body.fifths)
+            # A key goes on the staff it's chosen for as it's shown there, so a trumpet's D major is a trumpet's.
+            part = structure.part_of(root, body.note) if body.note else 0
+            structure.set_key(root, index or 0, concert.wrapped(body.fifths + concert.transposition_at(root.findall("part")[part], index or 0).fifths))
         elif body.action == "time":
             structure.set_time(root, index or 0, body.beats, body.beat_type, body.symbol)
         elif body.action == "pickup":
@@ -913,6 +1007,37 @@ def redo(score_id: str) -> dict:
         return describe(folder, read_status(folder))
 
 
+@app.post("/api/scores/{score_id}/concert")
+def change_concert_pitch(score_id: str, body: ConcertPitch) -> dict:
+    """Show the score at concert pitch or as written. It's an edit, so it can be undone, as in MuseScore."""
+    return apply_edit(score_id, lambda root: concert.set_concert_pitch(root, body.on))
+
+
+@app.post("/api/scores/{score_id}/layout")
+def change_layout(score_id: str, body: PageLayout) -> dict:
+    """Set the page and its spacing, as Format ▸ Page settings and Style do. It's an edit, so it can be undone."""
+    return apply_edit(score_id, lambda root: layout.set_layout(root, layout.Layout(**body.model_dump())))
+
+
+@app.post("/api/scores/{score_id}/view")
+def change_view(score_id: str, body: ViewChoice) -> dict:
+    """Show the score as pages or in a continuous view. It's how the score is looked at, so it's no edit to undo."""
+    if body.view not in VIEWS:
+        raise HTTPException(422, "That isn't a view this app has.")
+    folder = job_folder(score_id)
+    with edit_lock:
+        write_whole(folder / "view.json", json.dumps({"view": body.view}))
+        return describe(folder, read_status(folder))
+
+
+@app.post("/api/scores/{score_id}/mixer")
+def change_mixer(score_id: str, body: MixerSettings) -> dict:
+    """Set the mixer. It's kept beside the score, not in it, so it isn't an edit to undo, as in MuseScore."""
+    folder = job_folder(score_id)
+    with edit_lock:
+        return {"mixer": save_mixer(folder, body.model_dump(), current_root(folder))}
+
+
 @app.get("/api/scores/{score_id}/playback")
 def get_playback(score_id: str) -> dict:
     return playback(current_root(job_folder(score_id)))
@@ -920,14 +1045,21 @@ def get_playback(score_id: str) -> dict:
 
 @app.get("/api/scores/{score_id}/score.musicxml")
 def download_musicxml(score_id: str) -> Response:
-    text = to_text(current_root(job_folder(score_id)))
+    folder = job_folder(score_id)
+    root = current_root(folder)
+    if saved_mixer(folder) is not None:
+        root = mixer.with_mixer(root, mixer_of(folder, root))
+    text = to_text(root)
     headers = {"Content-Disposition": 'attachment; filename="score.musicxml"'}
     return Response(text, media_type="application/vnd.recordare.musicxml+xml", headers=headers)
 
 
 @app.get("/api/scores/{score_id}/score.mid")
 def download_midi(score_id: str) -> Response:
-    data = midi_bytes(playback(current_root(job_folder(score_id))))
+    folder = job_folder(score_id)
+    root = current_root(folder)
+    levels = mixer_of(folder, root)
+    data = midi_bytes(playback(root) | {"mixer": [levels["parts"][part_id] for part_id in part_ids(root)]})
     return Response(data, media_type="audio/midi", headers={"Content-Disposition": 'attachment; filename="score.mid"'})
 
 
@@ -944,7 +1076,7 @@ def download_pdf(score_id: str, part: int | None = None) -> FileResponse:
             raise HTTPException(404, str(error)) from error
         name = f"part_{part + 1}.pdf"
     path = folder / name
-    export_pdf(to_text(root), path)
+    export_pdf(to_text(concert.shown(root)), path)  # Printed as it's shown, at concert pitch if that's chosen.
     # Shown where it opens, as Print and Parts open it in a window of its own to print from. As an
     # attachment, Chromium and the desktop app would only offer to save it. Export PDF still saves
     # it, as its link says to.
@@ -964,7 +1096,7 @@ def get_thumbnail(score_id: str) -> FileResponse:
         if not path.exists():
             for old in folder.glob("thumbnail_*.svg"):
                 old.unlink(missing_ok=True)
-            write_whole(path, render_pages(to_text(ET.parse(saved[-1]).getroot()))[0])
+            write_whole(path, render_pages(to_text(concert.shown(ET.parse(saved[-1]).getroot())))[0])
     return FileResponse(path, media_type="image/svg+xml")
 
 

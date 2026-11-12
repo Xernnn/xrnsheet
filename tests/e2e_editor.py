@@ -1224,6 +1224,55 @@ def test_marks_over_a_line_break(page, base: str, created: list[str]) -> None:
     check("redo removes it again", not notes_with(saved_score(base, score_id), "notations/slur"))
 
 
+def test_octave_and_pedal_lines(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, tune="cdefgabcdefgabcd", bars=8)
+    plain = head_heights(page)
+    step = page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step")
+    select_notes(page, 0, 2)
+    choose(page, "line:8va")
+    settle(page)
+    check("an 8va line is drawn", page.locator("#pages g.octave").count() == 1)
+    lowered = head_heights(page)
+    check("the notes under it are drawn an octave lower", all(abs(low - high - 7 * step) < 1.5 for high, low in zip(plain[:3], lowered[:3])) and abs(lowered[3] - plain[3]) < 1, (plain[:4], lowered[:4]))
+    octaves = [note.findtext("pitch/octave") for note in saved_score(base, score_id).iter("note") if note.find("pitch") is not None][:3]
+    check("and keep the pitch they sound at", octaves == ["5", "5", "5"], octaves)
+    sounding = page.evaluate("async () => (await (await fetch(`/api/scores/${scoreId}/playback`)).json()).notes.slice(0, 3).map(note => note.midi)")
+    check("so they play as written", sounding == [72, 74, 76], sounding)
+    page.keyboard.press("n")
+    settle(page)
+    click_staff(page, page.evaluate("() => document.querySelectorAll('#pages g.note')[1].id"), 0)
+    entered = [(note.findtext("pitch/step"), note.findtext("pitch/octave")) for note in saved_score(base, score_id).iter("note") if note.find("pitch") is not None][1]
+    check("a note clicked onto the top line under the 8va is the F an octave up", entered == ("F", "6"), entered)
+    page.keyboard.press("Escape")
+    settle(page)
+    click_mark(page, "#pages g.octave")
+    check("the line can be selected", mark_chosen(page).startswith("Ottava"), page.inner_text("#toolLabel"))
+    if shots:
+        page.screenshot(path=str(shots / "lines.png"))
+    page.keyboard.press("Delete")
+    settle(page)
+    check("Delete removes the whole line", page.locator("#pages g.octave").count() == 0 and not list(saved_score(base, score_id).iter("octave-shift")))
+    select_notes(page, 4, 6)
+    menu(page, "Add", "Lines", "Ottava 8va bassa")
+    settle(page)
+    check("Add ▸ Lines puts an 8va bassa below", [shift.get("type") for shift in saved_score(base, score_id).iter("octave-shift")] == ["up", "stop"])
+    select_notes(page, 8, 10)
+    choose(page, "line:pedal-pedstar")
+    settle(page)
+    check("a pedal is drawn as Ped. and a star", page.locator("#pages g.pedal").count() == 2)
+    held = page.evaluate("async () => (await (await fetch(`/api/scores/${scoreId}/playback`)).json()).notes.slice(8, 11).map(note => note.start + note.length)")
+    check("and holds its notes until it comes up", held == [11, 11, 11], held)
+    select_notes(page, 12, 14)
+    choose(page, "line:pedal-line")
+    settle(page)
+    click_mark(page, "#pages g.pedal:has(rect)")
+    check("a pedal line can be selected", mark_chosen(page).startswith("Pedal"), page.inner_text("#toolLabel"))
+    if shots:
+        page.screenshot(path=str(shots / "pedals.png"))
+    page.keyboard.press("Escape")
+    settle(page)
+
+
 def test_note_marks(page, base: str, shots: Path | None, created: list[str]) -> None:
     score_id = written_melody(page, base, created)
     select_notes(page, 0)
@@ -1594,6 +1643,174 @@ def test_instruments_and_layout(page, base: str, shots: Path | None, created: li
     check("again takes the break away", page.evaluate(bars_in_lines)[0] > 1, page.evaluate(bars_in_lines))
 
 
+def head_heights(page) -> list[float]:
+    """The height of each notehead on the page, top to bottom being smaller to larger."""
+    return page.evaluate("""() => [...document.querySelectorAll("#pages g.note")].map(note => note.querySelector(".notehead").getBoundingClientRect().top)""")
+
+
+def test_concert_pitch(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, staff="trumpet", tune="cdef")
+    check("concert pitch starts off", page.get_attribute("#concertPitch", "aria-pressed") == "false")
+    check("a trumpet in concert C reads D major", page.locator("#pages g.keySig g.keyAccid").count() == 2, page.locator("#pages g.keySig g.keyAccid").count())
+    written = head_heights(page)
+    step = page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step")
+    page.click("#concertPitch")
+    settle(page)
+    check("the status bar button turns concert pitch on", page.get_attribute("#concertPitch", "aria-pressed") == "true")
+    page.click('#menuBar [data-menu="View"]')
+    ticked = page.locator('.menu button[role="menuitemcheckbox"]:has(span:text-is("Concert pitch"))').get_attribute("aria-checked")
+    page.keyboard.press("Escape")
+    check("and View ▸ Concert pitch is ticked", ticked == "true", ticked)
+    sounding = head_heights(page)
+    check("every note is drawn a step lower", all(abs(low - high - step) < 1 for high, low in zip(written, sounding)), (written, sounding, step))
+    check("the key is drawn as concert C", page.locator("#pages g.keySig g.keyAccid").count() == 0)
+    if shots:
+        page.screenshot(path=str(shots / "concert.png"))
+    select_notes(page, 0)
+    press(page, "g")
+    steps = [note.findtext("pitch/step") for note in saved_score(base, score_id).iter("note") if note.find("pitch") is not None]
+    check("a letter at concert pitch renames to the note that sounds", steps[:4] == list("ADEF"), steps)
+    root = saved_score(base, score_id)
+    check("the file keeps the trumpet's written notes and key", root.find(".//fifths").text == "2" and root.find(".//transpose") is not None)
+    menu(page, "View", "Concert pitch")
+    settle(page)
+    check("View ▸ Concert pitch turns it off again", page.get_attribute("#concertPitch", "aria-pressed") == "false")
+    press(page, "Control+z")
+    check("turning it off is undone like an edit", page.get_attribute("#concertPitch", "aria-pressed") == "true")
+    press(page, "Escape")
+
+
+def test_more_clefs_and_instruments(page, base: str, shots: Path | None, created: list[str]) -> None:
+    page.goto(base)
+    page.click("#blankOpen")
+    families = page.locator('#newChooser [data-list="families"] li').all_inner_texts()
+    check("the families are MuseScore's, in its order", families == ["Woodwinds", "Free Reed", "Brass", "Percussion - Pitched", "Vocals", "Keyboards", "Strings - Plucked", "Strings - Bowed", "Plain staves"], families)
+    page.click('#newChooser li:text-is("Percussion - Pitched")')
+    offered = page.locator('#newChooser [data-list="instruments"] li').all_inner_texts()
+    check("pitched percussion has its instruments", offered == ["Timpani", "Glockenspiel", "Xylophone", "Vibraphone", "Marimba"], offered)
+    page.fill("#newChooser input", "clarinet")
+    offered = page.locator('#newChooser [data-list="instruments"] li').all_inner_texts()
+    check("the clarinets can be searched for", offered == ["Clarinet in E♭", "Clarinet in B♭", "Clarinet in A", "Bass Clarinet"], offered)
+    if shots:
+        page.screenshot(path=str(shots / "instruments.png"))
+    page.click("#blankCancel")
+    score_id = written_melody(page, base, created, staff="bass-clarinet", tune="cdefgabcdefg")
+    root = saved_score(base, score_id)
+    check("a bass clarinet sounds a ninth below how it's written", (root.findtext(".//transpose/diatonic"), root.findtext(".//transpose/chromatic"), root.findtext(".//transpose/octave-change")) == ("-1", "-2", "-1"))
+    check("and says what it is for other programs", root.findtext(".//score-instrument/instrument-sound") == "wind.reed.clarinet.bass")
+    select_notes(page, 4)
+    choose(page, "clef:bass8vb")
+    settle(page)
+    clefs = page.evaluate("() => [...document.querySelectorAll('#pages g.clef use')].map(use => (use.getAttribute('xlink:href') ?? use.getAttribute('href')).slice(1, 5))")
+    check("a bass clef 8va bassa can be chosen", "E064" in clefs, clefs)
+    select_notes(page, 8)
+    choose(page, "clef:baritoneC")
+    settle(page)
+    shapes = [(clef.findtext("sign"), clef.findtext("line"), clef.findtext("clef-octave-change")) for clef in saved_score(base, score_id).iter("clef")]
+    check("so can a baritone C clef", shapes == [("G", "2", None), ("F", "4", "-1"), ("C", "5", None)], shapes)
+    select_notes(page, 8)
+    choose(page, "clef:percussion")
+    settle(page)
+    shapes = [(clef.findtext("sign"), clef.findtext("line")) for clef in saved_score(base, score_id).iter("clef")]
+    check("and a percussion clef in its place", shapes[2] == ("percussion", None), shapes)
+    clefs = page.evaluate("() => [...document.querySelectorAll('#pages g.clef use')].map(use => (use.getAttribute('xlink:href') ?? use.getAttribute('href')).slice(1, 5))")
+    check("each clef is drawn", "E064" in clefs and "E069" in clefs, clefs)
+    if shots:
+        page.screenshot(path=str(shots / "clefs.png"))
+
+
+def test_continuous_view(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, bars=16, tune="cdefgabcdefgabcdefgabc")
+    menu(page, "File", "Project properties…")
+    page.fill("#titleInput", "Long Tune")
+    page.click("#projectDialog button[type=submit]")
+    settle(page)
+    systems = lambda: page.locator("#pages g.system").count()
+    check("page view lays the music out in systems", systems() > 1, systems())
+    page.select_option("#viewMode", "horizontal")
+    settle(page)
+    check("the horizontal continuous view is one long system", systems() == 1 and page.locator("#pages .page").count() == 1)
+    check("without the title frame, as in MuseScore", page.locator("#pages g.pgHead").count() == 0)
+    width = page.evaluate("() => score.pageSizes[0][0]")
+    check("and as wide as its music", width > 1.5 * 210, width)
+    page.click("#menuBar [data-menu='View']")
+    ticked = page.locator('.menu button[role="menuitemcheckbox"]:has(span:text-is("Continuous view (horizontal)"))').get_attribute("aria-checked")
+    page.keyboard.press("Escape")
+    check("View shows which view it is", ticked == "true", ticked)
+    click_on(page, page.locator("#pages g.note").nth(12))
+    settle(page)
+    check("a note far along can be clicked", page.evaluate("() => selected") == page.locator("#pages g.note").nth(12).get_attribute("id"))
+    page.keyboard.press("ArrowRight")
+    settle(page)
+    check("and the arrows go on from it", page.evaluate("() => selected") == page.locator("#pages g.note").nth(13).get_attribute("id"))
+    page.keyboard.press("n")
+    settle(page)
+    rest = page.evaluate("() => document.querySelectorAll('#pages g.measure')[10].querySelector('g.rest, g.mRest').id")
+    click_staff(page, rest, 0)
+    written = [note for note in saved_score(base, score_id).findall("part/measure")[10].iter("note") if note.find("pitch") is not None]
+    check("a click on the staff writes a note there", [(note.findtext("pitch/step"), note.findtext("pitch/octave")) for note in written] == [("F", "5")])
+    page.keyboard.press("Escape")
+    settle(page)
+    if shots:
+        page.screenshot(path=str(shots / "continuous.png"))
+    menu(page, "View", "Continuous view (vertical)")
+    settle(page)
+    check("the vertical continuous view is one long page", page.locator("#pages .page").count() == 1 and systems() > 1)
+    check("which keeps its title", page.locator("#pages g.pgHead").count() == 1)
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    check("the score keeps its view", page.input_value("#viewMode") == "vertical")
+    check("which is no edit to undo", page.evaluate("() => score.canUndo") is True and json.loads(fetch_text(base, f"/api/scores/{score_id}"))["view"] == "vertical")
+    check("it still prints", urllib.request.urlopen(f"{base}/api/scores/{score_id}/score.pdf").read(5) == b"%PDF-")
+    page.select_option("#viewMode", "page")
+    settle(page)
+    check("and goes back to page view", systems() > 1 and page.locator("#pages g.pgHead").count() == 1)
+
+
+def test_page_settings(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, bars=24, tune="cdefgabc")
+    width = lambda: page.evaluate("() => document.querySelector('#pages .page').getBoundingClientRect().width")
+    a4 = width()
+    step = lambda: page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step")
+    first_step = step()
+    menu(page, "Format", "Page settings…")
+    check("page settings start from A4, portrait", (page.input_value("#pageSize"), page.is_checked('input[name="orientation"][value="portrait"]'), page.input_value("#pageWidth")) == ("A4", True, "210"))
+    page.select_option("#pageSize", "Letter")
+    check("a page size fills in its width and height", (page.input_value("#pageWidth"), page.input_value("#pageHeight")) == ("215.9", "279.4"))
+    page.check('input[name="orientation"][value="landscape"]')
+    check("landscape turns the page", (page.input_value("#pageWidth"), page.input_value("#pageHeight")) == ("279.4", "215.9"))
+    page.fill("#staffSpace", "2")
+    page.fill("#marginTop", "25")
+    page.click("#pageDialog button[type=submit]")
+    settle(page)
+    check("the page is drawn at its new size", abs(width() / a4 - 279.4 / 210) < 0.01, (a4, width()))
+    check("and its staves with the new staff space", abs(step() / first_step - 2 / 1.75) < 0.02, (first_step, step()))
+    root = saved_score(base, score_id)
+    check("the score keeps it as MusicXML does", (root.findtext("defaults/scaling/millimeters"), root.findtext("defaults/page-layout/page-width")) == ("8", "1397"))
+    if shots:
+        page.screenshot(path=str(shots / "page_settings.png"))
+    tops = "() => [...document.querySelectorAll('#pages g.system')].slice(0, 2).map(system => staffLines(system.querySelector('g.staff')).top)"
+    before = page.evaluate(tops)
+    menu(page, "Format", "Style…")
+    check("Style starts from the usual spacing", (page.input_value("#staffDistance"), page.input_value("#systemDistance")) == ("6", "6"))
+    page.fill("#systemDistance", "14")
+    page.click("#styleDialog button[type=submit]")
+    settle(page)
+    after = page.evaluate(tops)
+    check("more room between systems spreads them", after[1] - after[0] > before[1] - before[0], (before, after))
+    page.keyboard.press("Control+z")
+    page.keyboard.press("Control+z")
+    settle(page)
+    check("both can be undone", abs(width() - a4) < 1 and page.evaluate("() => score.layout.width") == 210, width())
+    menu(page, "Format", "Page settings…")
+    page.fill("#marginLeft", "50")
+    page.fill("#marginRight", "50")
+    page.fill("#pageWidth", "120")
+    page.click("#pageDialog button[type=submit]")
+    settle(page)
+    check("a page with no room for music is refused", "no room" in page.inner_text("#message"), page.inner_text("#message"))
+
+
 def test_quick_entry(page, base: str, created: list[str]) -> None:
     score_id = written_melody(page, base, created, tune="cd")
     select_notes(page, 0)
@@ -1742,17 +1959,197 @@ def test_audio_file(page, base: str, created: list[str]) -> None:
         rate, channels, width, length = sound.getframerate(), sound.getnchannels(), sound.getsampwidth(), sound.getnframes()
         frames = sound.readframes(length)
     samples = array.array("h", frames)
+    left, right = samples[0::2], samples[1::2]
     tempo = page.evaluate("async () => (await (await fetch(`/api/scores/${scoreId}/playback`)).json()).tempo")
     beat = 60 / tempo
-    check("it's a plain WAV another program can read", (rate, channels, width) == (44100, 1, 2), (rate, channels, width))
+    check("it's a plain stereo WAV another program can read", (rate, channels, width) == (44100, 2, 2), (rate, channels, width))
     check("it lasts as long as the score", abs(length / rate - (8 * beat + 0.5)) < 0.01, length / rate)
-    check("the notes can be heard", max(abs(sample) for sample in samples[: int(rate * beat * 3)]) > 3000)
-    check("the empty bar is silent", max(abs(sample) for sample in samples[int(rate * beat * 4.5) :]) == 0)
+    check("the notes can be heard", max(abs(sample) for sample in left[: int(rate * beat * 3)]) > 3000)
+    check("in the middle, as nothing is panned", left[: int(rate * beat * 3)] == right[: int(rate * beat * 3)])
+    check("the empty bar is silent", max(abs(sample) for sample in samples[int(rate * beat * 4.5) * 2 :]) == 0)
     turned_down = page.evaluate("""async () => {
         const file = new DataView(await wavFile(Float32Array.of(0.5, 2, -1), 44100).arrayBuffer());
         return [file.getInt16(44, true), file.getInt16(46, true), file.getInt16(48, true)];
     }""")
     check("a sound too loud for the file is turned down, not wrapped round", turned_down == [8191, 32767, -16383], turned_down)
+    paired = page.evaluate("""async () => {
+        const file = new DataView(await wavFile([Float32Array.of(1, 0), Float32Array.of(0, -1)], 44100).arrayBuffer());
+        return [file.getUint16(22, true), file.getUint32(28, true), file.getUint16(32, true), file.getInt16(44, true), file.getInt16(46, true), file.getInt16(48, true), file.getInt16(50, true)];
+    }""")
+    check("a stereo file keeps left and right side by side", paired == [2, 44100 * 4, 4, 32767, 0, 0, -32767], paired)
+
+
+def mixer_strip(page, name: str):
+    return page.locator(f'#mixerStrips .strip:has(.name:text-is("{name}"))')
+
+
+def test_mixer(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, bars=2, tune="cdef")
+    page.click('#sideTabs [data-panel="instruments"]')
+    page.click("#partAdd")
+    page.click('#partChooser li:text-is("Woodwinds")')
+    page.dblclick('#partChooser [data-instrument="flute"]')
+    page.click("#partOk")
+    settle(page)
+    page.keyboard.press("F10")
+    check("F10 opens the mixer below the score", page.is_visible("#mixerPanel") and page.locator("#dockTabs button").all_inner_texts() == ["Mixer"])
+    names = page.locator("#mixerStrips .strip .name").all_inner_texts()
+    check("it has a strip for each instrument, the chord symbols, the metronome and the master", names == ["Music", "Flute", "Chord symbols", "Metronome", "Master"], names)
+    mixer_strip(page, "Music").locator(".fader input").fill("-12")
+    mixer_strip(page, "Music").locator(".pan input").fill("-100")
+    mixer_strip(page, "Music").locator(".solo").click()
+    check("a fader shows its level", mixer_strip(page, "Music").locator(".fader output").inner_text() == "-12.0 dB")
+    check("and a pan its side", mixer_strip(page, "Music").locator(".pan output").inner_text() == "L 100")
+    page.wait_for_timeout(600)
+    saved = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["mixer"]
+    parts = list(saved["parts"].values())
+    check("the score keeps the mixer", parts[0]["volume"] == -12 and parts[0]["pan"] == -100 and parts[0]["solo"], saved)
+    check("which isn't an edit to undo", json.loads(fetch_text(base, f"/api/scores/{score_id}"))["canUndo"] is True and page.evaluate("() => score.canUndo"))
+    heard = page.evaluate("""async () => {
+        const data = await fetchPlayback();
+        const rate = 44100, audio = new OfflineAudioContext(2, rate * 3, rate);
+        schedule(audio, data, 0, 0, 1, Infinity, { mixer: mixerForPlayback() });
+        const sound = await audio.startRendering();
+        const top = samples => samples.reduce((most, sample) => Math.max(most, Math.abs(sample)), 0);
+        return [top(sound.getChannelData(0)), top(sound.getChannelData(1))];
+    }""")
+    check("panned hard left, only the left speaker sounds", heard[0] > 0.01 and heard[1] < 1e-6, heard)
+    mixer_strip(page, "Flute").locator(".mute").click()
+    quiet = page.evaluate("""async () => {
+        const data = await fetchPlayback();
+        data.notes = data.notes.map(note => ({ ...note, part: 1 }));
+        const audio = new OfflineAudioContext(2, 44100 * 3, 44100);
+        schedule(audio, data, 0, 0, 1, Infinity, { mixer: mixerForPlayback() });
+        return (await audio.startRendering()).getChannelData(0).reduce((most, sample) => Math.max(most, Math.abs(sample)), 0);
+    }""")
+    check("a muted instrument is silent", quiet == 0, quiet)
+    mixer_strip(page, "Music").locator(".solo").click()
+    mixer_strip(page, "Music").locator(".pan input").fill("0")
+    mixer_strip(page, "Flute").locator(".mute").click()
+    mixer_strip(page, "Flute").locator(".pan input").fill("-100")
+    page.wait_for_timeout(600)
+    with urllib.request.urlopen(f"{base}/api/scores/{score_id}/score.musicxml") as response:
+        exported = ET.fromstring(response.read())
+    levels = [(entry.findtext("midi-instrument/volume"), entry.findtext("midi-instrument/pan")) for entry in exported.findall("part-list/score-part")]
+    check("MusicXML gets each instrument's volume and pan", levels == [("39.3701", "0"), ("78.7402", "-90")], levels)
+    if shots:
+        page.screenshot(path=str(shots / "mixer.png"))
+    page.keyboard.press("F10")
+    check("F10 puts it away again", page.is_hidden("#dock"))
+    menu(page, "View", "Mixer")
+    check("as View ▸ Mixer shows it", page.is_visible("#mixerPanel"))
+    page.click("#dockClose")
+    check("and its close button closes it", page.is_hidden("#dock"))
+
+
+def lit_keys(page, kind: str) -> list[int]:
+    return page.evaluate("kind => [...document.querySelectorAll(`#pianoKeys .key.${kind}`)].map(key => Number(key.dataset.midi))", kind)
+
+
+def test_piano_keyboard(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, bars=2, tune="cdef")
+    page.wait_for_function("() => playState.data !== null")
+    page.keyboard.press("p")
+    check("P opens the piano keyboard below the score", page.is_visible("#pianoPanel"))
+    check("with a piano's 88 keys", page.locator("#pianoKeys .key").count() == 88 and page.locator("#pianoKeys .white").count() == 52)
+    select_notes(page, 0)
+    check("the selected note's key is lit", lit_keys(page, "chosen") == [72], lit_keys(page, "chosen"))
+    select_notes(page, 0, 2)
+    check("and every key of a selected stretch", lit_keys(page, "chosen") == [72, 74, 76], lit_keys(page, "chosen"))
+    page.keyboard.press("Escape")
+    page.keyboard.press("n")
+    settle(page)
+    page.locator('#pianoKeys [data-midi="64"]').click()
+    settle(page)
+    page.keyboard.down("Shift")
+    page.locator('#pianoKeys [data-midi="67"]').click()
+    page.keyboard.up("Shift")
+    settle(page)
+    notes = [(note.findtext("pitch/step"), note.findtext("pitch/octave"), note.find("chord") is not None) for note in saved_score(base, score_id).iter("note") if note.find("pitch") is not None]
+    check("in note input a key writes its note, and Shift adds it to the chord", notes[:2] == [("E", "4", False), ("G", "4", True)], notes[:3])
+    page.keyboard.press("Escape")
+    settle(page)
+    page.keyboard.press("Escape")
+    page.click("#rewind")
+    page.click("#play")
+    page.wait_for_selector("#pianoKeys .key.sounding", timeout=4000)
+    check("keys light up as their notes play", len(lit_keys(page, "sounding")) >= 1, lit_keys(page, "sounding"))
+    if shots:
+        page.screenshot(path=str(shots / "piano.png"))
+    page.click("#play")
+    check("and go out when playback stops", lit_keys(page, "sounding") == [])
+    before = page.evaluate("() => document.querySelector('#pianoKeys .white').getBoundingClientRect().width")
+    box = page.locator("#pianoPanel").bounding_box()
+    page.mouse.move(box["x"] + 200, box["y"] + 40)
+    page.keyboard.down("Control")
+    page.mouse.wheel(0, -100)
+    page.keyboard.up("Control")
+    after = page.evaluate("() => document.querySelector('#pianoKeys .white').getBoundingClientRect().width")
+    check("Ctrl and the wheel make the keys wider", after > before, (before, after))
+    page.mouse.move(box["x"] + 200, box["y"] + 40)
+    page.keyboard.down("Control")
+    page.mouse.wheel(0, 100)
+    page.keyboard.up("Control")
+
+    written_melody(page, base, created, staff="trumpet", tune="c")
+    page.wait_for_function("() => playState.data && Object.keys(playState.data.events).length > 0")
+    page.keyboard.press("p")
+    select_notes(page, 0)
+    check("a trumpet's note lights its written key", lit_keys(page, "chosen") == [73], lit_keys(page, "chosen"))
+    page.click("#concertPitch")
+    settle(page)
+    page.wait_for_function("() => document.querySelector('#pianoKeys .key.chosen')?.dataset.midi === '71'")
+    check("and at concert pitch the key that sounds", lit_keys(page, "chosen") == [71], lit_keys(page, "chosen"))
+    page.keyboard.press("p")
+    check("P puts the keyboard away", page.is_hidden("#dock"))
+
+
+def timeline_cell(page, row: str, measure: int):
+    return page.locator(f'#timelineGrid .row:has(.label:text-is("{row}")) .cell[data-measure="{measure}"]')
+
+
+def test_timeline(page, base: str, shots: Path | None, created: list[str]) -> None:
+    score_id = written_melody(page, base, created, bars=8, tune="cdefgabcdefg")
+    page.click('#sideTabs [data-panel="instruments"]')
+    page.click("#partAdd")
+    page.click('#partChooser li:text-is("Woodwinds")')
+    page.dblclick('#partChooser [data-instrument="flute"]')
+    page.click("#partOk")
+    settle(page)
+    select_notes(page, 4)
+    choose(page, "time:3/4")
+    settle(page)
+    select_notes(page, 0)
+    page.keyboard.press("Control+m")
+    settle(page)
+    page.keyboard.press("F12")
+    check("F12 opens the timeline below the score", page.is_visible("#timelinePanel"))
+    labels = page.locator("#timelineGrid .label").all_inner_texts()
+    check("it has MuseScore's rows, then one for each instrument", labels == ["", "Tempo", "Time signature", "Rehearsal mark", "Key signature", "Barlines", "Jumps and markers", "Music", "Flute"], labels)
+    check("a column for each measure", page.locator('#timelineGrid .row:has(.label:text-is("Music")) .cell').count() == 8)
+    check("the time signature row shows where it changes", (timeline_cell(page, "Time signature", 0).inner_text(), timeline_cell(page, "Time signature", 1).inner_text()) == ("4/4", "3/4"))
+    check("and the rehearsal mark row its letter", timeline_cell(page, "Rehearsal mark", 0).inner_text() == "A")
+    check("and the barlines row the end", timeline_cell(page, "Barlines", 7).inner_text() == "final")
+    filled = page.evaluate("""() => [...document.querySelectorAll('#timelineGrid .row.part')].map(row => [...row.querySelectorAll('.cell')].map(cell => cell.classList.contains('filled')))""")
+    check("an instrument's row shows the measures it plays in", filled[0] == [True] * 3 + [False] * 5 and not any(filled[1]), filled)
+    timeline_cell(page, "Flute", 2).click()
+    settle(page)
+    chosen = page.evaluate("() => [...document.querySelectorAll('#timelineGrid .cell.chosen')].map(cell => [Number(cell.dataset.part), Number(cell.dataset.measure)])")
+    check("a click selects that measure of that instrument", chosen == [[1, 2]], chosen)
+    lower = page.evaluate("() => document.querySelectorAll('#pages g.measure')[2].querySelectorAll(':scope > g.staff')[1].querySelector('g.mRest, g.rest').id")
+    check("on the page too", page.evaluate("() => range?.ids ?? [selected]") == [lower], page.evaluate("() => range?.ids ?? [selected]"))
+    page.keyboard.down("Shift")
+    timeline_cell(page, "Flute", 4).click()
+    page.keyboard.up("Shift")
+    settle(page)
+    chosen = page.evaluate("() => [...document.querySelectorAll('#timelineGrid .cell.chosen')].map(cell => Number(cell.dataset.measure))")
+    check("Shift+click stretches the selection to the measure", chosen == [2, 3, 4], chosen)
+    if shots:
+        page.screenshot(path=str(shots / "timeline.png"))
+    page.keyboard.press("Escape")
+    settle(page)
+    menu(page, "View", "Timeline")
+    check("View ▸ Timeline puts it away", page.is_hidden("#dock"))
 
 
 def test_midi_keyboard(context, base: str, created: list[str]) -> None:
@@ -1896,6 +2293,85 @@ def test_sound(page, base: str, created: list[str]) -> None:
     check("playback stops", page.locator("#pages .playing").count() == 0)
 
 
+def wait_playing(page, playing: bool) -> None:
+    page.wait_for_function("wanted => document.querySelector('#play').getAttribute('aria-pressed') === wanted", arg=str(playing).lower())
+
+
+def test_playback_toolbar(page, base: str, shots: Path | None, created: list[str]) -> None:
+    written_melody(page, base, created, bars=4, tune="cdefgabcdefg")
+    page.wait_for_function("() => playState.data !== null")
+    check("the toolbar has rewind, play, loop, metronome and settings", all(page.is_visible(f"#{name}") for name in ("rewind", "play", "loop", "metronome", "playSettings")))
+    check("it shows the tempo", page.inner_text("#tempoValue") == "100", page.inner_text("#tempoValue"))
+    check("and the position at the start", (page.input_value("#timeCounter"), page.input_value("#beatCounter")) == ("00:00:00.0", "1.1"))
+    page.fill("#beatCounter", "3.1")
+    page.keyboard.press("Enter")
+    check("a measure typed in moves the position there", page.input_value("#timeCounter") == "00:00:04.8", page.input_value("#timeCounter"))
+    page.keyboard.press(" ")
+    wait_playing(page, True)
+    check("with nothing selected, Play starts from that position", page.get_attribute("#play", "data-notes") == "4", page.get_attribute("#play", "data-notes"))
+    page.wait_for_timeout(400)
+    page.keyboard.press(" ")
+    wait_playing(page, False)
+    measure = page.input_value("#beatCounter")
+    check("stopping keeps the place it got to", measure.startswith("3."), measure)
+    page.keyboard.press(" ")
+    wait_playing(page, True)
+    check("and Play carries on from there", page.get_attribute("#play", "data-notes") in ("3", "4"), page.get_attribute("#play", "data-notes"))
+    page.keyboard.press(" ")
+    wait_playing(page, False)
+    page.click("#rewind")
+    check("rewind goes back to the start", (page.input_value("#timeCounter"), page.input_value("#beatCounter")) == ("00:00:00.0", "1.1"))
+    page.fill("#timeCounter", "00:00:01.2")
+    page.keyboard.press("Enter")
+    check("a time typed in moves the position there", page.input_value("#beatCounter") == "1.3", page.input_value("#beatCounter"))
+
+    select_notes(page, 1, 2)
+    page.click("#loop")
+    check("the loop button turns on", page.get_attribute("#loop", "aria-pressed") == "true")
+    check("flags mark where the loop starts and ends", page.locator(".loopMarker.in").count() == 1 and page.locator(".loopMarker.out").count() == 1)
+    page.click("#play")
+    wait_playing(page, True)
+    check("the loop plays only the selection", page.get_attribute("#play", "data-notes") == "2", page.get_attribute("#play", "data-notes"))
+    page.wait_for_timeout(1700)  # Two quarter notes at 100 a minute take 1.2 seconds.
+    place = page.evaluate("() => player && playingPlace()")
+    check("and goes round again", place is not None and 1 <= place <= 3, place)
+    if shots:
+        page.screenshot(path=str(shots / "playback.png"))
+    page.click("#play")
+    wait_playing(page, False)
+    page.click("#loop")
+    check("the loop can be turned off", page.get_attribute("#loop", "aria-pressed") == "false" and page.locator(".loopMarker").count() == 0)
+
+    page.click("#metronome")
+    check("the metronome turns on", page.get_attribute("#metronome", "aria-pressed") == "true")
+    beats = page.evaluate("""async () => {
+        const data = await fetchPlayback();
+        const { beats } = schedule(new OfflineAudioContext(1, 44100, 44100), data, 0, 0, 1, Infinity, { metronome: playState.metronome });
+        return beats.map(beat => [beat.place, beat.strong]);
+    }""")
+    check("it ticks every beat, higher on each bar's first", beats == [[place, place % 4 == 0] for place in range(16)], beats[:6])
+    with page.expect_download() as download:
+        menu(page, "File", "Export", "Audio (WAV)")
+    with wave.open(str(download.value.path())) as sound:
+        rate = sound.getframerate()
+        samples = array.array("h", sound.readframes(sound.getnframes()))
+    check("exported audio has the ticks in it while it's on", max(abs(sample) for sample in samples[int(rate * 0.6 * 12.5) :]) > 1000)
+    page.click("#metronome")
+
+    page.fill("#beatCounter", "1.3")
+    page.keyboard.press("Enter")
+    page.click("#tempoButton")
+    page.fill("#speedValue", "200")
+    page.keyboard.press("Enter")
+    check("the speed doubles the tempo shown", page.inner_text("#tempoValue") == "200", page.inner_text("#tempoValue"))
+    check("and halves the time to a place", page.input_value("#timeCounter") == "00:00:00.6", page.input_value("#timeCounter"))
+    page.click("#speedReset")
+    check("reset goes back to the written tempo", page.inner_text("#tempoValue") == "100")
+    page.keyboard.press("Escape")
+    page.mouse.click(5, 5)
+    settle(page)
+
+
 def test_phone(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()
     page.set_viewport_size({"width": 390, "height": 800})
@@ -1975,20 +2451,29 @@ def main() -> None:
             test_titles_and_repeats(page, base, arguments.shots, created)
             test_sound(page, base, created)
             test_note_marks(page, base, arguments.shots, created)
+            test_octave_and_pedal_lines(page, base, arguments.shots, created)
             test_marks_over_a_line_break(page, base, created)
             test_placed_marks(page, base, arguments.shots, created)
             test_voices(page, base, arguments.shots, created)
             test_voice_key_waits_its_turn(page, base, created)
             test_transposing(page, base, created)
             test_instruments_and_layout(page, base, arguments.shots, created)
+            test_concert_pitch(page, base, arguments.shots, created)
+            test_continuous_view(page, base, arguments.shots, created)
+            test_page_settings(page, base, arguments.shots, created)
+            test_more_clefs_and_instruments(page, base, arguments.shots, created)
             test_quick_entry(page, base, created)
             test_tuplets_and_verses(page, base, arguments.shots, created)
             test_instrument_sounds(page, base, created)
             test_pickup(page, base, created)
             test_audio_file(page, base, created)
+            test_mixer(page, base, arguments.shots, created)
+            test_piano_keyboard(page, base, arguments.shots, created)
+            test_timeline(page, base, arguments.shots, created)
             test_midi_keyboard(context, base, created)
             test_opening_a_file(page, base, arguments.shots, created)
             test_sound_of_marks(page, base, created)
+            test_playback_toolbar(page, base, arguments.shots, created)
             test_phone(context, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])

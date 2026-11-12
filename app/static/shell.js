@@ -22,12 +22,14 @@ const ICONS = {
   tie: `<ellipse cx="6" cy="9" rx="3.2" ry="2.3" fill="currentColor" stroke="none" transform="rotate(-20 6 9)"/><ellipse cx="18" cy="9" rx="3.2" ry="2.3" fill="currentColor" stroke="none" transform="rotate(-20 18 9)"/><path d="M6 15c4 4 8 4 12 0"/>`,
   slur: `<ellipse cx="5.5" cy="17" rx="2.8" ry="2" fill="currentColor" stroke="none" transform="rotate(-20 5.5 17)"/><ellipse cx="12" cy="14" rx="2.8" ry="2" fill="currentColor" stroke="none" transform="rotate(-20 12 14)"/><ellipse cx="18.5" cy="17" rx="2.8" ry="2" fill="currentColor" stroke="none" transform="rotate(-20 18.5 17)"/><path d="M4 10c5-6 11-6 16 0"/>`,
   tuplet: `<path d="M3.5 8V5h5M20.5 8V5h-5"/><text x="12" y="8" font-size="8" text-anchor="middle" fill="currentColor" stroke="none" font-family="serif" font-style="italic" font-weight="700">3</text><path d="M6.5 19v-8h12v8M12.5 19v-8" stroke-width="1.2"/><ellipse cx="4.6" cy="19" rx="2.2" ry="1.6" fill="currentColor" stroke="none"/><ellipse cx="10.6" cy="19" rx="2.2" ry="1.6" fill="currentColor" stroke="none"/><ellipse cx="16.6" cy="19" rx="2.2" ry="1.6" fill="currentColor" stroke="none"/>`,
+  fork: `<path d="M9 3v7a3 3 0 006 0V3M12 13v8"/>`,
   flip: `<path d="M17 4v16M14 7l3-3 3 3M14 17l3 3 3-3"/><ellipse cx="7" cy="15" rx="3.2" ry="2.3" fill="currentColor" stroke="none" transform="rotate(-20 7 15)"/><path d="M10 14.5V5"/>`,
 };
 const ZOOMS = [25, 50, 75, 100, 125, 150, 200, 300, 400];
 const PAGE_WIDTH_MM = 210, PAGE_HEIGHT_MM = 297, MM_TO_PX = 96 / 25.4;
+const VIEW_NAMES = { page: "Page view", horizontal: "Continuous view (horizontal)", vertical: "Continuous view (vertical)" };
 const DESK_PADDING_PX = 48;
-const FAMILIES = ["Woodwinds", "Brass", "Vocals", "Keyboards", "Strings - Plucked", "Strings - Bowed", "Plain staves"];
+const FAMILIES = ["Woodwinds", "Free Reed", "Brass", "Percussion - Pitched", "Vocals", "Keyboards", "Strings - Plucked", "Strings - Bowed", "Plain staves"];
 const SHORTCUTS = [
   ["N", "Start or stop note input"],
   ["A to G", "Write that note, then move on"],
@@ -69,6 +71,9 @@ const SHORTCUTS = [
   ["Alt+Shift+T", "Tempo marking"],
   ["Space", "Play or stop"],
   ["F9, F7, F8", "Show or hide Palettes, Instruments, Properties"],
+  ["F10", "Show or hide the mixer"],
+  ["F12", "Show or hide the timeline"],
+  ["P", "Show or hide the piano keyboard. In note input a key writes its note, and Shift adds it to the chord"],
   ["Ctrl+=, Ctrl+-, Ctrl+0", "Zoom in, zoom out, 100%"],
   ["Drag a selected note", "Move it up or down"],
   ["Click a dynamic, slur or text", "Select it. Del removes it, and a double-click or F2 changes it"],
@@ -207,6 +212,14 @@ function addItems() {
       { label: "Slur", keys: "S", run: () => markAction("slur") },
       { label: "Crescendo", keys: "<", run: () => markAction("hairpin", { name: "crescendo" }) },
       { label: "Diminuendo", keys: ">", run: () => markAction("hairpin", { name: "diminuendo" }) },
+      null,
+      { label: "Ottava 8va alta", run: () => markAction("ottava", { name: "8va" }) },
+      { label: "Ottava 8va bassa", run: () => markAction("ottava", { name: "8vb" }) },
+      { label: "Ottava 15ma alta", run: () => markAction("ottava", { name: "15ma" }) },
+      { label: "Ottava 15ma bassa", run: () => markAction("ottava", { name: "15mb" }) },
+      null,
+      { label: "Pedal", run: () => markAction("pedal", { name: "pedstar" }) },
+      { label: "Pedal (straight hooks)", run: () => markAction("pedal", { name: "line" }) },
     ] },
   ];
 }
@@ -250,6 +263,13 @@ function menuList() {
       { label: "Instruments", keys: "F7", checked: sideShown("instruments"), enabled: open, run: () => toggleSide("instruments") },
       { label: "Properties", keys: "F8", checked: sideShown("properties"), enabled: open, run: () => toggleSide("properties") },
       { label: "Original sheet", checked: open && !$("original").hidden, enabled: open && !score.blank, run: () => showOriginal($("original").hidden) },
+      { label: "Mixer", keys: "F10", checked: open && dockOpen("mixer"), enabled: open, run: () => toggleDock("mixer") },
+      { label: "Piano keyboard", keys: "P", checked: open && dockOpen("piano"), enabled: open, run: () => toggleDock("piano") },
+      { label: "Timeline", keys: "F12", checked: open && dockOpen("timeline"), enabled: open, run: () => toggleDock("timeline") },
+      null,
+      { label: "Concert pitch", checked: open && Boolean(score.concertPitch), enabled: open, run: toggleConcertPitch },
+      null,
+      ...Object.entries(VIEW_NAMES).map(([view, label]) => ({ label, checked: open && (score.view ?? "page") === view, enabled: open, run: () => setView(view) })),
       null,
       { label: "Zoom in", keys: "Ctrl+=", enabled: open, run: () => stepZoom(1) },
       { label: "Zoom out", keys: "Ctrl+-", enabled: open, run: () => stepZoom(-1) },
@@ -262,6 +282,9 @@ function menuList() {
     ] },
     { label: "Add", enabled: open, items: open ? addItems() : [] },
     { label: "Format", enabled: open, items: [
+      { label: "Style…", run: openStyle },
+      { label: "Page settings…", run: openPageSettings },
+      null,
       { label: "Add/remove system breaks…", run: openBreaks },
     ] },
     { label: "Tools", enabled: open, items: [
@@ -309,6 +332,12 @@ function setUpMenus() {
   });
 }
 
+// Transposing instruments are shown as they sound, or as their players read them. The score keeps
+// the choice, and it can be undone, as MuseScore does with its Concert pitch button.
+function toggleConcertPitch() {
+  return enqueue(() => send("concert", { on: !score.concertPitch }));
+}
+
 function appendBar() {
   return enqueue(() => send("bars", { action: "insert", note: null }));
 }
@@ -342,11 +371,20 @@ function toggleSide(name) {
   drawCursor();
 }
 
-// Zoom. 100% draws a page at its printed size, as MuseScore does.
+// Pages as pages, or one long system across, or one long page down, as MuseScore's views are.
+function setView(view) {
+  return enqueue(() => send("view", { view }));
+}
+
+// Zoom. 100% draws a page at its printed size, as MuseScore does. In the horizontal view the one
+// system is fitted to the desk's height, as it can't be fitted across.
 function fitZoom(kind) {
   const desk = $("desk");
-  const wide = (desk.clientWidth - DESK_PADDING_PX) / (PAGE_WIDTH_MM * MM_TO_PX);
-  const tall = (desk.clientHeight - DESK_PADDING_PX) / (PAGE_HEIGHT_MM * MM_TO_PX);
+  const [width, height] = score?.pageSizes?.[0] ?? [PAGE_WIDTH_MM, PAGE_HEIGHT_MM];
+  const wide = (desk.clientWidth - DESK_PADDING_PX) / (width * MM_TO_PX);
+  const tall = (desk.clientHeight - DESK_PADDING_PX) / (height * MM_TO_PX);
+  if (score?.view === "horizontal") return Math.max(0.1, tall);
+  if (score?.view === "vertical") return Math.max(0.1, wide);
   return Math.max(0.1, kind === "width" ? wide : Math.min(wide, tall));
 }
 
@@ -551,6 +589,73 @@ function openTranspose() {
   $("transposeDialog").showModal();
 }
 
+// MuseScore's page sizes, in millimetres across and down, as the server knows them too.
+const PAGE_SIZES = { A4: [210, 297], Letter: [215.9, 279.4], Legal: [215.9, 355.6], Tabloid: [279.4, 431.8], A3: [297, 420], A5: [148, 210], B4: [250, 353], B5: [176, 250], Executive: [184.2, 266.7], Concert: [228.6, 304.8] };
+const USUAL_LAYOUT = { width: 210, height: 297, top: 15, bottom: 15, left: 15, right: 15, space: 1.75, staves: 6, systems: 6 };
+
+function pageSizeName(width, height) {
+  const near = (first, second) => Math.abs(first - second) < 0.5;
+  return Object.entries(PAGE_SIZES).find(([, [across, down]]) => (near(width, across) && near(height, down)) || (near(width, down) && near(height, across)))?.[0] ?? "custom";
+}
+
+function showPageSize() {
+  const width = Number($("pageWidth").value), height = Number($("pageHeight").value);
+  $("pageSize").value = pageSizeName(width, height);
+  document.querySelector(`input[name="orientation"][value="${width > height ? "landscape" : "portrait"}"]`).checked = true;
+}
+
+function fillPageSettings(layout) {
+  $("pageWidth").value = layout.width;
+  $("pageHeight").value = layout.height;
+  $("marginTop").value = layout.top;
+  $("marginBottom").value = layout.bottom;
+  $("marginLeft").value = layout.left;
+  $("marginRight").value = layout.right;
+  $("staffSpace").value = layout.space;
+  showPageSize();
+}
+
+function openPageSettings() {
+  fillPageSettings({ ...USUAL_LAYOUT, ...score.layout });
+  $("pageDialog").showModal();
+}
+
+function openStyle() {
+  const layout = { ...USUAL_LAYOUT, ...score.layout };
+  $("staffDistance").value = layout.staves;
+  $("systemDistance").value = layout.systems;
+  $("styleDialog").showModal();
+}
+
+// Read now, as a reply arriving first redraws the score and its layout.
+function sendLayout(changes) {
+  const body = { ...USUAL_LAYOUT, ...score.layout, ...changes };
+  enqueue(() => send("layout", body));
+}
+
+function setUpPageSettings() {
+  $("pageSize").append(...Object.keys(PAGE_SIZES).map(name => new Option(name, name)), new Option("Custom", "custom"));
+  $("pageSize").addEventListener("change", event => {
+    const size = PAGE_SIZES[event.target.value];
+    if (!size) return;
+    const landscape = document.querySelector('input[name="orientation"]:checked')?.value === "landscape";
+    [$("pageWidth").value, $("pageHeight").value] = landscape ? [size[1], size[0]] : size;
+  });
+  document.querySelectorAll('input[name="orientation"]').forEach(choice => choice.addEventListener("change", () => {
+    const width = Number($("pageWidth").value), height = Number($("pageHeight").value);
+    if ((choice.value === "landscape") !== (width > height)) [$("pageWidth").value, $("pageHeight").value] = [height, width];
+  }));
+  for (const id of ["pageWidth", "pageHeight"]) $(id).addEventListener("input", showPageSize);
+  $("pageReset").addEventListener("click", () => fillPageSettings(USUAL_LAYOUT));
+  $("pageDialog").querySelector("form").addEventListener("submit", () => sendLayout({
+    width: Number($("pageWidth").value), height: Number($("pageHeight").value),
+    top: Number($("marginTop").value), bottom: Number($("marginBottom").value), left: Number($("marginLeft").value), right: Number($("marginRight").value),
+    space: Number($("staffSpace").value),
+  }));
+  $("styleReset").addEventListener("click", () => { $("staffDistance").value = USUAL_LAYOUT.staves; $("systemDistance").value = USUAL_LAYOUT.systems; });
+  $("styleDialog").querySelector("form").addEventListener("submit", () => sendLayout({ staves: Number($("staffDistance").value), systems: Number($("systemDistance").value) }));
+}
+
 function openBreaks() {
   const count = score.barsPerLine ?? 0;
   document.querySelector(`input[name="breaksMode"][value="${count ? "every" : "fit"}"]`).checked = true;
@@ -600,6 +705,8 @@ function setUpShell() {
   $("originalClose").addEventListener("click", () => showOriginal(false));
   for (const tab of document.querySelectorAll("#sideTabs button")) tab.addEventListener("click", () => showSide(tab.dataset.panel));
   $("partsButton").addEventListener("click", openParts);
+  $("concertPitch").addEventListener("click", toggleConcertPitch);
+  $("viewMode").addEventListener("change", event => { setView(event.target.value); event.target.blur(); });
   $("partAdd").addEventListener("click", openAddPart);
   $("partRemove").addEventListener("click", () => enqueue(async () => {
     if (chosenPart === null) return;
@@ -640,20 +747,11 @@ function setUpShell() {
   $("breaksCount").addEventListener("input", () => { document.querySelector('input[name="breaksMode"][value="every"]').checked = true; });
   document.querySelectorAll("dialog [data-close]").forEach(button => button.addEventListener("click", () => button.closest("dialog").close()));
   $("keysTable").innerHTML = SHORTCUTS.map(([keys, what]) => `<tr><td>${keysHtml(keys)}</td><td>${what}</td></tr>`).join("");
-  $("playSettings").addEventListener("click", event => {
-    const popup = $("playPopup");
-    popup.hidden = !popup.hidden;
-    const at = event.currentTarget.getBoundingClientRect();
-    popup.style.top = `${at.bottom + 4}px`;
-    popup.style.left = `${Math.max(4, Math.min(at.left, innerWidth - popup.offsetWidth - 4))}px`;
-  });
-  document.addEventListener("pointerdown", event => {
-    if (!$("playPopup").hidden && !event.target.closest("#playPopup, #playSettings")) $("playPopup").hidden = true;
-  });
   $("pickupChoice").addEventListener("change", event => {
     if (event.target.value !== "") barAction("pickup", { count: Number(event.target.value) });
     event.target.value = "";
     event.target.blur();
   });
+  setUpPageSettings();
   setUpPalettes();
 }

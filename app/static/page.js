@@ -113,6 +113,7 @@ function message(text) {
 }
 
 function openScore(id) {
+  forgetPlayback();
   scoreId = id;
   score = null;
   selected = null;
@@ -123,6 +124,7 @@ function openScore(id) {
 
 // The score stays where it is, as it's saved with every edit, and the Home tab lists it.
 function closeScore() {
+  forgetPlayback();
   history.replaceState(null, "", " ");
   scoreId = null;
   score = null;
@@ -166,8 +168,13 @@ async function poll() {
 }
 
 function draw() {
-  $("pages").innerHTML = score.pages.map(page => `<div class="page">${page}</div>`).join("");
+  // Each page as wide as it prints, which in a continuous view is as wide as its music.
+  $("pages").innerHTML = score.pages.map((page, index) => `<div class="page" style="width: calc(${score.pageSizes?.[index]?.[0] ?? 210}mm * var(--zoom))">${page}</div>`).join("");
+  $("viewMode").value = score.view ?? "page";
+  document.body.dataset.view = score.view ?? "page";
+  if (zoom === "width" || zoom === "page") setZoom(zoom);
   $("undo").disabled = !score.canUndo;
+  $("concertPitch").setAttribute("aria-pressed", String(Boolean(score.concertPitch)));
   $("redo").disabled = !score.canRedo;
   $("checked").textContent = score.checked ? "Checked ✓" : "Mark as checked";
   $("checked").classList.toggle("done", score.checked);
@@ -194,8 +201,11 @@ function draw() {
     if (!pieces.length) selectedMark = null;
   }
   drawRange();
+  if (dock.active === "mixer" && !$("dock").hidden) drawMixer();
+  if (dock.active === "timeline" && !$("dock").hidden) drawTimeline();
   drawCursor();
   updateTools();
+  refreshPosition();
 }
 
 function drawOriginals() {
@@ -263,6 +273,7 @@ function select(id) {
   selected = id;
   const element = id && document.getElementById(id);
   if (element) markSelected(element);
+  if (id) playFromNote(id);
   drawRangeBoxes();
   updateTools();
 }

@@ -11,7 +11,9 @@ from pathlib import Path
 
 import verovio
 
+from pipeline.layout import page_layout
 from pipeline.musicxml import UnreadableScore
+from pipeline.rhythm import OCTAVE_SHIFTS, contexts, octave_lines, read_measure
 from pipeline.structure import BREAK_PREFIX, bars_per_line
 
 # Verovio keeps its font location per thread, so a web server's worker threads must set it.
@@ -20,11 +22,9 @@ RENDER_LOCK = threading.Lock()
 LYRIC_WORD_SPACE = 2.5  # Verovio's default leaves neighbouring words almost touching.
 
 # The page follows MuseScore's defaults, so a score looks the same here as it does there: its
-# music font, a 1.75 mm staff space on A4 with 15 mm margins, and its line weights.
+# music font, a 1.75 mm staff space on A4 with 15 mm margins, and its line weights. Page settings
+# can change the paper, the margins, the staff space and the spacing (see layout.py).
 MUSIC_FONT = "Leland"
-STAFF_UNIT = 8.75  # Half a staff space, in tenths of a millimetre.
-PAGE_MARGIN = 150
-SYSTEM_SPACING = 12  # In half staff spaces, between what one system draws and the next.
 LINE_WEIGHTS = {  # In staff spaces, as the music font's own defaults give them.
     "staffLineThickness": 0.11,
     "stemThickness": 0.10,
@@ -58,12 +58,17 @@ TITLE_POINTS = 22
 COMPOSER_POINTS = 10
 # The title frame is ten staff spaces tall, with the title at its top and the composer at its
 # bottom. These are in the hundredths of a millimetre a page is drawn in, from the top margin.
-FRAME_HEIGHT = 1750
+FRAME_SPACES = 10
 TITLE_BASELINE = 580
-COMPOSER_BASELINE = 1670
+COMPOSER_ABOVE_FOOT = 80  # The composer's baseline, above the foot of the frame.
 ONE_LINE_OF_TEXT = 353  # What Verovio has already left for the header.
-HEADER_ROOM = 2 + (FRAME_HEIGHT - ONE_LINE_OF_TEXT) / (STAFF_UNIT * 10)  # Under the header, in half staff spaces.
 FONT_SIZE = re.compile(r'font-size="(\d+)px"')
+# The drawing's own size, in the hundredths of a millimetre a page is drawn in.
+DRAWN_SIZE = re.compile(r'class="definition-scale"[^>]*viewBox="0 0 (\d+) (\d+)"')
+SCALE = 45  # Verovio draws a page at this percent, so a millimetre of paper is 4.5 pixels of the drawing.
+VIEWS = ("page", "horizontal", "vertical")
+LONGEST_SYSTEM = 100000  # Verovio's widest page, ten metres, which a continuous view is cut down to fit.
+LONGEST_PAGE = 60000
 # A sharp or flat inside words, as in a chord symbol. Verovio sizes it for its music font, where a
 # sign is drawn small within a tall box, and the ordinary font that takes its place fills the box.
 SIGN_IN_TEXT = re.compile(r'(<tspan font-family="Noto Music" font-size=")(\d+)(px">[♭♮♯])')
@@ -203,10 +208,74 @@ def set_line_breaks(root: ET.Element) -> None:
                     measures[index].insert(0, ET.Element("print", {"new-system": "yes"}))
 
 
+def octave_direction(kind: str, size: str, number: str, staff: str) -> ET.Element:
+    direction = ET.Element("direction", placement="below" if kind == "up" else "above")
+    ET.SubElement(ET.SubElement(direction, "direction-type"), "octave-shift", type=kind, size=size, number=number)
+    ET.SubElement(direction, "staff").text = staff
+    return direction
+
+
+def place_octave_lines(root: ET.Element) -> None:
+    """Put each octave line where Verovio will read it right, and draw the notes under it in place.
+
+    Verovio starts a line at the next note it reads after the line's start, whichever staff that's
+    on, and ends it at the last note read before its stop. The notes of the line's staff it reads
+    in between are drawn an octave away. That goes by the order of the file, which is voice by
+    voice and staff by staff, not by time, so a line on a piano's lower staff, or one over two
+    voices, would be drawn on the wrong staff and move the wrong notes. Each line's ends are moved
+    beside the first and last notes it covers on its own staff, and any note Verovio would still
+    draw wrongly is given the octave that makes it come out where it belongs. This is only for the
+    drawing: the score keeps its notes' true pitches and its lines where they are.
+    """
+    for part in root.findall("part"):
+        lines = octave_lines(part)
+        if not lines and next(part.iter("octave-shift"), None) is None:
+            continue
+        for measure in part.findall("measure"):
+            for direction in measure.findall("direction"):
+                for holder in direction.findall("direction-type"):
+                    if holder.find("octave-shift") is not None:
+                        direction.remove(holder)
+                if direction.find("direction-type") is None:
+                    measure.remove(direction)
+        under: dict[ET.Element, int] = {}  # How many octaves each note is drawn below its pitch.
+        covered: dict[int, list] = {number: [] for number in range(len(lines))}
+        for context in contexts(part):
+            children = list(context.measure)
+            for (staff, _), voice in read_measure(context.measure, context.divisions).lines.items():
+                for event in voice:
+                    for number, line in enumerate(lines):
+                        if line.covers(staff, (context.index, event.onset)):
+                            covered[number].append(((context.index, event.onset, children.index(event.notes[0])), context.measure, event))
+                            for note in [*event.grace, *event.notes]:
+                                under[note] = line.octaves
+        for number, line in enumerate(lines):
+            if not covered[number]:
+                continue
+            kind, size = next(key for key, octaves in OCTAVE_SHIFTS.items() if octaves == line.octaves)
+            _, measure, first = min(covered[number], key=lambda item: item[0])
+            opening = [*first.grace, *first.notes][0]
+            measure.insert(list(measure).index(opening), octave_direction(kind, size, line.number, line.staff))
+            _, measure, last = max(covered[number], key=lambda item: item[0])
+            measure.insert(list(measure).index(last.notes[-1]) + 1, octave_direction("stop", size, line.number, line.staff))
+        drawn: dict[str, int] = {}  # What Verovio is drawing each staff's notes as, where it's read to.
+        for measure in part.findall("measure"):
+            for child in measure:
+                if child.tag == "direction":
+                    for shift in child.iter("octave-shift"):
+                        drawn[child.findtext("staff") or "1"] = OCTAVE_SHIFTS.get((shift.get("type"), shift.get("size", "8")), 0)
+                elif child.tag == "note" and child.find("pitch/octave") is not None:
+                    wrong = drawn.get(child.findtext("staff") or "1", 0) - under.get(child, 0)
+                    if wrong:
+                        octave = child.find("pitch/octave")
+                        octave.text = str(int(octave.text) + wrong)
+
+
 def prepare_for_drawing(musicxml: str) -> str:
     root = ET.fromstring(musicxml)
     add_beams(root)
     set_line_breaks(root)
+    place_octave_lines(root)
     return drop_spelled_degrees(ET.tostring(root, encoding="unicode"))
 
 
@@ -241,11 +310,16 @@ def set_text_font(svg: str) -> str:
     return svg.replace('font-family="Times, serif"', f'font-family="{TEXT_FONTS}"').replace("font-family:Times,serif", f"font-family:{TEXT_FONTS}")
 
 
-def size_header(svg: str) -> str:
+def frame_height(space: float) -> float:
+    """The title frame's height, in the hundredths of a millimetre a page is drawn in."""
+    return FRAME_SPACES * space * 100
+
+
+def size_header(svg: str, space: float = 1.75) -> str:
     """Lay the title and the composer out as MuseScore's title frame does.
 
     Verovio prints every credit in one size on one line. The title goes at the top of the frame in
-    its own size, and the composer at the bottom right. HEADER_ROOM is what makes room for them.
+    its own size, and the composer at the bottom right. The room under the header makes way for them.
     """
     head = svg.find('class="pgHead"')
     if head < 0:
@@ -254,7 +328,7 @@ def size_header(svg: str) -> str:
     pieces = re.split(r"(?=<text )", svg[head:end])
     for index, piece in enumerate(pieces[1:], start=1):
         is_title = 'text-anchor="middle"' in piece  # The title is the centred line.
-        points, baseline = (TITLE_POINTS, TITLE_BASELINE) if is_title else (COMPOSER_POINTS, COMPOSER_BASELINE)
+        points, baseline = (TITLE_POINTS, TITLE_BASELINE) if is_title else (COMPOSER_POINTS, round(frame_height(space) - COMPOSER_ABOVE_FOOT))
         piece = FONT_SIZE.sub(lambda found: f'font-size="{round(points * POINT) if int(found.group(1)) else 0}px"', piece)
         pieces[index] = re.sub(r' y="-?\d+"', f' y="{baseline}"', piece)
     return svg[:head] + "".join(pieces) + svg[end:]
@@ -269,35 +343,55 @@ def keep_spaces(svg: str) -> str:
     return PLACED_TEXT.sub(r'\1 xml:space="preserve"', svg)
 
 
-def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970) -> list[str]:
-    has_title = "<credit" in musicxml
+def page_size(svg: str) -> list[float]:
+    """Return a drawn page's width and height in millimetres, which is the size it prints at."""
+    found = DRAWN_SIZE.search(svg)
+    return [int(found.group(1)) / 100, int(found.group(2)) / 100] if found else [210.0, 297.0]
+
+
+def render_pages(musicxml: str, view: str = "page") -> list[str]:
+    """Draw a score's pages, or in a continuous view one long system across or one long page down.
+
+    MuseScore's continuous views leave out its frames, so the horizontal one has no title. The
+    vertical one is a single page as long as the music, which keeps its title at the top.
+    """
+    if view not in VIEWS:
+        raise ValueError(f"Unknown view {view}")
+    has_title = "<credit" in musicxml and view != "horizontal"
+    layout = page_layout(ET.fromstring(musicxml))
+    unit = layout.space * 10 / 2  # Half a staff space, in tenths of a millimetre, which is how Verovio counts.
     prepared = prepare_for_drawing(musicxml)
     with RENDER_LOCK:
         toolkit = verovio.toolkit(False)  # It would look for fonts itself, and fail on a worker thread.
         toolkit.setResourcePath(RESOURCE_PATH)
+        breaks = "smart" if 'new-system="yes"' in prepared else "auto"
         toolkit.setOptions({
-            "pageWidth": page_width,
-            "pageHeight": page_height,
-            "scale": 45,
+            "pageWidth": LONGEST_SYSTEM if view == "horizontal" else round(layout.width * 10),
+            "pageHeight": LONGEST_PAGE if view == "vertical" else round(layout.height * 10),
+            "adjustPageWidth": view == "horizontal",
+            "adjustPageHeight": view != "page",
+            "scale": SCALE,
             "font": MUSIC_FONT,
-            "unit": STAFF_UNIT,
-            "pageMarginLeft": PAGE_MARGIN,
-            "pageMarginRight": PAGE_MARGIN,
-            "pageMarginTop": PAGE_MARGIN,
-            "pageMarginBottom": PAGE_MARGIN,
-            "spacingSystem": SYSTEM_SPACING,
+            "unit": unit,
+            "pageMarginLeft": round(layout.left * 10),
+            "pageMarginRight": round(layout.right * 10),
+            "pageMarginTop": round(layout.top * 10),
+            "pageMarginBottom": round(layout.bottom * 10),
+            "spacingSystem": round(layout.systems * 2),
+            "spacingStaff": round(layout.staves * 2),
             "engravingDefaults": LINE_WEIGHTS,
-            "lyricSize": TEXT_POINTS * POINT / TIMES_WIDTH / (STAFF_UNIT * 10),
+            "lyricSize": TEXT_POINTS * POINT / TIMES_WIDTH / (unit * 10),
             "header": "auto" if has_title else "none",
-            "bottomMarginHeader": HEADER_ROOM,
+            "bottomMarginHeader": 2 + (frame_height(layout.space) - ONE_LINE_OF_TEXT) / (unit * 10),  # In half staff spaces.
             "footer": "none",
-            "breaks": "smart" if 'new-system="yes"' in prepared else "auto",
+            "breaks": "none" if view == "horizontal" else breaks,
             "breaksSmartSb": 0.0,  # A break someone asked for always counts, however short the line.
             "lyricWordSpace": LYRIC_WORD_SPACE,
+            "octaveAlternativeSymbols": True,  # "8va" and "8vb", as MuseScore writes them, not a bare 8.
         })
         if not toolkit.loadData(prepared):
             raise UnreadableScore("Could not read this MusicXML")
-        return [keep_spaces(size_header(set_text_font(replace_private_glyphs(toolkit.renderToSVG(page))))) for page in range(1, toolkit.getPageCount() + 1)]
+        return [keep_spaces(size_header(set_text_font(replace_private_glyphs(toolkit.renderToSVG(page))), layout.space)) for page in range(1, toolkit.getPageCount() + 1)]
 
 
 def export_pdf(musicxml: str, out_path: Path) -> None:

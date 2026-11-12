@@ -19,8 +19,15 @@
     <button id="partsButton" title="Open or print one instrument's part"><span data-icon="parts"></span><span>Parts</span></button>
   </div>
   <div id="playTools" class="scoreOnly" role="toolbar" aria-label="Playback">
+    <button id="rewind" class="flat" aria-label="Rewind" title="Rewind to the start, or to the start of the loop"><span data-icon="rewind"></span></button>
     <button id="play" class="flat" aria-label="Play" aria-pressed="false" title="Play from the selected note, or stop (Space)"><span data-icon="play"></span></button>
+    <button id="loop" class="flat" aria-label="Loop playback" aria-pressed="false" title="Loop playback over the selection"><span data-icon="loop"></span></button>
+    <button id="metronome" class="flat" aria-label="Metronome" aria-pressed="false" title="Metronome"><span data-icon="metronome"></span></button>
     <button id="playSettings" class="flat" aria-label="Playback settings" title="Playback settings"><span data-icon="cog"></span></button>
+    <span class="divider"></span>
+    <input id="timeCounter" class="readout counter" aria-label="Playback time" title="Playback time. Type a time to go there" value="00:00:00.0" autocomplete="off" spellcheck="false">
+    <input id="beatCounter" class="readout counter" aria-label="Measure and beat" title="Measure and beat. Type one, such as 5.1, to go there" value="1.1" autocomplete="off" spellcheck="false">
+    <button id="tempoButton" class="flat readout" aria-label="Playback speed" title="Playback speed" aria-haspopup="dialog"><span class="tempoNote"></span>&nbsp;=&nbsp;<span id="tempoValue">100</span></button>
   </div>
   <div id="undoTools" class="scoreOnly">
     <button id="undo" class="flat" aria-label="Undo" title="Undo (Ctrl+Z)" disabled><span data-icon="undo"></span></button>
@@ -182,8 +189,16 @@
       <div id="checks" hidden><span class="label">Please check:</span></div>
     </aside>
   </div>
+  <section id="dock" aria-label="Panels below the score" hidden>
+    <div id="dockHead"><div id="dockTabs" role="tablist"></div><button id="dockClose" class="flat" aria-label="Close this panel" title="Close"><span data-icon="close"></span></button></div>
+    <div id="mixerPanel" class="dockPanel" role="tabpanel" aria-label="Mixer" hidden><div id="mixerStrips"></div></div>
+    <div id="pianoPanel" class="dockPanel" role="tabpanel" aria-label="Piano keyboard" hidden><div id="pianoKeys"></div></div>
+    <div id="timelinePanel" class="dockPanel" role="tabpanel" aria-label="Timeline" hidden><div id="timelineGrid"></div></div>
+  </section>
   <div id="statusBar">
     <span id="toolLabel"></span>
+    <button id="concertPitch" class="flat toggle" aria-pressed="false" aria-label="Concert pitch" title="Show transposing instruments at the pitch they sound"><span data-icon="fork"></span><span>Concert pitch</span></button>
+    <select id="viewMode" aria-label="View" title="Page view or continuous view"><option value="page">Page view</option><option value="horizontal">Continuous view (horizontal)</option><option value="vertical">Continuous view (vertical)</option></select>
     <button id="zoomOut" class="flat" aria-label="Zoom out" title="Zoom out (Ctrl+-)"><span data-icon="zoomOut"></span></button>
     <button id="zoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+=)"><span data-icon="zoomIn"></span></button>
     <select id="zoomChoice" aria-label="Zoom"></select>
@@ -197,7 +212,14 @@
   <div id="editorError" hidden></div>
 </div>
 <div id="playPopup" class="popup" hidden>
-  <label>Tempo <select id="speed" aria-label="Playback speed"><option value="0.5">50%</option><option value="0.75">75%</option><option value="1" selected>100%</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>
+  <label class="check"><input type="checkbox" id="playChords" checked> Play chord symbols</label>
+  <button id="loopLeft">Set loop marker left</button>
+  <button id="loopRight">Set loop marker right</button>
+</div>
+<div id="speedPopup" class="popup" hidden>
+  <label>Speed <input id="speedValue" type="number" min="10" max="300" step="1" value="100" aria-label="Playback speed in percent"> %</label>
+  <input id="speed" type="range" min="10" max="300" step="5" value="100" aria-label="Playback speed">
+  <button id="speedReset">Reset to the written tempo</button>
 </div>
 
 <dialog id="newDialog" aria-labelledby="newTitle">
@@ -292,6 +314,56 @@
   </form>
 </dialog>
 
+<dialog id="pageDialog" aria-labelledby="pageTitle">
+  <form method="dialog">
+    <h2 id="pageTitle">Page settings</h2>
+    <div class="content">
+      <fieldset>
+        <legend>Size</legend>
+        <label class="field">Page size<select id="pageSize"></select></label>
+        <div class="pair">
+          <label class="field">Width (mm)<input id="pageWidth" type="number" min="50" max="1000" step="0.1"></label>
+          <label class="field">Height (mm)<input id="pageHeight" type="number" min="50" max="1000" step="0.1"></label>
+        </div>
+        <div class="choices">
+          <label><input type="radio" name="orientation" value="portrait"> Portrait</label>
+          <label><input type="radio" name="orientation" value="landscape"> Landscape</label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Margins (mm)</legend>
+        <div class="pair">
+          <label class="field">Top<input id="marginTop" type="number" min="0" max="50" step="0.1"></label>
+          <label class="field">Bottom<input id="marginBottom" type="number" min="0" max="50" step="0.1"></label>
+        </div>
+        <div class="pair">
+          <label class="field">Left<input id="marginLeft" type="number" min="0" max="50" step="0.1"></label>
+          <label class="field">Right<input id="marginRight" type="number" min="0" max="50" step="0.1"></label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Scaling</legend>
+        <label class="field">Staff space (mm)<input id="staffSpace" type="number" min="0.9" max="2.4" step="0.01"></label>
+      </fieldset>
+    </div>
+    <div class="buttons"><button type="button" id="pageReset">Reset</button><button type="button" data-close>Cancel</button><button type="submit" class="primary">OK</button></div>
+  </form>
+</dialog>
+
+<dialog id="styleDialog" aria-labelledby="styleTitle">
+  <form method="dialog">
+    <h2 id="styleTitle">Style</h2>
+    <div class="content">
+      <fieldset>
+        <legend>Page</legend>
+        <label class="field">Staff distance (sp)<input id="staffDistance" type="number" min="0" max="24" step="0.1"></label>
+        <label class="field">Min. system distance (sp)<input id="systemDistance" type="number" min="0" max="24" step="0.1"></label>
+      </fieldset>
+    </div>
+    <div class="buttons"><button type="button" id="styleReset">Reset</button><button type="button" data-close>Cancel</button><button type="submit" class="primary">OK</button></div>
+  </form>
+</dialog>
+
 <dialog id="keysDialog" aria-labelledby="keysTitle">
   <form method="dialog">
     <h2 id="keysTitle">Keyboard shortcuts</h2>
@@ -316,6 +388,8 @@
 <script src="page.js"></script>
 <script src="palettes.js"></script>
 <script src="shell.js"></script>
+<script src="playback.js"></script>
+<script src="dock.js"></script>
 <script src="editor.js"></script>
 </body>
 </html>

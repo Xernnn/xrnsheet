@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import edit, marks, playback, rhythm, structure, transpose
+from pipeline import concert, edit, marks, playback, rhythm, structure, transpose
 from pipeline.engrave import render_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import to_text
@@ -71,9 +71,9 @@ def loose_ties(root):
 
 
 def check_pairs(root):
-    """A slur or hairpin has two ends, and a lost end draws nothing or runs off the page."""
+    """A slur, hairpin, octave line or pedal has two ends, and a lost end draws nothing or runs off the page."""
     for part in root.findall("part"):
-        for tag, opening in (("slur", ("start",)), ("wedge", ("crescendo", "diminuendo"))):
+        for tag, opening in (("slur", ("start",)), ("wedge", ("crescendo", "diminuendo")), ("octave-shift", ("up", "down")), ("pedal", ("start",))):
             open_ends: dict[str, int] = {}
             for measure in part.findall("measure"):
                 for element in measure.iter(tag):
@@ -258,6 +258,8 @@ def random_edit(root, rng, overfill=True):
         "marks on a stretch": lambda: marks.toggle_mark(root, edit.range_ids(root, target, other)["ids"], rng.choice(list(marks.NOTE_MARKS))),
         "slur": lambda: marks.toggle_slur(root, target, other),
         "hairpin": lambda: marks.toggle_hairpin(root, target, other, rng.choice(["crescendo", "diminuendo"])),
+        "ottava": lambda: marks.toggle_ottava(root, target, other, rng.choice(list(marks.OTTAVAS))),
+        "pedal": lambda: marks.toggle_pedal(root, target, other, rng.choice(list(marks.PEDALS))),
         "dynamic": lambda: marks.set_dynamic(root, target, rng.choice(list(marks.DYNAMICS) + list(marks.ACCENTS))),
         "tempo": lambda: marks.set_tempo(root, target, rng.choice(["Allegro 132", "66", "Andante"])),
         "text": lambda: marks.add_text(root, target, "solo", rng.choice(["staff", "expression"])),
@@ -356,6 +358,40 @@ def test_random_edits_on_real_scores_stay_valid(path):
         done += worked
         check_rules(root, arrived_loose)
     assert done > 10
+    check_outputs(root)
+
+
+def attempt_at_concert_pitch(root, rng):
+    """Try an edit on a copy shown at concert pitch, as the server makes it there."""
+    trial = copy.deepcopy(root)
+    try:
+        with concert.editing(trial):
+            random_edit(trial, rng, overfill=False)
+    except EditError:
+        return root, False
+    return trial, True
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_random_edits_at_concert_pitch_keep_the_score_whole_and_written(seed):
+    rng = random.Random(seed)
+    root = structure.blank_score(measures=4, fifths=rng.randint(-3, 3), clef=rng.choice(["trumpet", "alto-sax", "horn", "bass-guitar"]))
+    for name in rng.sample(["clarinet", "tenor-sax", "baritone-sax", "glockenspiel", "flute"], 2):
+        structure.add_part(root, name)
+    edit.ensure_note_ids(root)
+    concert.set_concert_pitch(root, True)
+    done = 0
+    for step in range(100):
+        root, worked = attempt_at_concert_pitch(root, rng)
+        done += worked
+        check_rules(root)
+        assert structure.check_measures(root) == [], f"a bar stopped adding up after {root.get('last-edit')}"
+        there_and_back = copy.deepcopy(root)
+        concert.to_written(there_and_back, concert.to_sounding(there_and_back))
+        assert to_text(there_and_back) == to_text(root), f"concert pitch and back changed the score after {root.get('last-edit')}"
+        if step % 25 == 0:
+            check_outputs(concert.shown(root))
+    assert done > 30
     check_outputs(root)
 
 

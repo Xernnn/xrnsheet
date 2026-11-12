@@ -10,9 +10,13 @@ import re
 import xml.etree.ElementTree as ET
 from fractions import Fraction
 
-from pipeline.edit import Spot, copy_range, events_between, find_note, locate, next_note_id, paste
-from pipeline.rhythm import Context, EditError, Mark, contexts, indexed, make_note, place, read_measure, remove_wedge_end, repair_slurs, repair_wedges, respell, write_measure
+from chords.vocab import parse_chord
+from pipeline.concert import transposition_at
+from pipeline.edit import AFTER, Spot, copy_range, events_between, find_note, locate, next_note_id, paste
+from pipeline.musicxml import chord_from_harmony, harmony_element
+from pipeline.rhythm import LINE_STARTS, Context, EditError, Mark, contexts, indexed, make_note, place, read_measure, remove_wedge_end, repair_lines, repair_slurs, respell, write_measure
 from pipeline.structure import element_with_text
+from pipeline.transpose import Interval, move_chord, move_pitch
 
 # A mark on a note: which group it sits in inside <notations>, and its tag.
 NOTE_MARKS = {
@@ -54,6 +58,11 @@ JUMPS = {
 }
 JUMP_TEXTS = {text for _, text, _ in JUMPS.values() if text}
 SWING_FIRST, SWING_SECOND = "2", "1"
+# MuseScore's octave lines, as MusicXML writes them: which way the notes are drawn from their pitch,
+# by how much, and which side of the staff the line goes. An 8va's notes are drawn an octave down.
+OTTAVAS = {"8va": ("down", "8", "above"), "8vb": ("up", "8", "below"), "15ma": ("down", "15", "above"), "15mb": ("up", "15", "below")}
+# MuseScore's pedal lines that MusicXML can say: "Ped." and a star, or a line with a hook at each end.
+PEDALS = {"pedstar": {"line": "no", "sign": "yes"}, "line": {"line": "yes", "sign": "no"}}
 
 
 def new_id(root: ET.Element) -> str:
@@ -258,6 +267,10 @@ def direction_kind(direction: ET.Element) -> str:
     sound = direction.find("sound")
     if "wedge" in tags:
         return "hairpin"
+    if "octave-shift" in tags:
+        return "ottava"
+    if "pedal" in tags:
+        return "pedal"
     if "dynamics" in tags:
         return "dynamic"
     if "rehearsal" in tags:
@@ -320,6 +333,83 @@ def toggle_hairpin(root: ET.Element, first_id: str, last_id: str, kind: str) -> 
     add_at(first_spot, make_direction("below", [begin], None, start.key[0], several_staves(start)), first_event.onset)
     stop = ET.Element("wedge", {"type": "stop", "number": number})
     add_at(last_spot, make_direction("below", [stop], None, start.key[0], several_staves(start)), last_event.end)
+
+
+def placed_lines(part: ET.Element, tag: str) -> list[tuple[tuple, tuple | None]]:
+    """List a part's lines of one kind, with both ends: each end's bar, direction, element and moment.
+
+    A line left open has no end, and runs to the end of the part.
+    """
+    found: list[tuple[tuple, tuple | None]] = []
+    opened: dict[str, tuple] = {}
+    for context in contexts(part):
+        for mark in sorted(read_measure(context.measure, context.divisions).marks, key=lambda item: item.onset):
+            if mark.element.tag != "direction":
+                continue
+            for line in mark.element.iter(tag):
+                end = (context.measure, mark.element, line, (context.index, mark.onset))
+                number = line.get("number", "1")
+                if line.get("type") == "stop":
+                    if number in opened:
+                        found.append((opened.pop(number), end))
+                elif line.get("type") in LINE_STARTS[tag]:
+                    opened[number] = end
+    found.extend((begun, None) for begun in opened.values())
+    return found
+
+
+def remove_line(ends: tuple[tuple, tuple | None]) -> None:
+    for end in ends:
+        if end is not None:
+            remove_wedge_end(end[0], end[1], end[2])
+
+
+def toggle_line(root: ET.Element, first_id: str, last_id: str, tag: str, start: dict, stop: dict, placement: str) -> None:
+    """Draw a line over a stretch of one staff, or take it away if the same one is already there.
+
+    Two lines of a kind can't lie over each other on a staff, so one the new line overlaps goes.
+    """
+    begin, chosen = events_between(root, first_id, last_id)
+    first_context, _, first_event = chosen[0]
+    last_context, _, last_event = chosen[-1]
+    staff = begin.key[0]
+    starts, ends = (first_context.index, first_event.onset), (last_context.index, last_event.end)
+    overlapping = []
+    for line in placed_lines(begin.part, tag):
+        line_start = line[0][3]
+        line_stop = line[1][3] if line[1] is not None else (len(begin.part.findall("measure")), Fraction(0))
+        if (line[0][1].findtext("staff") or "1") == staff and line_start < ends and starts < line_stop:
+            overlapping.append(line)
+    same = any(line[0][3] == starts and line[1] is not None and line[1][3] == ends and all(line[0][2].get(name) == value for name, value in start.items()) for line in overlapping)
+    for line in overlapping:
+        remove_line(line)
+    if same:
+        return
+    number = str(free_number(begin.part, tag, first_context.index, last_context.index))
+    for context, onset, kind in ((first_context, first_event.onset, start), (last_context, last_event.end, stop)):
+        spot = Spot(begin.part, context, read_measure(context.measure, context.divisions), begin.key, None, None)
+        element = ET.Element(tag, {**kind, "number": number})
+        add_at(spot, make_direction(placement, [element], None, staff, several_staves(begin)), onset)
+
+
+def toggle_ottava(root: ET.Element, first_id: str, last_id: str, name: str) -> None:
+    """Put an 8va, 8vb, 15ma or 15mb line over a stretch, or take it away.
+
+    The notes under it keep their pitch, which is how they sound, and are drawn an octave or two
+    from it, as MuseScore and MusicXML both have it. So adding one changes how they look, not how
+    they're played.
+    """
+    if name not in OTTAVAS:
+        raise EditError("That isn't an octave line this app knows.")
+    kind, size, placement = OTTAVAS[name]
+    toggle_line(root, first_id, last_id, "octave-shift", {"type": kind, "size": size}, {"type": "stop", "size": size}, placement)
+
+
+def toggle_pedal(root: ET.Element, first_id: str, last_id: str, style: str) -> None:
+    """Hold the sustain pedal down over a stretch, drawn as "Ped." and a star or as a line, or take it away."""
+    if style not in PEDALS:
+        raise EditError("That isn't a pedal line this app knows.")
+    toggle_line(root, first_id, last_id, "pedal", {"type": "start", **PEDALS[style]}, {"type": "stop", **PEDALS[style]}, "below")
 
 
 def top_spot(root: ET.Element, spot: Spot) -> Spot:
@@ -454,7 +544,7 @@ def direction_label(direction: ET.Element) -> str:
 
 
 # How each direction is drawn. Chords are tied to their drawings by order, and these are the same.
-DRAWN_AS = {"dynamic": "dynam", "tempo": "tempo", "text": "dir", "jump": "dir", "rehearsal": "reh", "repeat-sign": "repeatMark"}
+DRAWN_AS = {"dynamic": "dynam", "tempo": "tempo", "text": "dir", "jump": "dir", "rehearsal": "reh", "repeat-sign": "repeatMark", "ottava": "octave", "pedal": "pedal"}
 
 
 def list_marks(root: ET.Element) -> list[dict]:
@@ -465,18 +555,29 @@ def list_marks(root: ET.Element) -> list[dict]:
     top_bars = [measure.get("id") for measure in root.find("part").findall("measure")]
     found = []
     for part in root.findall("part"):
+        # An octave line is drawn once, from its start. Each end of a pedal is drawn, and both are the one pedal.
+        pedal = {id(end[1]): ends[0][1].get("id") for ends in placed_lines(part, "pedal") for end in ends if end is not None}
+        ottava_ends = {id(ends[1][1]) for ends in placed_lines(part, "octave-shift") if ends[1] is not None}
+        ottavas = []
         for index, measure in enumerate(part.findall("measure")):
             bar = top_bars[index] if index < len(top_bars) else None
             for direction in measure.findall("direction"):
                 kind = direction_kind(direction)
+                if kind == "ottava":
+                    # Drawn staff by staff, as the lines are placed beside their staff's notes to be drawn.
+                    if id(direction) not in ottava_ends:
+                        ottavas.append(((index, int(direction.findtext("staff") or 1)), {"id": direction.get("id"), "bar": bar, "kind": kind, "drawn": DRAWN_AS[kind], "text": ""}))
+                    continue
+                mark_id = pedal.get(id(direction), direction.get("id")) if kind == "pedal" else direction.get("id")
                 if kind in DRAWN_AS:
-                    found.append({"id": direction.get("id"), "bar": bar, "kind": kind, "drawn": DRAWN_AS[kind], "text": direction_label(direction)})
+                    found.append({"id": mark_id, "bar": bar, "kind": kind, "drawn": DRAWN_AS[kind], "text": direction_label(direction)})
             for element in measure.iter("wedge"):
                 if element.get("type") != "stop":
                     found.append({"id": element.get("id"), "bar": bar, "kind": "hairpin", "drawn": "hairpin", "text": ""})
             for element in measure.iter("slur"):
                 if element.get("type") == "start":
                     found.append({"id": element.get("id"), "bar": bar, "kind": "slur", "drawn": "slur", "text": ""})
+        found.extend(entry for _, entry in sorted(ottavas, key=lambda item: item[0]))
     return found
 
 
@@ -497,7 +598,7 @@ def remove_wedge(root: ET.Element, mark_id: str) -> bool:
                 wedge = next((found for found in direction.iter("wedge") if found.get("id") == mark_id), None)
                 if wedge is not None:
                     remove_wedge_end(measure, direction, wedge)
-                    repair_wedges(part)
+                    repair_lines(part)
                     return True
     return False
 
@@ -516,10 +617,15 @@ def remove_slur(root: ET.Element, mark_id: str) -> bool:
 
 
 def remove_placed(root: ET.Element, mark_id: str) -> None:
-    """Remove a mark someone clicked on."""
+    """Remove a mark someone clicked on. An octave line or a pedal goes with both its ends."""
     if remove_wedge(root, mark_id) or remove_slur(root, mark_id):
         return
-    _, measure, direction = find_direction(root, mark_id)
+    part, measure, direction = find_direction(root, mark_id)
+    for tag in ("octave-shift", "pedal"):
+        for ends in placed_lines(part, tag):
+            if ends[0][1] is direction:
+                remove_line(ends)
+                return
     measure.remove(direction)
 
 
@@ -590,9 +696,17 @@ def dynamic_at(context: Context, onset: Fraction) -> str | None:
 
 
 def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
-    """Copy a stretch of a voice with its marks. A slur only comes if both its ends do."""
+    """Copy a stretch of a voice with its marks. A slur only comes if both its ends do.
+
+    Notes are copied as they're written, with how far their part sounds from that, so pasted
+    into another instrument they sound the same, as they do in MuseScore.
+    """
     with indexed(root):
         copied = copy_range(root, first_id, last_id)
+        start = locate(root, first_id)
+        moved = transposition_at(start.part, start.context.index)
+        for item in copied["events"]:
+            item["transposition"] = [moved.steps, moved.semitones]
         ends: dict[str, int] = {}
         for number, item in enumerate(copied["events"]):
             source = item.pop("source")
@@ -612,8 +726,36 @@ def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
     return copied
 
 
+def moved_chord(text: str, interval: Interval) -> str:
+    chord = parse_chord(text)
+    if chord is None:
+        return text
+    harmony = harmony_element(chord)
+    move_chord(harmony, interval)
+    return str(chord_from_harmony(harmony) or text)
+
+
+def for_instrument(items: list[dict], spot: Spot) -> list[dict]:
+    """Rewrite copied notes for the instrument they're pasted into, so they sound as they did.
+
+    A copy that doesn't say how its part was transposed is pasted as it was written.
+    """
+    target = transposition_at(spot.part, spot.context.index)
+    found = []
+    for item in items:
+        source = item.get("transposition")
+        if source is None or Interval(*source) == target:
+            found.append(item)
+            continue
+        interval = Interval(*source) + -target
+        pitches = [list(move_pitch(step, alter, octave, interval)) for step, alter, octave in item["pitches"]]
+        found.append(item | {"pitches": pitches, "chord": moved_chord(item["chord"], interval) if item.get("chord") else item.get("chord")})
+    return found
+
+
 def paste_stretch(root: ET.Element, at_id: str, items: list[dict]) -> dict:
     """Paste copied music, then put its marks back on the notes it became."""
+    items = for_instrument(items, locate(root, at_id.removeprefix(AFTER)))
     done = paste(root, at_id, items)
     placed = done.pop("placed")
     for number, item in enumerate(items):
