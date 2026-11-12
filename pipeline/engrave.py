@@ -11,7 +11,7 @@ from pathlib import Path
 
 import verovio
 
-from pipeline import decorate
+from pipeline import decorate, diagrams
 from pipeline.layout import page_layout
 from pipeline.musicxml import UnreadableScore
 from pipeline.fretted import tab_staves
@@ -64,6 +64,7 @@ FRAME_SPACES = 10
 TITLE_BASELINE = 580
 COMPOSER_ABOVE_FOOT = 80  # The composer's baseline, above the foot of the frame.
 ONE_LINE_OF_TEXT = 353  # What Verovio has already left for the header.
+MOST_HEADER_MARGIN = 24  # Verovio's limit, in half staff spaces.
 FONT_SIZE = re.compile(r'font-size="(\d+)px"')
 # The drawing's own size, in the hundredths of a millimetre a page is drawn in.
 DRAWN_SIZE = re.compile(r'class="definition-scale"[^>]*viewBox="0 0 (\d+) (\d+)"')
@@ -408,7 +409,9 @@ def render_pages(musicxml: str, view: str = "page") -> list[str]:
     if view not in VIEWS:
         raise ValueError(f"Unknown view {view}")
     has_title = "<credit" in musicxml and view != "horizontal"
-    layout = page_layout(ET.fromstring(musicxml))
+    score = ET.fromstring(musicxml)
+    layout = page_layout(score)
+    room = diagrams.ROOM * 2 if diagrams.shown(score) else 0  # Half staff spaces above each system for its chord diagrams.
     unit = layout.space * 10 / 2  # Half a staff space, in tenths of a millimetre, which is how Verovio counts.
     prepared = prepare_for_drawing(musicxml)
     with RENDER_LOCK:
@@ -425,14 +428,14 @@ def render_pages(musicxml: str, view: str = "page") -> list[str]:
             "unit": unit,
             "pageMarginLeft": round(layout.left * 10),
             "pageMarginRight": round(layout.right * 10),
-            "pageMarginTop": round(layout.top * 10),
+            "pageMarginTop": round(layout.top * 10 + (0 if has_title else room * unit)),
             "pageMarginBottom": round(layout.bottom * 10),
-            "spacingSystem": round(layout.systems * 2),
+            "spacingSystem": round(layout.systems * 2) + room,
             "spacingStaff": round(layout.staves * 2),
             "engravingDefaults": LINE_WEIGHTS,
             "lyricSize": TEXT_POINTS * POINT / TIMES_WIDTH / (unit * 10),
             "header": "auto" if has_title else "none",
-            "bottomMarginHeader": 2 + (frame_height(layout.space) - ONE_LINE_OF_TEXT) / (unit * 10),  # In half staff spaces.
+            "bottomMarginHeader": min(2 + room + (frame_height(layout.space) - ONE_LINE_OF_TEXT) / (unit * 10), MOST_HEADER_MARGIN),  # In half staff spaces.
             "footer": "none",
             "breaks": "none" if view == "horizontal" else breaks,
             "breaksSmartSb": 0.0,  # A break someone asked for always counts, however short the line.
@@ -445,7 +448,12 @@ def render_pages(musicxml: str, view: str = "page") -> list[str]:
             closer_tablature(toolkit, max(round(layout.staves * 2) - TAB_NEARER, 0))
         drawn = ET.fromstring(prepared)
         space = layout.space * 100  # A staff space, in the hundredths of a millimetre a page is drawn in.
-        return [keep_spaces(size_header(set_text_font(replace_private_glyphs(decorate.decorate(toolkit.renderToSVG(page), drawn, space))), layout.space)) for page in range(1, toolkit.getPageCount() + 1)]
+        chords = diagrams.Drawing.of(drawn)
+        pages = []
+        for page in range(1, toolkit.getPageCount() + 1):
+            svg = diagrams.draw(decorate.decorate(replace_private_glyphs(toolkit.renderToSVG(page)), drawn, space), chords, space)
+            pages.append(keep_spaces(size_header(set_text_font(svg), layout.space)))
+        return pages
 
 
 def export_pdf(musicxml: str, out_path: Path) -> None:

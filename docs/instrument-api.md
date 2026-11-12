@@ -87,6 +87,26 @@ Strings are otherwise chosen automatically for every new or changed note: a stri
 that moment, near where the hand already is, open strings while the hand is low on the neck, and
 every note of a chord on its own string.
 
+## Chord diagrams
+
+### `POST /api/scores/{id}/diagrams`
+
+`{"on": true}` shows a fretboard diagram over every chord symbol, `{"on": false}` stops. It's an
+edit, so it can be undone, and the score keeps it. `GET /api/scores/{id}` says `"diagrams": true`.
+
+The diagrams are for the score's first fretted part (one with six strings or more first), in its
+tuning and with its capo: with the capo on the second fret a D chord shows the C shape, fingered
+from the capo. Without a guitar in the score they're for a guitar in standard tuning. Shapes come
+from the open and barre chords guitarists learn; other chords and other tunings are worked out (the
+chord's bass on the lowest string played, its needed notes above, low on the neck).
+
+They're drawn into the page SVG inside each chord symbol's `g.harm`, as `g.xrn-diagram`, so a
+click on a diagram is a click on its chord. Each system gets room above it for them.
+
+A downloaded MusicXML file has each chord's diagram as its `<harmony><frame>`. A file opened with
+`<frame>`s turns diagrams on; a frame that isn't the library's shape (someone's own fingering) is
+kept and drawn as it is.
+
 ## Techniques and markings: `POST /api/scores/{id}/marks`
 
 The same endpoint as the other marks, with these actions. `notes` is the selection's note ids (a

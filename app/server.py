@@ -36,7 +36,7 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
-from pipeline import concert, edit, fretted, layout, marks, mixer, structure, technique, transpose
+from pipeline import concert, diagrams, edit, fretted, layout, marks, mixer, structure, technique, transpose
 from pipeline.engrave import VIEWS, export_pdf, glyph_script, page_size, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
@@ -538,6 +538,7 @@ def open_score_file(data: bytes, suffix: str) -> dict:
         marks.ensure_mark_ids(root)
         structure.ensure_measure_ids(root)
         layout.keep_imported(root)  # On the page its file sets out, as MuseScore opens it.
+        diagrams.keep_imported(root)  # With its chord diagrams, if it has them.
         playback(root)
         render_pages(to_text(root))
     except (ValueError, TypeError, AttributeError, ZeroDivisionError) as error:
@@ -636,6 +637,7 @@ def describe(folder: Path, status: dict) -> dict:
         "transposing": concert.is_transposing(root),
         "fretted": [board.describe() if board is not None else None for board in fretted.boards(root)],
         "fretProblems": fretted.problems(root),
+        "diagrams": diagrams.shown(root),
     } | structure.title_of(root)
 
 
@@ -1071,6 +1073,12 @@ def change_concert_pitch(score_id: str, body: ConcertPitch) -> dict:
     return apply_edit(score_id, lambda root: concert.set_concert_pitch(root, body.on))
 
 
+@app.post("/api/scores/{score_id}/diagrams")
+def change_diagrams(score_id: str, body: ConcertPitch) -> dict:
+    """Show chord diagrams over the chord symbols, or stop. It's an edit, so it can be undone."""
+    return apply_edit(score_id, lambda root: diagrams.set_shown(root, body.on))
+
+
 @app.post("/api/scores/{score_id}/layout")
 def change_layout(score_id: str, body: PageLayout) -> dict:
     """Set the page and its spacing, as Format ▸ Page settings and Style do. It's an edit, so it can be undone."""
@@ -1107,7 +1115,7 @@ def download_musicxml(score_id: str) -> Response:
     root = current_root(folder)
     if saved_mixer(folder) is not None:
         root = mixer.with_mixer(root, mixer_of(folder, root))
-    text = to_text(root)
+    text = to_text(diagrams.with_frames(root))  # Its chord diagrams, as <frame>s, when it shows them.
     headers = {"Content-Disposition": 'attachment; filename="score.musicxml"'}
     return Response(text, media_type="application/vnd.recordare.musicxml+xml", headers=headers)
 
