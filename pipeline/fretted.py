@@ -67,6 +67,7 @@ TUNINGS = {
     },
 }
 CUSTOM = "custom"
+GRACE_LEAD = Fraction(1, 256)  # How long before its note a grace note is taken to be played, for choosing its string.
 # A string someone chose for a note, which holds where one the program chose may be chosen again.
 # It's the app's own mark on a fret number, and a saved file leaves it out (see technique.drawn_on_other_staves).
 CHOSEN = "xrn-chosen"
@@ -349,12 +350,14 @@ def hidden_rest(note: ET.Element) -> ET.Element:
 
 
 def without_unplayable(event: Event, unplayable: set[int]) -> Event:
+    """Leave out of a TAB staff's moment the notes no string can play, its grace notes too."""
+    graces = [note for note in event.grace if id(note) not in unplayable]
     kept = [note for note in event.notes if id(note) not in unplayable]
     if not kept:
-        return Event(event.onset, event.length, [hidden_rest(event.notes[0])])
+        return Event(event.onset, event.length, [hidden_rest(event.notes[0])], graces)
     if kept[0] is not event.notes[0] and kept[0].find("chord") is not None:
         kept[0].remove(kept[0].find("chord"))
-    return Event(event.onset, event.length, kept)
+    return Event(event.onset, event.length, kept, graces)
 
 
 def note_cost(fret: int, hand: int) -> float:
@@ -425,8 +428,9 @@ def assign(placed: list[Placed], board: Fretboard) -> None:
     hand = 1
     for start in sorted(moments):
         ringing = [item for item in ringing if item.end > start]
-        busy = {item.string for item in ringing}
         group = moments[start]
+        # A grace note cuts short whatever was ringing, so it can take any string.
+        busy = set() if all(item.source.find("grace") is not None for item in group) else {item.string for item in ringing}
         fixed: list[Placed] = []
         free: list[Placed] = []
         tied_on: list[Placed] = []
@@ -469,7 +473,7 @@ def remembered(timeline, staves: set[str], shift: int) -> tuple[dict[str, tuple[
         if key[0] not in staves:
             continue
         for event in line:
-            for note in event.notes:
+            for note in [*event.grace, *event.notes]:
                 string = string_of(note)
                 if note.find("pitch") is None or string is None:
                     continue
@@ -505,8 +509,12 @@ def sync_part(part: ET.Element, board: Fretboard) -> None:
                 voice = tab_voice(key[1], linked, taken)
                 for event in sorted(line, key=lambda item: item.onset):
                     made = [tab_copy(note, linked, voice) for note in event.notes]
-                    copies.append(Event(event.onset, event.length, made))
-                    for note, copied in zip(event.notes, made):
+                    graces = [tab_copy(note, linked, voice) for note in event.grace]
+                    copies.append(Event(event.onset, event.length, made, graces))
+                    # Grace notes are played just before their note, one after another, so each is a
+                    # moment of its own, over before the note it leads to.
+                    leads = [(note, copied, start + event.onset - GRACE_LEAD * (len(graces) - number), GRACE_LEAD) for number, (note, copied) in enumerate(zip(event.grace, graces))]
+                    for note, copied, begins, length in [*leads, *((note, copied, start + event.onset, event.length) for note, copied in zip(event.notes, made))]:
                         if copied.find("pitch") is None:
                             continue
                         midi = note_midi(note) + shift
@@ -518,7 +526,7 @@ def sync_part(part: ET.Element, board: Fretboard) -> None:
                             own = place_of(note)
                             keep = own[0] if own else string_number(note)
                             chosen = keep is not None
-                        placed.append(Placed(copied, note, start + event.onset, start + event.end, midi, keep, chosen))
+                        placed.append(Placed(copied, note, begins, begins + length, midi, keep, chosen))
                         if place_of(note) is not None:
                             clear_fret(note)  # The tablature keeps it from now on.
                 timeline.lines[(linked, voice)] = copies
@@ -788,10 +796,14 @@ def sounding_now(part: ET.Element, board: Fretboard, target: ET.Element) -> tupl
         timeline = read_measure(context.measure, context.divisions)
         for key, line in timeline.lines.items():
             for event in line:
-                if any(note is target for note in event.notes):
-                    begins = start + event.onset
-                if key[0] in board.tab or not board.tab:
-                    found.extend((note, start + event.onset, start + event.end) for note in event.notes if note.find("pitch") is not None)
+                # Grace notes are each a moment of their own just before their note (see sync_part).
+                moments = [(note, start + event.onset - GRACE_LEAD * (len(event.grace) - number), GRACE_LEAD) for number, note in enumerate(event.grace)]
+                moments += [(note, start + event.onset, event.length) for note in event.notes]
+                for note, begun, length in moments:
+                    if note is target:
+                        begins = begun
+                    if (key[0] in board.tab or not board.tab) and note.find("pitch") is not None:
+                        found.append((note, begun, begun + length))
         start += max((line_end(line) for line in timeline.lines.values()), default=Fraction(0)) or context.length
     return begins, found
 

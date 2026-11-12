@@ -985,3 +985,28 @@ def test_a_tuning_or_capo_asked_for_again_is_not_an_edit(client):
     for unchanged in ({"part": 0, "capo": 0}, {"part": 0, "tuning": "standard"}, {"part": 0, "strings": list(structure.GUITAR_STRINGS)}):
         assert client.post(f"{url}/strings", json=unchanged).status_code == 422
     assert client.get(url).json()["canUndo"] is False
+
+
+def test_a_grace_note_is_on_the_tablature_and_its_string_can_be_chosen():
+    from pipeline import marks
+
+    root = guitar(measures=1)
+    note = write(root, 69)[0]
+    grace = marks.add_grace(root, note)
+    synced(root)
+    assert copy_of(root, grace).find("grace") is not None and string_and_fret(root, grace) == (1, 5), "the grace, an A4 too, on the top string"
+    fretted.choose_string(root, grace, 2)
+    synced(root)
+    assert string_and_fret(root, grace) == (2, 10) and string_and_fret(root, note) == (1, 5), "it keeps the string chosen, and isn't in its note's way"
+    assert render_pages(to_text(root))
+
+
+def test_a_grace_note_cuts_short_the_note_before_it_on_its_string():
+    from pipeline import marks
+
+    root = guitar(measures=1)
+    before = write(root, 69, 71)
+    lead = marks.add_grace(root, before[1])
+    edit.move_semitone(root, lead, -2)
+    synced(root)
+    assert string_and_fret(root, before[0]) == (1, 5) and string_and_fret(root, lead) == (1, 5), "an A grace after an A on the top string takes the top string too"
