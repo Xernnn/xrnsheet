@@ -69,10 +69,13 @@ function measureIndexOf(element) {
 }
 
 // The key, time, tempo and barline in force at a measure, as the timeline lists where they change.
-function measureFacts(index) {
+// The key is the part's own, as a transposing instrument's is written in another.
+function measureFacts(index, part = 0) {
   const measures = score?.timeline?.measures ?? [];
   const before = name => { for (let at = Math.min(index, measures.length - 1); at >= 0; at--) if (measures[at]?.[name]) return measures[at][name]; return ""; };
-  return { number: measures[index]?.number ?? String(index + 1), key: before("key"), time: before("time"), tempo: before("tempo"), barline: measures[index]?.barline ?? "" };
+  const fifths = score?.timeline?.keys?.[part]?.[index];
+  const key = fifths !== undefined && fifths >= -7 && fifths <= 7 ? KEY_NAMES[fifths + 7] : before("key");
+  return { number: measures[index]?.number ?? String(index + 1), key, time: before("time"), tempo: before("tempo"), barline: measures[index]?.barline ?? "" };
 }
 
 function handName(part, staff) {
@@ -234,7 +237,7 @@ function drawSelection(element) {
   const hand = crossed ? `${handName(part, crossed - 1)}, drawn on its staff` : handName(part, staffInPart(element));
   const where = [`voice ${layerNumber(element) + 1}`, `${partLabel(part)}${hand ? `, ${hand}` : ""}`];
   const index = measureIndexOf(element);
-  const facts = measureFacts(index);
+  const facts = measureFacts(index, part);
   if (range) {
     const last = measureIndexOf(document.getElementById(range.last));
     $("propKind").textContent = `${range.ids.length} notes`;

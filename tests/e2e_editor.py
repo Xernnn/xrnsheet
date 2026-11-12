@@ -3963,6 +3963,21 @@ def test_found_by_the_bug_hunt(context, base: str, created: list[str]) -> None:
     check("a line over a page break is named on both pages after the second is drawn again", pages.evaluate("() => [...document.querySelectorAll('#pages g.pedal')].every(piece => piece.dataset.mark)"))
     pages.close()
 
+    # Each instrument's own key, in the inspector.
+    keys = context.new_page()
+    trumpet = open_blank(keys, base, created, bars=2, staff="trumpet")
+    keys.keyboard.press("Escape")
+    post_json(base, f"/api/scores/{trumpet}/parts", {"action": "add", "names": ["piano"]})
+    keys.reload()
+    keys.wait_for_selector("#pages svg")
+    keys.click('#modeSwitch [data-mode="write"]')
+    piano_rest = keys.evaluate("() => document.querySelector('#pages g.measure').querySelectorAll(':scope > g.staff')[1].querySelector('g.mRest, g.rest').id")
+    click_on(keys, keys.locator(f"[id='{piano_rest}']"))
+    settle(keys)
+    said = keys.inner_text('#measureGroups .group[data-group="keys"] .current')
+    check("the inspector names the piano's key, not the trumpet's above it", said == "C major", said)
+    keys.close()
+
 
 def test_phone(context, base: str, shots: Path | None, created: list[str]) -> None:
     page = context.new_page()

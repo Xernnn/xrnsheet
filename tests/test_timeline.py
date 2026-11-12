@@ -44,3 +44,9 @@ def test_at_concert_pitch_the_keys_are_the_concert_keys():
     assert timeline(root)["measures"][0]["key"] == "D"
     concert.set_concert_pitch(root, True)
     assert timeline(concert.shown(root))["measures"][0]["key"] == "C"
+
+
+def test_each_instrument_has_its_own_key():
+    root = structure.blank_score(fifths=0, clef="trumpet", measures=2)
+    structure.add_part(root, "piano")
+    assert timeline(root)["keys"] == [[2, 2], [0, 0]], "a B flat trumpet in concert C reads D major, the piano C"

@@ -60,4 +60,6 @@ def timeline(root: ET.Element) -> dict:
             "barline": barline_text(measure),
             "jump": " ".join(direction_label(direction) for kind, direction in directions if kind in ("jump", "repeat-sign")),
         })
-    return {"measures": measures, "parts": [[has_notes(measure) for measure in part.findall("measure")] for part in parts]}
+    # Each instrument's own key, measure by measure: a transposing one's is written in another key.
+    keys = [[context.fifths for context in contexts(part)] for part in parts]
+    return {"measures": measures, "parts": [[has_notes(measure) for measure in part.findall("measure")] for part in parts], "keys": keys}
