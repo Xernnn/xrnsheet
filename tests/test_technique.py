@@ -1033,3 +1033,22 @@ def test_a_chord_drawn_on_another_staff_moves_once_however_many_of_its_notes_are
     chord = [note.get("id") for note in saved(client, url).iter("note") if note.find("pitch") is not None]
     done = client.post(f"{url}/group", json={"action": "crossDown", "notes": chord}).json()
     assert {done["notes"][note_id][5]["cross"] for note_id in chord} == {2}, "to the staff below, not two below"
+
+
+def test_a_piano_file_numbering_its_left_hand_from_1_keeps_it_on_its_staff(client):
+    def bar(number, left_voice):
+        attributes = ("<attributes><divisions>1</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves>"
+                      '<clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>') if number == 1 else ""
+        right = "".join(f"<note><pitch><step>{step}</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><staff>1</staff></note>" for step in "CDEF")
+        left = "".join(f"<note><pitch><step>{step}</step><octave>3</octave></pitch><duration>1</duration><voice>{left_voice}</voice><type>quarter</type><staff>2</staff></note>" for step in "CDEF")
+        return f'<measure number="{number}">{attributes}{right}<backup><duration>4</duration></backup>{left}</measure>'
+
+    for left_voice in ("2", "5"):
+        text = ('<?xml version="1.0"?><score-partwise version="4.0"><part-list><score-part id="P1"><part-name>Piano</part-name><score-instrument id="P1-I1"><instrument-name>Piano</instrument-name>'
+                f'<instrument-sound>keyboard.piano</instrument-sound></score-instrument></score-part></part-list><part id="P1">{bar(1, left_voice)}{bar(2, left_voice)}</part></score-partwise>')
+        opened = client.post("/api/scores", files={"file": ("piano.musicxml", io.BytesIO(text.encode()))}).json()
+        data = client.get(f"/api/scores/{opened['id']}").json()
+        left = [details for details in data["notes"].values() if details[2] == 3]
+        assert len(left) == 8 and not any(len(details) > 5 and "cross" in details[5] for details in left), f"the left hand as voice {left_voice} is on its own staff"
+        played = client.get(f"/api/scores/{opened['id']}/playback").json()["notes"]
+        assert {entry["staff"] for entry in played if entry["midi"] < 60} == {2}

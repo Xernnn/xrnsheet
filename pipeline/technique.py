@@ -677,6 +677,10 @@ def keep_cross_staff(root: ET.Element) -> None:
         staves = int(part.findtext("measure/attributes/staves") or 1)
         if staves < 2:
             continue
+        # The staves whose own voices are numbered as MuseScore numbers them, 5 to 8 on the second.
+        # Only on such a staff is a voice of another number wholly there drawn from another staff:
+        # elsewhere it may be that staff's own voice 2, as other programs number them.
+        numbered = {note.findtext("staff") or "1" for note in part.iter("note") if (note.findtext("voice") or "").isdigit() and str((int(note.findtext("voice")) - 1) // VOICES_PER_STAFF + 1) == (note.findtext("staff") or "1") and (note.findtext("staff") or "1") != "1"}
         for measure in part.findall("measure"):
             runs: list[list[ET.Element]] = [[]]
             for child in measure:
@@ -697,7 +701,7 @@ def keep_cross_staff(root: ET.Element) -> None:
                 usual = usual if usual is not None and int(usual) <= staves else None
                 if len(set(drawn)) > 1:
                     home = usual if usual in drawn else max(dict.fromkeys(drawn), key=drawn.count)
-                elif usual is not None and drawn[0] != usual and (usual, voice) not in natural:
+                elif usual is not None and drawn[0] != usual and (usual, voice) not in natural and (drawn[0] in numbered or usual != "1"):
                     home = usual
                 else:
                     continue
