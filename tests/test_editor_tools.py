@@ -601,9 +601,9 @@ def test_the_title_sits_at_the_top_of_its_frame_and_the_composer_at_the_bottom()
     svg = engrave.render_pages(to_text(root))[0]
     header = svg[svg.index('class="pgHead"'):]
     baselines = [int(y) for y in re.findall(r' y="(\d+)"', header)][:2]
-    assert baselines == [engrave.TITLE_BASELINE, engrave.COMPOSER_BASELINE]
+    assert baselines == [engrave.TITLE_BASELINE, 1670], "the composer 0.8 mm above the foot of a frame ten staff spaces tall"
     first_staff_line = int(re.search(r'class="staff">\s*<path d="M\d+ (\d+) ', svg).group(1))
-    assert first_staff_line > engrave.FRAME_HEIGHT
+    assert first_staff_line > engrave.frame_height(1.75) == 1750
 
 
 def test_a_title_recognition_guessed_is_not_printed_until_saved():

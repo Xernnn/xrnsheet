@@ -282,6 +282,9 @@ function menuList() {
     ] },
     { label: "Add", enabled: open, items: open ? addItems() : [] },
     { label: "Format", enabled: open, items: [
+      { label: "Style…", run: openStyle },
+      { label: "Page settings…", run: openPageSettings },
+      null,
       { label: "Add/remove system breaks…", run: openBreaks },
     ] },
     { label: "Tools", enabled: open, items: [
@@ -586,6 +589,73 @@ function openTranspose() {
   $("transposeDialog").showModal();
 }
 
+// MuseScore's page sizes, in millimetres across and down, as the server knows them too.
+const PAGE_SIZES = { A4: [210, 297], Letter: [215.9, 279.4], Legal: [215.9, 355.6], Tabloid: [279.4, 431.8], A3: [297, 420], A5: [148, 210], B4: [250, 353], B5: [176, 250], Executive: [184.2, 266.7], Concert: [228.6, 304.8] };
+const USUAL_LAYOUT = { width: 210, height: 297, top: 15, bottom: 15, left: 15, right: 15, space: 1.75, staves: 6, systems: 6 };
+
+function pageSizeName(width, height) {
+  const near = (first, second) => Math.abs(first - second) < 0.5;
+  return Object.entries(PAGE_SIZES).find(([, [across, down]]) => (near(width, across) && near(height, down)) || (near(width, down) && near(height, across)))?.[0] ?? "custom";
+}
+
+function showPageSize() {
+  const width = Number($("pageWidth").value), height = Number($("pageHeight").value);
+  $("pageSize").value = pageSizeName(width, height);
+  document.querySelector(`input[name="orientation"][value="${width > height ? "landscape" : "portrait"}"]`).checked = true;
+}
+
+function fillPageSettings(layout) {
+  $("pageWidth").value = layout.width;
+  $("pageHeight").value = layout.height;
+  $("marginTop").value = layout.top;
+  $("marginBottom").value = layout.bottom;
+  $("marginLeft").value = layout.left;
+  $("marginRight").value = layout.right;
+  $("staffSpace").value = layout.space;
+  showPageSize();
+}
+
+function openPageSettings() {
+  fillPageSettings({ ...USUAL_LAYOUT, ...score.layout });
+  $("pageDialog").showModal();
+}
+
+function openStyle() {
+  const layout = { ...USUAL_LAYOUT, ...score.layout };
+  $("staffDistance").value = layout.staves;
+  $("systemDistance").value = layout.systems;
+  $("styleDialog").showModal();
+}
+
+// Read now, as a reply arriving first redraws the score and its layout.
+function sendLayout(changes) {
+  const body = { ...USUAL_LAYOUT, ...score.layout, ...changes };
+  enqueue(() => send("layout", body));
+}
+
+function setUpPageSettings() {
+  $("pageSize").append(...Object.keys(PAGE_SIZES).map(name => new Option(name, name)), new Option("Custom", "custom"));
+  $("pageSize").addEventListener("change", event => {
+    const size = PAGE_SIZES[event.target.value];
+    if (!size) return;
+    const landscape = document.querySelector('input[name="orientation"]:checked')?.value === "landscape";
+    [$("pageWidth").value, $("pageHeight").value] = landscape ? [size[1], size[0]] : size;
+  });
+  document.querySelectorAll('input[name="orientation"]').forEach(choice => choice.addEventListener("change", () => {
+    const width = Number($("pageWidth").value), height = Number($("pageHeight").value);
+    if ((choice.value === "landscape") !== (width > height)) [$("pageWidth").value, $("pageHeight").value] = [height, width];
+  }));
+  for (const id of ["pageWidth", "pageHeight"]) $(id).addEventListener("input", showPageSize);
+  $("pageReset").addEventListener("click", () => fillPageSettings(USUAL_LAYOUT));
+  $("pageDialog").querySelector("form").addEventListener("submit", () => sendLayout({
+    width: Number($("pageWidth").value), height: Number($("pageHeight").value),
+    top: Number($("marginTop").value), bottom: Number($("marginBottom").value), left: Number($("marginLeft").value), right: Number($("marginRight").value),
+    space: Number($("staffSpace").value),
+  }));
+  $("styleReset").addEventListener("click", () => { $("staffDistance").value = USUAL_LAYOUT.staves; $("systemDistance").value = USUAL_LAYOUT.systems; });
+  $("styleDialog").querySelector("form").addEventListener("submit", () => sendLayout({ staves: Number($("staffDistance").value), systems: Number($("systemDistance").value) }));
+}
+
 function openBreaks() {
   const count = score.barsPerLine ?? 0;
   document.querySelector(`input[name="breaksMode"][value="${count ? "every" : "fit"}"]`).checked = true;
@@ -682,5 +752,6 @@ function setUpShell() {
     event.target.value = "";
     event.target.blur();
   });
+  setUpPageSettings();
   setUpPalettes();
 }

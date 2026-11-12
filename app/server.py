@@ -36,7 +36,7 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
-from pipeline import concert, edit, marks, mixer, structure, transpose
+from pipeline import concert, edit, layout, marks, mixer, structure, transpose
 from pipeline.engrave import VIEWS, export_pdf, glyph_script, page_size, render_pages
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
@@ -286,6 +286,20 @@ class ConcertPitch(BaseModel):
     on: bool
 
 
+class PageLayout(BaseModel):
+    """A page in millimetres, and the room between staves and systems in staff spaces."""
+
+    width: float = 210.0
+    height: float = 297.0
+    top: float = 15.0
+    bottom: float = 15.0
+    left: float = 15.0
+    right: float = 15.0
+    space: float = 1.75
+    staves: float = 6.0
+    systems: float = 6.0
+
+
 class ViewChoice(BaseModel):
     view: str  # "page", or "horizontal" or "vertical" for MuseScore's continuous views.
 
@@ -510,6 +524,7 @@ def open_score_file(data: bytes, suffix: str) -> dict:
         edit.ensure_note_ids(root)
         marks.ensure_mark_ids(root)
         structure.ensure_measure_ids(root)
+        layout.keep_imported(root)  # On the page its file sets out, as MuseScore opens it.
         playback(root)
         render_pages(to_text(root))
     except (ValueError, TypeError, AttributeError, ZeroDivisionError) as error:
@@ -602,6 +617,7 @@ def describe(folder: Path, status: dict) -> dict:
         "barsPerLine": structure.bars_per_line(root),
         "concertPitch": concert.shown_at_concert_pitch(root),
         "partIds": part_ids(root),
+        "layout": layout.layout_of(root),
         "timeline": timeline(shown),
         "mixer": mixer_of(folder, root),
         "transposing": concert.is_transposing(root),
@@ -995,6 +1011,12 @@ def redo(score_id: str) -> dict:
 def change_concert_pitch(score_id: str, body: ConcertPitch) -> dict:
     """Show the score at concert pitch or as written. It's an edit, so it can be undone, as in MuseScore."""
     return apply_edit(score_id, lambda root: concert.set_concert_pitch(root, body.on))
+
+
+@app.post("/api/scores/{score_id}/layout")
+def change_layout(score_id: str, body: PageLayout) -> dict:
+    """Set the page and its spacing, as Format ▸ Page settings and Style do. It's an edit, so it can be undone."""
+    return apply_edit(score_id, lambda root: layout.set_layout(root, layout.Layout(**body.model_dump())))
 
 
 @app.post("/api/scores/{score_id}/view")

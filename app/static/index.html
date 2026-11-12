@@ -314,6 +314,56 @@
   </form>
 </dialog>
 
+<dialog id="pageDialog" aria-labelledby="pageTitle">
+  <form method="dialog">
+    <h2 id="pageTitle">Page settings</h2>
+    <div class="content">
+      <fieldset>
+        <legend>Size</legend>
+        <label class="field">Page size<select id="pageSize"></select></label>
+        <div class="pair">
+          <label class="field">Width (mm)<input id="pageWidth" type="number" min="50" max="1000" step="0.1"></label>
+          <label class="field">Height (mm)<input id="pageHeight" type="number" min="50" max="1000" step="0.1"></label>
+        </div>
+        <div class="choices">
+          <label><input type="radio" name="orientation" value="portrait"> Portrait</label>
+          <label><input type="radio" name="orientation" value="landscape"> Landscape</label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Margins (mm)</legend>
+        <div class="pair">
+          <label class="field">Top<input id="marginTop" type="number" min="0" max="50" step="0.1"></label>
+          <label class="field">Bottom<input id="marginBottom" type="number" min="0" max="50" step="0.1"></label>
+        </div>
+        <div class="pair">
+          <label class="field">Left<input id="marginLeft" type="number" min="0" max="50" step="0.1"></label>
+          <label class="field">Right<input id="marginRight" type="number" min="0" max="50" step="0.1"></label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Scaling</legend>
+        <label class="field">Staff space (mm)<input id="staffSpace" type="number" min="0.9" max="2.4" step="0.01"></label>
+      </fieldset>
+    </div>
+    <div class="buttons"><button type="button" id="pageReset">Reset</button><button type="button" data-close>Cancel</button><button type="submit" class="primary">OK</button></div>
+  </form>
+</dialog>
+
+<dialog id="styleDialog" aria-labelledby="styleTitle">
+  <form method="dialog">
+    <h2 id="styleTitle">Style</h2>
+    <div class="content">
+      <fieldset>
+        <legend>Page</legend>
+        <label class="field">Staff distance (sp)<input id="staffDistance" type="number" min="0" max="24" step="0.1"></label>
+        <label class="field">Min. system distance (sp)<input id="systemDistance" type="number" min="0" max="24" step="0.1"></label>
+      </fieldset>
+    </div>
+    <div class="buttons"><button type="button" id="styleReset">Reset</button><button type="button" data-close>Cancel</button><button type="submit" class="primary">OK</button></div>
+  </form>
+</dialog>
+
 <dialog id="keysDialog" aria-labelledby="keysTitle">
   <form method="dialog">
     <h2 id="keysTitle">Keyboard shortcuts</h2>

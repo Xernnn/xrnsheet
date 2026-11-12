@@ -162,6 +162,8 @@ An 8va line keeps the notes under it at the pitch they sound, which is how Music
 
 Tools ▸ Transpose moves the selection, or the whole score if nothing is selected, to a key or by an interval, and the chord symbols move with it. Format ▸ Add/remove system breaks sets how many measures go on a line.
 
+**Page settings and style.** Format ▸ Page settings sets the paper, from MuseScore's sizes (A4, Letter, Legal, Tabloid, A3, A5, B4, B5, Executive and Concert) or any size, portrait or landscape, its four margins, and the staff space, which scales the music. Format ▸ Style sets the room between instruments' staves and between systems. Both are edits that can be undone. The score keeps them as MusicXML does, in its `<defaults>`, so they're exported with it, and a MusicXML file from another program opens on the page it sets out, as it does in MuseScore. A score read from a photo starts on A4 whatever its reader guessed.
+
 A staff can hold four voices. Choose one with the coloured buttons or Ctrl+Alt and a number, and the arrows stay in that voice. If you write a rest in an extra voice, it stays there so you can carry on, and Delete removes it.
 
 To write a triplet, pick the duration it should fill, press Ctrl+`3`, and type its three notes. A quarter gives eighth-note triplets. A triplet can't be cut in half, so selecting or copying any note of one takes the whole triplet.
@@ -170,7 +172,7 @@ Repeats & jumps starts or ends a repeat at the selected measure, and marks it as
 
 Click a chord symbol to change or remove it. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. Measures you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
 
-What MuseScore has and this editor doesn't yet: page and style settings.
+What MuseScore has and this editor doesn't yet: unpitched percussion such as a drum kit, the rest of MuseScore's Style dialog beyond the page's spacing, and, in the horizontal continuous view, instrument names and clefs that stay in sight as it scrolls.
 
 To recognize a sheet without the app:
 

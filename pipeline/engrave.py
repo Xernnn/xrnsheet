@@ -11,6 +11,7 @@ from pathlib import Path
 
 import verovio
 
+from pipeline.layout import page_layout
 from pipeline.musicxml import UnreadableScore
 from pipeline.rhythm import OCTAVE_SHIFTS, contexts, octave_lines, read_measure
 from pipeline.structure import BREAK_PREFIX, bars_per_line
@@ -21,11 +22,9 @@ RENDER_LOCK = threading.Lock()
 LYRIC_WORD_SPACE = 2.5  # Verovio's default leaves neighbouring words almost touching.
 
 # The page follows MuseScore's defaults, so a score looks the same here as it does there: its
-# music font, a 1.75 mm staff space on A4 with 15 mm margins, and its line weights.
+# music font, a 1.75 mm staff space on A4 with 15 mm margins, and its line weights. Page settings
+# can change the paper, the margins, the staff space and the spacing (see layout.py).
 MUSIC_FONT = "Leland"
-STAFF_UNIT = 8.75  # Half a staff space, in tenths of a millimetre.
-PAGE_MARGIN = 150
-SYSTEM_SPACING = 12  # In half staff spaces, between what one system draws and the next.
 LINE_WEIGHTS = {  # In staff spaces, as the music font's own defaults give them.
     "staffLineThickness": 0.11,
     "stemThickness": 0.10,
@@ -59,13 +58,13 @@ TITLE_POINTS = 22
 COMPOSER_POINTS = 10
 # The title frame is ten staff spaces tall, with the title at its top and the composer at its
 # bottom. These are in the hundredths of a millimetre a page is drawn in, from the top margin.
-FRAME_HEIGHT = 1750
+FRAME_SPACES = 10
 TITLE_BASELINE = 580
-COMPOSER_BASELINE = 1670
+COMPOSER_ABOVE_FOOT = 80  # The composer's baseline, above the foot of the frame.
 ONE_LINE_OF_TEXT = 353  # What Verovio has already left for the header.
-HEADER_ROOM = 2 + (FRAME_HEIGHT - ONE_LINE_OF_TEXT) / (STAFF_UNIT * 10)  # Under the header, in half staff spaces.
 FONT_SIZE = re.compile(r'font-size="(\d+)px"')
-SVG_SIZE = re.compile(r'<svg width="(\d+)px" height="(\d+)px"')
+# The drawing's own size, in the hundredths of a millimetre a page is drawn in.
+DRAWN_SIZE = re.compile(r'class="definition-scale"[^>]*viewBox="0 0 (\d+) (\d+)"')
 SCALE = 45  # Verovio draws a page at this percent, so a millimetre of paper is 4.5 pixels of the drawing.
 VIEWS = ("page", "horizontal", "vertical")
 LONGEST_SYSTEM = 100000  # Verovio's widest page, ten metres, which a continuous view is cut down to fit.
@@ -311,11 +310,16 @@ def set_text_font(svg: str) -> str:
     return svg.replace('font-family="Times, serif"', f'font-family="{TEXT_FONTS}"').replace("font-family:Times,serif", f"font-family:{TEXT_FONTS}")
 
 
-def size_header(svg: str) -> str:
+def frame_height(space: float) -> float:
+    """The title frame's height, in the hundredths of a millimetre a page is drawn in."""
+    return FRAME_SPACES * space * 100
+
+
+def size_header(svg: str, space: float = 1.75) -> str:
     """Lay the title and the composer out as MuseScore's title frame does.
 
     Verovio prints every credit in one size on one line. The title goes at the top of the frame in
-    its own size, and the composer at the bottom right. HEADER_ROOM is what makes room for them.
+    its own size, and the composer at the bottom right. The room under the header makes way for them.
     """
     head = svg.find('class="pgHead"')
     if head < 0:
@@ -324,7 +328,7 @@ def size_header(svg: str) -> str:
     pieces = re.split(r"(?=<text )", svg[head:end])
     for index, piece in enumerate(pieces[1:], start=1):
         is_title = 'text-anchor="middle"' in piece  # The title is the centred line.
-        points, baseline = (TITLE_POINTS, TITLE_BASELINE) if is_title else (COMPOSER_POINTS, COMPOSER_BASELINE)
+        points, baseline = (TITLE_POINTS, TITLE_BASELINE) if is_title else (COMPOSER_POINTS, round(frame_height(space) - COMPOSER_ABOVE_FOOT))
         piece = FONT_SIZE.sub(lambda found: f'font-size="{round(points * POINT) if int(found.group(1)) else 0}px"', piece)
         pieces[index] = re.sub(r' y="-?\d+"', f' y="{baseline}"', piece)
     return svg[:head] + "".join(pieces) + svg[end:]
@@ -341,11 +345,11 @@ def keep_spaces(svg: str) -> str:
 
 def page_size(svg: str) -> list[float]:
     """Return a drawn page's width and height in millimetres, which is the size it prints at."""
-    found = SVG_SIZE.search(svg)
-    return [round(int(found.group(1)) / (SCALE / 100) / 10, 2), round(int(found.group(2)) / (SCALE / 100) / 10, 2)] if found else [210.0, 297.0]
+    found = DRAWN_SIZE.search(svg)
+    return [int(found.group(1)) / 100, int(found.group(2)) / 100] if found else [210.0, 297.0]
 
 
-def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970, view: str = "page") -> list[str]:
+def render_pages(musicxml: str, view: str = "page") -> list[str]:
     """Draw a score's pages, or in a continuous view one long system across or one long page down.
 
     MuseScore's continuous views leave out its frames, so the horizontal one has no title. The
@@ -354,28 +358,31 @@ def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970,
     if view not in VIEWS:
         raise ValueError(f"Unknown view {view}")
     has_title = "<credit" in musicxml and view != "horizontal"
+    layout = page_layout(ET.fromstring(musicxml))
+    unit = layout.space * 10 / 2  # Half a staff space, in tenths of a millimetre, which is how Verovio counts.
     prepared = prepare_for_drawing(musicxml)
     with RENDER_LOCK:
         toolkit = verovio.toolkit(False)  # It would look for fonts itself, and fail on a worker thread.
         toolkit.setResourcePath(RESOURCE_PATH)
         breaks = "smart" if 'new-system="yes"' in prepared else "auto"
         toolkit.setOptions({
-            "pageWidth": LONGEST_SYSTEM if view == "horizontal" else page_width,
-            "pageHeight": LONGEST_PAGE if view == "vertical" else page_height,
+            "pageWidth": LONGEST_SYSTEM if view == "horizontal" else round(layout.width * 10),
+            "pageHeight": LONGEST_PAGE if view == "vertical" else round(layout.height * 10),
             "adjustPageWidth": view == "horizontal",
             "adjustPageHeight": view != "page",
             "scale": SCALE,
             "font": MUSIC_FONT,
-            "unit": STAFF_UNIT,
-            "pageMarginLeft": PAGE_MARGIN,
-            "pageMarginRight": PAGE_MARGIN,
-            "pageMarginTop": PAGE_MARGIN,
-            "pageMarginBottom": PAGE_MARGIN,
-            "spacingSystem": SYSTEM_SPACING,
+            "unit": unit,
+            "pageMarginLeft": round(layout.left * 10),
+            "pageMarginRight": round(layout.right * 10),
+            "pageMarginTop": round(layout.top * 10),
+            "pageMarginBottom": round(layout.bottom * 10),
+            "spacingSystem": round(layout.systems * 2),
+            "spacingStaff": round(layout.staves * 2),
             "engravingDefaults": LINE_WEIGHTS,
-            "lyricSize": TEXT_POINTS * POINT / TIMES_WIDTH / (STAFF_UNIT * 10),
+            "lyricSize": TEXT_POINTS * POINT / TIMES_WIDTH / (unit * 10),
             "header": "auto" if has_title else "none",
-            "bottomMarginHeader": HEADER_ROOM,
+            "bottomMarginHeader": 2 + (frame_height(layout.space) - ONE_LINE_OF_TEXT) / (unit * 10),  # In half staff spaces.
             "footer": "none",
             "breaks": "none" if view == "horizontal" else breaks,
             "breaksSmartSb": 0.0,  # A break someone asked for always counts, however short the line.
@@ -384,7 +391,7 @@ def render_pages(musicxml: str, page_width: int = 2100, page_height: int = 2970,
         })
         if not toolkit.loadData(prepared):
             raise UnreadableScore("Could not read this MusicXML")
-        return [keep_spaces(size_header(set_text_font(replace_private_glyphs(toolkit.renderToSVG(page))))) for page in range(1, toolkit.getPageCount() + 1)]
+        return [keep_spaces(size_header(set_text_font(replace_private_glyphs(toolkit.renderToSVG(page))), layout.space)) for page in range(1, toolkit.getPageCount() + 1)]
 
 
 def export_pdf(musicxml: str, out_path: Path) -> None:
