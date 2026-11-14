@@ -333,7 +333,9 @@ function followerPlace() {
 function followFollower() {
   const follower = practice.follower;
   if (!follower) return;
-  drawPosition(followerPlace());
+  const place = followerPlace();
+  drawPosition(place);
+  drawPlayhead(place);
   follower.frame = requestAnimationFrame(followFollower);
 }
 
@@ -345,6 +347,7 @@ function stopFollowing(finished = false) {
   follower.timers.forEach(clearTimeout);
   cancelAnimationFrame(follower.frame);
   follower.audio.close();
+  hidePlayhead();
   document.querySelectorAll("#pages .awaited").forEach(element => element.classList.remove("awaited"));
   keyboard.expected = new Set();
   keyboard.expectedNotes = [];

@@ -575,6 +575,8 @@ def test_lyrics(page, base: str, shots: Path | None, created: list[str]) -> None
     click_on(page, page.locator("#pages g.note").last)
     page.keyboard.press("n")
     settle(page)
+    page.keyboard.press("ArrowLeft")  # Writing starts after the note selected: back onto it.
+    settle(page)
     head = page.locator("#pages g.note").last.locator(".notehead").bounding_box()
     caret = page.locator("#caret").bounding_box()
     middle_gap = abs(caret["x"] + caret["width"] / 2 - (head["x"] + head["width"] / 2))
@@ -870,10 +872,11 @@ def test_musescore_keys(page, base: str, created: list[str]) -> None:
     check("the toolbar's double sharp goes on the selected note", read_notes(base, score_id)[1][1:5] == ("D", "5", "quarter", "double-sharp"), read_notes(base, score_id)[1])
     check("and is drawn with its own sign", page.locator("#pages g.accid").count() == 1)
     select_notes(page, 2, 3)
-    page.click('#accidentalRow [aria-label="Double flat"]')
+    page.click('#noteBar [data-action="doubleFlat"]')
     settle(page)
     flats = [note[4] for note in read_notes(base, score_id)[:4]]
-    check("the inspector's double flat goes on a whole selection", flats == ["", "double-sharp", "flat-flat", "flat-flat"], flats)
+    check("the toolbar's double flat goes on a whole selection", flats == ["", "double-sharp", "flat-flat", "flat-flat"], flats)
+    check("and the toolbar shows it on them", page.get_attribute('#noteBar [data-action="doubleFlat"]', "aria-pressed") == "true")
     press(page, "Control+z")
     press(page, "Control+z")
     check("each is undone in one step", whole_tune())
@@ -2161,7 +2164,7 @@ def test_piano_keyboard(page, base: str, shots: Path | None, created: list[str])
     page.keyboard.up("Shift")
     settle(page)
     notes = [(note.findtext("pitch/step"), note.findtext("pitch/octave"), note.find("chord") is not None) for note in saved_score(base, score_id).iter("note") if note.find("pitch") is not None]
-    check("in note input a key writes its note, and Shift adds it to the chord", notes[:2] == [("E", "4", False), ("G", "4", True)], notes[:3])
+    check("in note input a key writes its note, and Shift adds it to the chord", notes[4:6] == [("E", "4", False), ("G", "4", True)], notes[:6])
     page.keyboard.press("Escape")
     settle(page)
     page.keyboard.press("Escape")
@@ -2399,7 +2402,11 @@ def test_playback_toolbar(page, base: str, shots: Path | None, created: list[str
     page.wait_for_function("() => playState.data !== null")
     check("the toolbar has rewind, play, loop, metronome and settings", all(page.is_visible(f"#{name}") for name in ("rewind", "play", "loop", "metronome", "playSettings")))
     check("it shows the tempo", page.inner_text("#tempoValue") == "100", page.inner_text("#tempoValue"))
-    check("and the position at the start", (page.input_value("#timeCounter"), page.input_value("#beatCounter")) == ("00:00:00.0", "1.1"))
+    page.wait_for_function("() => $('beatCounter').value === '3.4'")
+    check("and the position at the note selected, the last written", (page.input_value("#timeCounter"), page.input_value("#beatCounter")) == ("00:00:06.6", "3.4"), (page.input_value("#timeCounter"), page.input_value("#beatCounter")))
+    page.keyboard.press("Escape")
+    page.click("#rewind")
+    check("rewound, at the start", (page.input_value("#timeCounter"), page.input_value("#beatCounter")) == ("00:00:00.0", "1.1"))
     page.fill("#beatCounter", "3.1")
     page.keyboard.press("Enter")
     check("a measure typed in moves the position there", page.input_value("#timeCounter") == "00:00:04.8", page.input_value("#timeCounter"))
@@ -2598,13 +2605,17 @@ def test_inspector(page, base: str, shots: Path | None, created: list[str]) -> N
     check("it lists the instruments by kind", page.locator("#partList li").all_inner_texts() == ["Piano"] and page.locator("#partList li .kind svg").count() == 1)
     select_notes(page, 0)
     check("a selected note is named as it's drawn, with its length, voice and hand", (page.inner_text("#propKind"), page.inner_text("#propWhat")) == ("C5", "Quarter · voice 1 · Piano, right hand"), (page.inner_text("#propKind"), page.inner_text("#propWhat")))
-    check("its length shows in the inspector", page.get_attribute('#lengthRow [data-length="quarter"]', "aria-pressed") == "true")
-    page.click('#accidentalRow [aria-label="Sharp"]')
+    check("its length shows in the note input bar", page.get_attribute('#lengths [data-type="quarter"]', "aria-pressed") == "true" and page.locator('#lengths [aria-pressed="true"]').count() == 1)
+    check("and the inspector doesn't repeat the bar's duration, accidental and voice", page.locator("#lengthRow, #accidentalRow, #voiceRow").count() == 0)
+    page.click('#noteBar [data-action="sharp"]')
     settle(page)
-    check("an accidental from the inspector changes its name", page.inner_text("#propKind") == "C♯5", page.inner_text("#propKind"))
-    page.click('#lengthRow [data-length="half"]')
+    check("an accidental from the bar changes its name in the inspector", page.inner_text("#propKind") == "C♯5", page.inner_text("#propKind"))
+    check("and is shown pressed in the bar", page.get_attribute('#noteBar [data-action="sharp"]', "aria-pressed") == "true")
+    page.click('#lengths [data-type="half"]')
     settle(page)
     check("and a length its length", read_notes(base, score_id)[0][3] == "half" and page.inner_text("#propWhat").startswith("Half"), page.inner_text("#propWhat"))
+    check("which the bar shows", page.get_attribute('#lengths [data-type="half"]', "aria-pressed") == "true")
+    check("the pianist's tools come before the pitch buttons", page.evaluate("() => $('propInstrument').compareDocumentPosition($('pitchRow')) & Node.DOCUMENT_POSITION_FOLLOWING") > 0)
     check("the measure's facts are beside it", page.inner_text("#propMeasureName") == "Measure 1" and "4/4" in page.inner_text('#measureGroups .group[data-group="times"] .current'))
     choose(page, "key:2")
     settle(page)
@@ -2711,7 +2722,7 @@ def test_fretboard(page, base: str, shots: Path | None, created: list[str]) -> N
     settle(page)
     page.wait_for_function("() => Object.values(playState.data?.events ?? {}).some(event => event[3] === 43)")
     select_notes(page, 0)
-    check("a selected note lights where it's played", neck_spots(page, "fretboard", "chosen") in ([[6, 3]], [[6, 3], [4, 0]]), neck_spots(page, "fretboard", "chosen"))
+    check("a selected note lights where it's played", sorted(neck_spots(page, "fretboard", "chosen")) in ([[6, 3]], [[4, 0], [6, 3]]), neck_spots(page, "fretboard", "chosen"))
     select_notes(page, 2)
     check("in the lowest place it fits", neck_spots(page, "fretboard", "chosen") == [[1, 12]], neck_spots(page, "fretboard", "chosen"))
     page.keyboard.press("Escape")
@@ -4101,6 +4112,182 @@ def test_recognized(page, base: str, shots: Path | None, created: list[str]) -> 
     page.set_viewport_size(size)
 
 
+def head_point(page, element_id: str) -> tuple[float, float]:
+    """The middle of a note's head, where a mouse aims."""
+    box = page.evaluate("""id => {
+        const element = document.getElementById(id);
+        element.scrollIntoView({ block: "center" });
+        const box = headBox(element);
+        return { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+    }""", element_id)
+    return box["x"], box["y"]
+
+
+def staff_point(page, element_id: str, step: int) -> tuple[float, float]:
+    """Over a note or rest, at a place on its staff: 0 is the top line, and each step a line or space."""
+    spot = page.evaluate("""([id, step]) => {
+        const element = document.getElementById(id);
+        const lines = staffLines(element.closest("g.staff"));
+        const box = headBox(element);
+        return { x: (box.left + box.right) / 2, y: lines.top + step * lines.step };
+    }""", [element_id, step])
+    return spot["x"], spot["y"]
+
+
+def line_starts_shown(page) -> list[str]:
+    return page.evaluate("() => [...document.querySelectorAll('#pages g.system')].map(system => system.querySelector('g.measure').id)")
+
+
+def test_writing_with_the_mouse(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """Writing a tune for piano with the mouse alone: what a click will write shows before it does, a note
+    already written is selected by a click, not written over, a drag moves it, a key below changes it, and
+    every panel follows."""
+    page.goto(base)
+    page.click("#blankOpen")
+    page.click('#quickStart [data-quick="piano"] .start')
+    page.wait_for_selector("#pages svg")
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    check("a new score is written in at once, and the button says so", page.get_attribute("#inputToggle", "aria-pressed") == "true" and page.inner_text("#inputToggle").strip() == "Writing")
+    check("the library has folded away for it", page.is_hidden("#library"))
+    space = page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step * 2")
+    check("it opens fitted to the width, with room between the lines to aim at", page.input_value("#zoomChoice") == "width" and space > 9, space)
+    starts = line_starts_shown(page)
+
+    rest = page.evaluate("() => editor.cursor")
+    x, y = staff_point(page, rest, 6)
+    page.mouse.move(x, y)
+    check("the ghost note says what a click will write, and when", page.is_visible("#ghost") and page.inner_text("#ghost .tag") == "G4 · bar 1, beat 1", page.inner_text("#ghost .tag") if page.is_visible("#ghost") else None)
+    check("in the voice's colour, with the chosen length", page.get_attribute("#ghost", "data-voice") == "1" and page.locator("#ghost svg").count() == 1)
+    page.mouse.click(x, y)
+    settle(page)
+    g4 = page.evaluate("() => editor.last")
+    check("a click writes it", pitched(read_notes(base, score_id)) == ["G4"], pitched(read_notes(base, score_id)))
+    above = page.evaluate("() => editor.cursor")
+    x, y = staff_point(page, above, -3)
+    page.mouse.move(x, y)
+    check("above the staff the ghost has its ledger lines", page.locator("#ghost .ledger").count() == 1 and page.inner_text("#ghost .tag").startswith("B5 · bar 1, beat 2"), page.inner_text("#ghost .tag"))
+    x, y = staff_point(page, above, 5)
+    page.mouse.click(x, y)
+    settle(page)
+    check("and the next click the next note", pitched(read_notes(base, score_id)) == ["G4", "A4"], pitched(read_notes(base, score_id)))
+
+    gx, gy = head_point(page, g4)
+    page.mouse.move(gx, gy)
+    check("over a note already written, no note is offered to write", page.is_hidden("#ghost") and page.evaluate("id => document.getElementById(id).classList.contains('picked')", g4))
+    cursor = page.evaluate("() => editor.cursor")
+    page.mouse.click(gx, gy)
+    settle(page)
+    check("clicking it selects it, while still writing", pitched(read_notes(base, score_id)) == ["G4", "A4"] and page.evaluate("() => [editor.on, editor.last]") == [True, g4], page.evaluate("() => [editor.on, editor.last]"))
+    check("the inspector and the keyboard show it at once", page.inner_text("#propKind") == "G4" and lit_keys(page, "chosen") == [67], (page.inner_text("#propKind"), lit_keys(page, "chosen")))
+    check("and writing goes on where it was", page.evaluate("() => editor.cursor") == cursor)
+
+    page.mouse.move(gx, gy)
+    page.mouse.down()
+    page.mouse.move(gx, gy - 6, steps=4)
+    step = page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step")
+    page.mouse.move(gx, gy - step * 2, steps=4)
+    check("dragging a note shows where it's going, and its name", page.is_visible("#ghost") and page.inner_text("#ghost .tag") == "B4", page.inner_text("#ghost .tag") if page.is_visible("#ghost") else None)
+    desk = page.evaluate("() => [$('desk').scrollLeft, $('desk').scrollTop]")
+    page.mouse.up()
+    settle(page)
+    check("and lets go of it there, without moving the page", pitched(read_notes(base, score_id)) == ["B4", "A4"] and page.evaluate("() => [$('desk').scrollLeft, $('desk').scrollTop]") == desk, pitched(read_notes(base, score_id)))
+    check("it's still the selected one", page.evaluate("() => editor.last") == g4 and page.inner_text("#propKind") == "B4")
+    if shots:
+        page.screenshot(path=str(shots / "writing-with-the-mouse.png"))
+
+    page.keyboard.press("Escape")
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    x, y = head_point(page, g4)
+    page.mouse.click(x, y)
+    settle(page)
+    page.locator('#pianoKeys [data-midi="72"]').dispatch_event("pointerdown")
+    settle(page)
+    notes = read_notes(base, score_id)
+    check("outside note input a key below makes the selected note that note, keeping its length", (notes[0][1:4]) == ("C", "5", "quarter"), notes[:2])
+    check("and the inspector follows", page.inner_text("#propKind") == "C5")
+    page.locator('#pianoKeys [data-midi="76"]').dispatch_event("pointerdown", {"shiftKey": True})
+    settle(page)
+    check("with Shift it adds that note to its chord", page.inner_text("#propKind") == "C5 E5" and lit_keys(page, "chosen") == [72], (page.inner_text("#propKind"), lit_keys(page, "chosen")))
+    check("the toolbar shows the selected note's length and voice", page.get_attribute('#lengths [data-type="quarter"]', "aria-pressed") == "true" and page.get_attribute('#voices [data-voice="1"]', "aria-pressed") == "true")
+    page.keyboard.press("Escape")
+    settle(page)
+    before = read_notes(base, score_id)
+    page.locator('#pianoKeys [data-midi="65"]').dispatch_event("pointerdown")
+    settle(page)
+    check("with nothing selected a key is only heard", read_notes(base, score_id) == before)
+
+    # The playback position stays with the selection through an edit and its undo.
+    second = page.evaluate("() => [...document.querySelectorAll('#pages g.measure')][1].querySelector('g.mRest, g.rest').id")
+    x, y = head_point(page, second)
+    page.mouse.click(x, y)
+    settle(page)
+    page.wait_for_function("() => $('beatCounter').value === '2.1'")
+    page.keyboard.press("Control+ArrowUp")  # Nothing to move on a rest, but a refused edit mustn't move it either.
+    page.keyboard.press("e")
+    settle(page)
+    page.keyboard.press("Control+z")
+    settle(page)
+    page.wait_for_timeout(700)
+    check("the position follows the selection through an edit and an undo", page.input_value("#beatCounter") == "2.1", page.input_value("#beatCounter"))
+    check("and the lines keep their measures through it all", line_starts_shown(page) == starts, (line_starts_shown(page), starts))
+
+    # Writing starts somewhere it can't undo work by surprise.
+    a4 = page.evaluate("() => [...document.querySelectorAll('#pages g.note')].find(note => spelledName(note) === 'A4').id")
+    x, y = head_point(page, a4)
+    page.mouse.click(x, y)
+    settle(page)
+    page.click("#inputToggle")
+    settle(page)
+    check("writing from the last note written carries on after it", page.evaluate("id => ![id, 'after:' + id].includes(editor.cursor) && document.getElementById(editor.cursor).matches('g.rest, g.mRest')", a4) and not page.evaluate("() => $('caret').classList.contains('over')"), page.evaluate("() => editor.cursor"))
+    page.keyboard.press("Escape")
+    settle(page)
+    x, y = head_point(page, g4)
+    page.mouse.click(x, y)
+    settle(page)
+    page.click("#inputToggle")
+    settle(page)
+    check("from a note with music after it, it starts there, saying what it writes over", page.evaluate("() => editor.cursor") == g4 and page.get_attribute("#caret", "data-over") == "writes over C5 E5" and "Writing over C5 E5" in page.inner_text("#toolLabel"), (page.evaluate("() => editor.cursor"), page.get_attribute("#caret", "data-over")))
+    page.keyboard.press("Escape")
+    settle(page)
+    page.keyboard.press("Escape")
+    x, y = head_point(page, second)
+    page.mouse.click(x, y)
+    settle(page)
+    page.keyboard.press("n")
+    settle(page)
+    check("and from a selected rest, on it", page.evaluate("() => editor.cursor") == second, page.evaluate("() => editor.cursor"))
+    page.keyboard.press("Escape")
+    settle(page)
+
+    # The playhead moves through the bars, rests and all.
+    page.click("#rewind")
+    page.click("#play")
+    page.wait_for_selector("#playhead:not([hidden])", timeout=4000)
+    first_x = page.evaluate("() => parseFloat($('playhead').style.left)")
+    page.wait_for_timeout(1400)
+    later_x = page.evaluate("() => parseFloat($('playhead').style.left)")
+    check("while it plays a playhead moves across the bars", later_x > first_x, (first_x, later_x))
+    page.click("#play")
+    check("and goes when it stops", page.is_hidden("#playhead"))
+
+    # The library's picture follows the edits.
+    page.click("#libraryToggle")
+    picture = lambda: page.get_attribute(f'#historyList a[data-score="{score_id}"] img', "src")
+    page.wait_for_selector(f'#historyList a[data-score="{score_id}"] img')
+    was = picture()
+    x, y = head_point(page, g4)
+    page.mouse.click(x, y)
+    page.keyboard.press("ArrowUp")
+    settle(page)
+    page.wait_for_function("([id, was]) => document.querySelector(`#historyList a[data-score=\"${id}\"] img`).getAttribute('src') !== was", arg=[score_id, was], timeout=4000)
+    check("the library's picture of the score is drawn again after an edit", picture() != was)
+    page.click("#libraryToggle")
+    page.keyboard.press("Escape")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", type=int, default=8011)
@@ -4126,6 +4313,7 @@ def main() -> None:
             page.on("console", lambda item: problems.append(item.text) if item.type == "error" and not any(code in item.text for code in refused) else None)
             test_writing(page, base, arguments.shots, created)
             test_clicking_notes(page, base, arguments.shots, created)
+            test_writing_with_the_mouse(page, base, arguments.shots, created)
             test_end_of_score(page, base, created)
             test_quick_keys(page, base, created)
             test_triplets(page, base, created)

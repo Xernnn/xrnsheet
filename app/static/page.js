@@ -91,6 +91,27 @@ function tileFor(sheet) {
   return link;
 }
 
+// The library's picture of the open score follows its edits, a moment after the last one, and so
+// does when it was saved. Hidden, the library is listed afresh when it's shown.
+let tileTimer = 0;
+const TILE_DELAY_MS = 1200;
+
+function refreshTile() {
+  clearTimeout(tileTimer);
+  const id = scoreId;
+  tileTimer = setTimeout(() => {
+    if (id !== scoreId || !libraryShown()) return;
+    const tile = document.querySelector(`#historyList a[data-score="${id}"]`);
+    if (!tile) { drawHistory(); return; }
+    const now = Date.now() / 1000;
+    tile.querySelector("img").src = `/api/scores/${id}/thumbnail.svg?${now}`;
+    const sheet = sheets.find(item => item.id === id);
+    if (sheet) { sheet.saved = now; sheet.title = score?.title ?? sheet.title; }
+    const state = tile.querySelector(".state");
+    if (sheet && state) state.textContent = tileFor(sheet).querySelector(".state").textContent;
+  }, TILE_DELAY_MS);
+}
+
 function drawTiles() {
   const wanted = $("homeSearch").value.trim().toLowerCase();
   const create = document.createElement("button");
@@ -262,6 +283,8 @@ function draw() {
   drawStickyStart();
   updateTools();
   refreshPosition();
+  // The page under the pointer has changed, and so has what a click there would write.
+  if (pointer) drawGhost(pointer.x, pointer.y, pointer.shift);
 }
 
 function drawOriginals() {
@@ -426,8 +449,12 @@ function clickPages(event) {
   if (reading()) return;
   if (dragged) { dragged = false; return; }
   if (editor.on) {
-    const spot = placeUnder(event.clientX, event.clientY);
     closeEditor();
+    // A note already written is selected, to fix it, not written over. Empty staff is where notes
+    // go, and Shift adds the note to the chord there.
+    const head = event.shiftKey ? null : noteheadAt(event.clientX, event.clientY);
+    if (head) { pickWhileWriting(head); return; }
+    const spot = placeUnder(event.clientX, event.clientY);
     if (spot) placeNote(spot, event.shiftKey);
     return;
   }
@@ -442,13 +469,13 @@ function clickPages(event) {
     openEditor(chord.getBoundingClientRect(), index, score.chords[index].text);
     return;
   }
-  const note = event.target.closest("g.note, g.rest, g.mRest") || nearest("#pages g.note, #pages g.rest, #pages g.mRest", event.clientX, event.clientY, 14);
+  const note = noteheadAt(event.clientX, event.clientY) || event.target.closest("g.note, g.rest, g.mRest") || nearest("#pages g.note, #pages g.rest, #pages g.mRest", event.clientX, event.clientY, 14);
   const staff = note ? null : staffUnder(event.clientX, event.clientY);
   const extend = event.shiftKey;
   closeEditor();
   enqueue(async () => {
     if (note && extend && selected) await growRange(note.id);
-    else if (note) select(note.id);
+    else if (note) { select(note.id); hearNote(note); }
     else if (staff) await selectMeasure(staff, extend);
     else select(null);
   });

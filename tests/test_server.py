@@ -1301,3 +1301,35 @@ def test_lines_are_laid_out_afresh_when_the_page_changes(client):
     assert line_starts(data) != narrow and len(line_starts(data)) >= len(first)  # A narrower page: the lines were laid out for it.
     data = client.post(f"/api/scores/{score_id}/undo").json()
     assert line_starts(data) == first  # Back on the old page, laid out afresh: the narrow measure is room enough again.
+
+
+def test_the_page_is_told_what_a_place_on_each_staff_means(client):
+    score_id = blank(client, clef="piano", measures=2)
+    data = client.get(f"/api/scores/{score_id}").json()
+    rests = [note for note in notes_of(client, score_id)]
+    treble, bass = rests[0].get("id"), next(note.get("id") for note in rests if note.findtext("staff") == "2")
+    # The treble staff's top line is F5 and the bass staff's A3, as rhythm.diatonic numbers them.
+    assert data["places"][treble] == [0, 0.0, 3 + 7 * 5, 0, 1] and data["places"][bass] == [0, 0.0, 5 + 7 * 3, 0, 1]
+    # The beat as a player counts it: the third quarter of a bar is beat 3, and in 6/8 the fourth eighth is beat 2.
+    data = write(client, score_id, treble, "C", "half")
+    assert data["places"][data["cursor"]][4] == 3
+    six = blank(client, beats=6, beat_type=8, measures=1)
+    data = write(client, six, first_id(client, six), "C", "eighth")
+    data = write(client, six, data["cursor"], "D", "eighth")
+    data = write(client, six, data["cursor"], "E", "eighth")
+    assert data["places"][data["cursor"]][4] == 2
+
+
+def test_a_key_pressed_with_a_note_selected_sets_its_pitch(client):
+    score_id = blank(client, fifths=-1)
+    data = write(client, score_id, first_id(client, score_id), "G", "half")
+    note = data["written"]
+    data = client.post(f"/api/scores/{score_id}/notes/{note}", json={"action": "pitch", "midi": 70}).json()
+    played = notes_of(client, score_id)[0]
+    assert (played.findtext("pitch/step"), played.findtext("pitch/alter"), played.findtext("type")) == ("B", "-1", "half")
+    assert data["cursor"] == note  # Still the one selected.
+    # A rest becomes a note of its own length.
+    rest = next(item.get("id") for item in notes_of(client, score_id) if item.find("rest") is not None)
+    data = client.post(f"/api/scores/{score_id}/notes/{rest}", json={"action": "pitch", "midi": 60}).json()
+    made = next(item for item in notes_of(client, score_id) if item.get("id") == data["cursor"])
+    assert made.findtext("pitch/step") == "C" and made.findtext("type") == "half"

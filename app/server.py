@@ -45,7 +45,7 @@ from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import UnreadableScore, read_score_file, to_text
 from pipeline.playback import playback
 from pipeline.rhythm import fit_divisions, indexed
-from pipeline.timeline import timeline
+from pipeline.timeline import places, timeline
 
 JOB_DIR = ROOT / "data" / "jobs"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -758,6 +758,8 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
         "mixer": mixer_of(folder, root),
         "transposing": concert.is_transposing(root),
         "notes": note_details(shown),
+        "places": places(shown),
+        "ties": [note.get("id") for note in shown.iter("note") if note.get("id") and any(tie.get("type") == "start" for tie in note.findall("tie"))],
         "fretted": [board.describe() if board is not None else None for board in fretted.boards(root)],
         "strings": [list(technique.string_names(root, part)) or None for part in root.findall("part")],
         # How far each part's first bar sounds from how it's written, known before playback is fetched.
@@ -912,6 +914,7 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "semitoneUp": lambda root: edit.move_semitone(root, note_id, 1),
         "semitoneDown": lambda root: edit.move_semitone(root, note_id, -1),
         "repitch": lambda root: edit.set_step(root, note_id, body.step or ""),
+        "pitch": lambda root: edit.set_pitch(root, note_id, body.midi if body.midi is not None else -1),
         "double": lambda root: edit.scale_length(root, note_id, True),
         "halve": lambda root: edit.scale_length(root, note_id, False),
         "dotLonger": lambda root: edit.scale_length(root, note_id, True, by_dot=True),
@@ -935,7 +938,7 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
     if body.action == "fret":
         # The note has its new pitch once the tablature has caught up, and is then put on its string.
         return apply_edit(score_id, actions["fret"], lambda root, extra: fretted.choose_string(root, note_id, extra.pop("onString")))
-    on_string = body.string if body.action in ("write", "stack") and body.string else None
+    on_string = body.string if body.action in ("write", "stack", "pitch") and body.string else None
     return apply_edit(score_id, actions[body.action], (lambda root, extra: play_on_string(root, extra, on_string)) if on_string else None)
 
 

@@ -102,12 +102,13 @@ const SHORTCUTS = [
   ["P", "Show or hide the instrument: keyboard, fretboard or fingerboard. In note input it writes the note played, and Shift adds it to the chord"],
   ["Space, Page Down, →", "In Read, the next page. Shift+Space, Page Up and ← go back"],
   ["Ctrl+=, Ctrl+-, Ctrl+0", "Zoom in, zoom out, 100%"],
-  ["Drag a selected note", "Move it up or down"],
+  ["Drag a note", "Move it up or down the staff, its new name shown as it goes. Dragging the paper moves the pages"],
   ["Click a dynamic, slur or text", "Select it. Del removes it, and a double-click or F2 changes it"],
   ["Double-click the title", "Change the title and composer"],
   ["Ctrl+wheel, drag the desk", "Zoom, and move the pages about"],
   ["Right-click", "A menu for the note, measure or mark under the pointer"],
-  ["Click the staff", "In note input, place a note there. Shift+click adds it to a chord"],
+  ["Click the staff", "In note input, write the note the ghost shows there. Shift+click adds it to a chord. A click on a note already written selects it"],
+  ["A key, fret or string below", "In note input, write that note. Otherwise make the selected note that note, or with Shift add it to its chord"],
 ];
 let openMenus = [];
 let instruments = [];

@@ -95,6 +95,28 @@ function choosePart(index, redraw = true) {
   if (redraw) lightKeys();
 }
 
+// An instrument chosen by name, in the switcher, the palette or the score's list, is the one worked
+// with from then on: a note selected in another one is let go, as it would choose its own part
+// back, and while writing the cursor goes to that instrument, in the same measure.
+function switchPart(index) {
+  choosePart(index);
+  return enqueue(async () => {
+    if (editor.on) {
+      const here = document.getElementById(plainId(editor.cursor) ?? "");
+      const measure = here?.closest("g.measure");
+      if (measure && partOfStaff(staffNumber(here)) !== index) {
+        const staff = [...measure.children].filter(child => child.classList.contains("staff"))[firstStaffOf(index)];
+        const first = staff && [...staff.querySelectorAll(EVENTS)].find(element => stepOf(element) === element);
+        if (first) { editor.last = null; moveCursor(first.id); }
+      }
+    } else {
+      const chosen = document.getElementById(actionTarget() ?? "");
+      if (chosen && partOfStaff(staffNumber(chosen)) !== index) select(null);
+    }
+    choosePart(index);
+  });
+}
+
 // The pitch a staff shows for one that sounds, and back: they differ for a transposing instrument
 // unless the score is shown at concert pitch. The score says how far each part transposes, so a
 // note played on a bass's fretboard lands right before playback has been fetched.
@@ -301,13 +323,18 @@ function violinFinger(stop) {
   return stop === 0 ? "0" : stop <= 2 ? "1" : stop <= 4 ? "2" : stop <= 5 ? "3" : stop <= 7 ? "4" : "";
 }
 
-// The selected notes of the chosen part, each with its id and its pitch as it sounds.
+// The selected notes of the chosen part, each with its id and its pitch as it sounds. They're read
+// from the score as the page has it, so a note just written or changed is lit at once.
 function chosenNotes() {
-  const data = playState.data;
   const found = [];
   for (const id of range ? range.ids : [actionTarget()].filter(Boolean)) {
-    const event = data?.events?.[ownId(id)];
-    if (event && event[3] !== null && event[4] === activePart()) found.push({ id: ownId(id), midi: event[3] + (data.transpositions?.[event[4]] ?? 0) });
+    const element = document.getElementById(id);
+    const notes = element?.matches("g.note") ? [element] : [];
+    for (const note of notes) {
+      const [step, alter, octave] = score?.notes?.[ownId(note.id)] ?? [];
+      const part = partOfStaff(staffNumber(note));
+      if (step && part === activePart()) found.push({ id: ownId(note.id), midi: soundingPitch(12 * (octave + 1) + STEP_SEMITONES[step] + alter, part) });
+    }
   }
   return [...new Map(found.map(note => [note.id, note])).values()];
 }
@@ -455,13 +482,24 @@ function quietKeys() {
 
 // A key, a fret or a place on a string pressed, given as the pitch the staff shows: in Practice it's
 // what you played, while entering notes it writes its note, or adds it to the chord with Shift, as a
-// MIDI keyboard does, and otherwise it's only heard. A note written from a neck keeps the string it
-// was played on, where the score can say so.
+// MIDI keyboard does. In Write with one note or rest selected, it becomes that note, or with Shift
+// is added to its chord, so a misread note is put right by playing the right one. Otherwise it's
+// only heard. A note written from a neck keeps the string it was played on, where the score can
+// say so.
 function pressKey(midi, addToChord, where = null) {
   hearKey(soundingPitch(midi, activePart()));
   if (practiseHeard(midi)) return where;
-  if (!editor.on) return where;
   const string = stringToKeep(activePart(), soundingPitch(midi, activePart()), where);
+  if (!editor.on) {
+    const target = writing() && !range ? document.getElementById(selected ?? "") : null;
+    if (!target?.matches("g.note, g.rest, g.mRest") || partOfStaff(staffNumber(target)) !== activePart()) return where;
+    const id = ownId(target.id);
+    enqueue(async () => {
+      if (addToChord && target.matches("g.note")) await send(`notes/${id}`, { action: "stack", midi, ...string });
+      else await send(`notes/${id}`, { action: "pitch", midi, ...string });
+    });
+    return where;
+  }
   enqueue(async () => {
     if (addToChord && editor.last) await send(`notes/${editor.last}`, { action: "stack", midi, ...string });
     else if (editor.cursor) await send(`notes/${editor.cursor}`, { action: "write", type: editor.type, dots: editor.dots, midi, voice: editor.voice, ...string });

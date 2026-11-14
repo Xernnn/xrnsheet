@@ -107,7 +107,7 @@ function refreshKinds() {
 
 function partItems() {
   return [
-    ...(score?.parts ?? []).map((_, index) => ({ label: `${partLabel(index)} · ${KINDS[kindOfPart(index)].label.toLowerCase()}`, checked: index === activePart(), run: () => choosePart(index) })),
+    ...(score?.parts ?? []).map((_, index) => ({ label: `${partLabel(index)} · ${KINDS[kindOfPart(index)].label.toLowerCase()}`, checked: index === activePart(), run: () => switchPart(index) })),
     null,
     { label: "Add an instrument…", keys: "I", run: openAddPart },
   ];
@@ -303,7 +303,7 @@ function practiceCommands() {
 
 function allCommands() {
   const modes = Object.entries(MODES).map(([name, mode]) => ({ label: `${mode.label} mode`, where: "Mode", keys: mode.keys, enabled: Boolean(score), checked: currentMode() === name, run: () => setMode(name) }));
-  const parts = score ? (score.parts ?? []).map((_, index) => ({ label: `Work with ${partLabel(index)}`, where: "Instrument", keys: "", enabled: true, checked: index === activePart(), run: () => choosePart(index) })) : [];
+  const parts = score ? (score.parts ?? []).map((_, index) => ({ label: `Work with ${partLabel(index)}`, where: "Instrument", keys: "", enabled: true, checked: index === activePart(), run: () => switchPart(index) })) : [];
   const scores = sheets.map(sheet => ({ label: `Open ${sheet.title || "Untitled score"}`, where: "Library", keys: "", enabled: true, run: () => openScore(sheet.id) }));
   const inspectorItems = [
     { label: "Inspector on the score", where: "View", keys: "F7", enabled: Boolean(score), run: () => showInspector(true, "score") },
