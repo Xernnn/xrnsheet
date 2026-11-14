@@ -1306,5 +1306,5 @@ setUpTechnique();
 setUpToolbar();
 setUpWorkspace();
 updateTools();
-if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); }
+if (location.hash.length > 1) { scoreId = location.hash.slice(1); foldLibrary(); poll(); }
 drawHistory();

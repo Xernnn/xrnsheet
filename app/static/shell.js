@@ -39,11 +39,12 @@ const ICONS = {
   guitar: `<path d="M14 10l6.5-6.5M18.5 3.5l2 2"/><path d="M14 10c-1.5-1.5-4-1.2-5 .4-.5.8-1.6 1-2.6 1.1-2.5.3-3.6 3.6-1.4 5.8 2.2 2.2 5.5 1.1 5.8-1.4.1-1 .3-2.1 1.1-2.6 1.6-1 1.9-3.5.4-5z"/><circle cx="9.5" cy="14.5" r="1.3"/>`,
   violin: `<path d="M12 2.5v4M10.5 6.5h3"/><path d="M12 6.5c-2.5 0-3.5 1.6-3.2 3.3.2 1-.8 1.4-1.3 2.1-1.2 1.7-.6 4.4 1 5.6 1.7 1.3 5.3 1.3 7 0 1.6-1.2 2.2-3.9 1-5.6-.5-.7-1.5-1.1-1.3-2.1.3-1.7-.7-3.3-3.2-3.3z"/><path d="M10.5 12.5c.6.4.6 1.1 0 1.5M13.5 12.5c-.6.4-.6 1.1 0 1.5M12 9v11"/>`,
   sound: `<path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9a4 4 0 010 6M18 6.5a7.5 7.5 0 010 11"/>`,
+  voice: `<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0012 0M12 17v4M9 21h6"/>`,
 };
 const ZOOMS = [25, 50, 75, 100, 125, 150, 200, 300, 400];
 const PAGE_WIDTH_MM = 210, PAGE_HEIGHT_MM = 297, MM_TO_PX = 96 / 25.4;
 const VIEW_NAMES = { page: "Pages", horizontal: "One line", vertical: "One long page" };
-const DESK_PADDING_PX = 48;
+const DESK_PADDING_PX = 40; // The room round the pages on the desk, both sides together (#pagesFrame's padding).
 const FAMILIES = ["Woodwinds", "Free Reed", "Brass", "Percussion - Pitched", "Vocals", "Keyboards", "Strings - Plucked", "Strings - Bowed", "Plain staves"];
 const SHORTCUTS = [
   ["N", "Start or stop note input"],
@@ -110,7 +111,7 @@ const SHORTCUTS = [
 ];
 let openMenus = [];
 let instruments = [];
-let zoom = readSetting("zoom", "100");
+let zoom = "width";
 let chosenPart = null; // The instrument being worked with: the panel below shows it, and practice follows it.
 
 function icon(name) {
@@ -374,26 +375,54 @@ function setView(view) {
   return enqueue(() => send("view", { view }));
 }
 
-// Zoom. 100% draws a page at its printed size, as MuseScore does. In the horizontal view the one
-// system is fitted to the desk's height, as it can't be fitted across.
+// Zoom. 100% draws a page at its printed size, as MuseScore does, which on a laptop leaves a staff
+// space of six or seven pixels: neighbouring notes three pixels apart, too close to aim a click
+// at. So a score opens fitted to the width it has: its music as wide as the desk, with a little of
+// the paper either side, and the pages one below the other. That's a staff space of ten pixels or
+// so in Write beside the inspector, and more in Read and Practice, where nothing sits beside it.
+// The one-line view's music is as large as it would be on its page, as a line that long can't be
+// fitted across. "Whole page" fits a page into the window, margins and all.
+const PAPER_BESIDE_MM = 5; // The paper left in sight either side of the music, fitted to the width.
+
 function fitZoom(kind) {
   const desk = $("desk");
-  const [width, height] = score?.pageSizes?.[0] ?? [PAGE_WIDTH_MM, PAGE_HEIGHT_MM];
-  const wide = (desk.clientWidth - DESK_PADDING_PX) / (width * MM_TO_PX);
+  const [drawnWidth, height] = score?.pageSizes?.[0] ?? [PAGE_WIDTH_MM, PAGE_HEIGHT_MM];
+  const page = score?.layout ?? { width: drawnWidth, left: 15, right: 15 };
+  const music = page.width - page.left - page.right + 2 * PAPER_BESIDE_MM;
+  const room = desk.clientWidth - DESK_PADDING_PX;
+  if (kind === "width") return Math.max(0.1, room / (music * MM_TO_PX));
   const tall = (desk.clientHeight - DESK_PADDING_PX) / (height * MM_TO_PX);
   if (score?.view === "horizontal") return Math.max(0.1, tall);
-  if (score?.view === "vertical") return Math.max(0.1, wide);
-  return Math.max(0.1, kind === "width" ? wide : Math.min(wide, tall));
+  return Math.max(0.1, Math.min(room / (drawnWidth * MM_TO_PX), score?.view === "vertical" ? Infinity : tall));
 }
 
-// Read keeps a zoom of its own, which starts with the whole page in view, or its width on a phone.
+// Fitted to the width, pages go one below the other, read down as on paper, and the desk is
+// centred on the music, with the edges of the paper beyond it.
+function fittedToWidth() {
+  return zoom === "width" && (score?.view ?? "page") !== "horizontal";
+}
+
+function centreDesk() {
+  if (!fittedToWidth()) return;
+  const desk = $("desk");
+  desk.scrollLeft = Math.max(0, (desk.scrollWidth - desk.clientWidth) / 2);
+}
+
+// Each score keeps a zoom for each mode, as it was last left.
 function zoomSetting() {
-  return reading() ? "readZoom" : "zoom";
+  return `zoom:${scoreId ?? ""}:${currentMode()}`;
 }
 
+// On a phone, fitting a page's width would make the notes too small to tap while writing, so Write
+// and Practice open at the printed size there, and Read fitted to the width.
 function usualZoom() {
-  if (!reading()) return "100";
-  return innerWidth < 760 ? "width" : "page";
+  return innerWidth < 760 && !reading() ? "100" : "width";
+}
+
+// The zoom this score was last left at in this mode, shown again.
+function restoreZoom() {
+  zoom = readSetting(zoomSetting(), usualZoom());
+  setZoom(zoom);
 }
 
 function fittedZoom() {
@@ -402,12 +431,14 @@ function fittedZoom() {
 
 function setZoom(value) {
   zoom = String(value);
-  keepSetting(zoomSetting(), zoom);
+  if (scoreId) keepSetting(zoomSetting(), zoom);
   const factor = fittedZoom() ? fitZoom(zoom) : Number(zoom) / 100;
   document.documentElement.style.setProperty("--zoom", String(factor));
+  document.body.classList.toggle("fitWidth", fittedToWidth());
   const choice = $("zoomChoice");
   if (![...choice.options].some(option => option.value === zoom)) choice.append(new Option(`${zoom}%`, zoom));
   choice.value = zoom;
+  centreDesk();
   drawCursor();
   if (score) drawStickyStart();
 }
@@ -419,7 +450,7 @@ function stepZoom(by) {
 }
 
 function setUpZoom() {
-  $("zoomChoice").replaceChildren(...ZOOMS.map(level => new Option(`${level}%`, level)), new Option("Page width", "width"), new Option("Whole page", "page"));
+  $("zoomChoice").replaceChildren(...ZOOMS.map(level => new Option(`${level}%`, level)), new Option("Fit width", "width"), new Option("Whole page", "page"));
   $("zoomChoice").addEventListener("change", event => { setZoom(event.target.value); event.target.blur(); });
   $("zoomIn").addEventListener("click", () => stepZoom(1));
   $("zoomOut").addEventListener("click", () => stepZoom(-1));
@@ -498,7 +529,19 @@ async function openNewScore() {
   $("blankError").hidden = true;
   for (const id of ["blankTitle", "blankComposer", "blankTempo"]) $(id).value = "";
   showNewPage(false);
+  showMoreInstruments(false);
+  const time = $("blankTime").selectedOptions[0]?.textContent ?? "4/4";
+  $("quickHint").textContent = `One click starts writing for it, in ${KEY_NAMES[Number($("blankKey").value) + 7]} major and ${time.toLowerCase()}. Its + puts several instruments together.`;
   $("newDialog").showModal();
+}
+
+// The instruments people play most are cards a click away. Every other instrument, several at
+// once, and the key, time and the rest are behind More instruments.
+function showMoreInstruments(on) {
+  $("newChooser").hidden = !on;
+  $("newMore").setAttribute("aria-expanded", String(on));
+  $("newMore").hidden = on;
+  $("blankNext").hidden = $("blankDone").hidden = !on;
 }
 
 // The instruments listed, or one chosen at the top of the dialog, which starts writing at once.
@@ -524,7 +567,16 @@ async function createScore(picked = newChooser.picked) {
 
 // The instruments xrnsheet is made for, a click away at the top of the New score dialog: a click starts
 // a score for one, and its + adds it to the list to choose more.
-const QUICK_INSTRUMENTS = [["piano", "Piano", "piano", "Two staves, for both hands"], ["guitar-tab", "Guitar + tablature", "guitar", "Staff and TAB, six strings"], ["violin", "Violin", "violin", "Bowings, strings, positions"], ["bass-guitar-tab", "Bass + tablature", "guitar", "Staff and TAB, four strings"]];
+const QUICK_INSTRUMENTS = [
+  ["piano", "Piano", "piano", "Two staves, for both hands"],
+  ["guitar-tab", "Guitar", "guitar", "Staff and tablature, six strings"],
+  ["violin", "Violin", "violin", "Bowings, strings, positions"],
+  ["bass-guitar-tab", "Bass guitar", "guitar", "Staff and tablature, four strings"],
+  ["cello", "Cello", "violin", "Bass clef, four strings"],
+  ["viola", "Viola", "violin", "Alto clef, four strings"],
+  ["ukulele", "Ukulele", "guitar", "Four strings, G C E A"],
+  ["voice", "Voice", "voice", "A melody to sing, with lyrics"],
+];
 
 function setUpNewScore() {
   $("blankOpen").addEventListener("click", openNewScore);
@@ -536,13 +588,14 @@ function setUpNewScore() {
     const [start, add] = holder.querySelectorAll("button");
     start.querySelector(".name").textContent = label;
     start.querySelector(".what").textContent = what;
-    start.title = `Start writing for ${label.replace(" +", " and")}`;
-    add.title = `Add ${label.replace(" +", " and")} to the list, to choose more instruments`;
+    start.title = `Start writing for ${label.toLowerCase()} at once`;
+    add.title = `Add ${label.toLowerCase()} to the list, to choose more instruments`;
     add.setAttribute("aria-label", add.title);
     start.addEventListener("click", () => createScore([id]));
-    add.addEventListener("click", () => newChooser?.add(id));
+    add.addEventListener("click", () => { showMoreInstruments(true); newChooser?.add(id); });
     return holder;
   }));
+  $("newMore").addEventListener("click", () => showMoreInstruments(true));
   $("blankCancel").addEventListener("click", () => $("newDialog").close());
   $("blankNext").addEventListener("click", () => showNewPage(true));
   $("blankBack").addEventListener("click", () => showNewPage(false));

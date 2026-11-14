@@ -52,7 +52,7 @@ function show(view) {
   if (view === "workspace") {
     $("original").hidden = score.blank || originalHidden();
     // A zoom that fits the page depends on how much room the pages have, which is only known now.
-    if (fittedZoom()) setZoom(zoom);
+    restoreZoom();
     drawCursor();
   } else {
     stopPlaying();
@@ -117,6 +117,7 @@ function message(text) {
 
 function openScore(id) {
   forgetPlayback();
+  foldLibrary();
   scoreId = id;
   score = null;
   selected = null;

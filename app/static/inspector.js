@@ -28,6 +28,7 @@ function showInspector(on, pane = null) {
   $("inspectorToggle").setAttribute("aria-pressed", String(on));
   if (pane) inspector.pane = pane;
   if (on && !writing()) setMode("write");
+  if (fittedZoom()) setZoom(zoom); // The page fits the room it now has.
   drawInspector();
   drawCursor();
 }

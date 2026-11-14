@@ -70,9 +70,16 @@ def click_on(page, locator) -> None:
     page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
 
 
+def more_instruments(page) -> None:
+    """Open New score's full list of instruments, behind the cards of the usual ones."""
+    if page.is_hidden("#newChooser"):
+        page.click("#newMore")
+
+
 def new_score(page, instrument: str = "treble", bars: int | None = None, time: str | None = None) -> None:
     """Start a score through the New score dialog: its instrument first, then the rest."""
     page.click("#blankOpen")
+    more_instruments(page)
     page.fill("#newChooser input", instrument.split("-")[0])
     page.click(f'#newChooser [data-instrument="{instrument}"] button')
     page.click("#blankNext")
@@ -285,6 +292,8 @@ def test_writing(page, base: str, shots: Path | None, created: list[str]) -> Non
     page.reload()
     page.wait_for_selector("#pages svg")
     check("a reload keeps the score", read_notes(base, score_id) == kept)
+    check("the library is folded away beside an open score", page.is_hidden("#library") and page.get_attribute("#libraryToggle", "aria-pressed") == "false")
+    page.click("#libraryToggle")
     page.click(f'#historyList a[data-score="{score_id}"]')
     check("the library beside the score lists it as written here, and as the one open", "written here" in page.inner_text(f'#historyList a[data-score="{score_id}"]') and page.get_attribute(f'#historyList a[data-score="{score_id}"]', "aria-current") == "true")
 
@@ -1049,8 +1058,8 @@ def test_context_menu(page, base: str, created: list[str]) -> None:
     press(page, "Control+z")
     check("which undo reverses too", measures() == 4)
 
-    paper = page.locator("#pages .page").first.bounding_box()
-    offered = right_click(page, paper["x"] + 30, paper["y"] + paper["height"] / 2)
+    paper = bare_paper(page)
+    offered = right_click(page, paper["x"], paper["y"])
     check("right-clicking bare paper offers the score's own things", offered == ["Title and composer…", "Measures per line…", "Zoom in", "Zoom out"] and page.evaluate("() => selected") is None, offered)
     pick(page, "Title and composer…")
     check("such as its properties", page.is_visible("#projectDialog"))
@@ -1061,6 +1070,15 @@ def test_context_menu(page, base: str, created: list[str]) -> None:
     offered = right_click(page, *centre_of(page, "#pages g.note", 3))
     check("while entering notes a right-click opens no menu and writes nothing", offered == [] and pitched(read_notes(base, score_id)) == tune, offered)
     press(page, "Escape")
+
+
+def bare_paper(page) -> dict:
+    """A place on the paper beside the music, in sight. Fitted to the width, a page's edges are off the desk."""
+    return page.evaluate("""() => {
+        const desk = $("desk").getBoundingClientRect(), page = document.querySelector("#pages .page").getBoundingClientRect();
+        const staff = staffLines(document.querySelector("#pages g.staff"));
+        return { x: Math.max(desk.left, page.left) + Math.min(10, (staff.left - Math.max(desk.left, page.left)) / 2), y: Math.min(desk.bottom, page.bottom) - 20 };
+    }""")
 
 
 def empty_spot(page, measure: int) -> dict:
@@ -1156,8 +1174,8 @@ def test_measure_selection(page, base: str, shots: Path | None, created: list[st
     check("in one step that undo reverses", len(measures()) == 4 and pitched(read_notes(base, score_id)) == tune)
     # Somewhere that's no measure at all lets go of everything.
     select_notes(page, 0)
-    paper = page.locator("#pages .page").first.bounding_box()
-    page.mouse.click(paper["x"] + 30, paper["y"] + paper["height"] / 2)
+    paper = bare_paper(page)
+    page.mouse.click(paper["x"], paper["y"])
     settle(page)
     check("a click on bare paper selects nothing", page.evaluate("() => selected") is None)
 
@@ -1714,6 +1732,7 @@ def test_concert_pitch(page, base: str, shots: Path | None, created: list[str]) 
 def test_more_clefs_and_instruments(page, base: str, shots: Path | None, created: list[str]) -> None:
     page.goto(base)
     page.click("#blankOpen")
+    more_instruments(page)
     families = page.locator('#newChooser [data-list="families"] li').all_inner_texts()
     check("the families are MuseScore's, in its order", families == ["Woodwinds", "Free Reed", "Brass", "Percussion - Pitched", "Vocals", "Keyboards", "Strings - Plucked", "Strings - Bowed", "Plain staves"], families)
     page.click('#newChooser li:text-is("Percussion - Pitched")')
@@ -1841,6 +1860,7 @@ def test_one_line_keeps_its_start_in_sight(page, base: str, shots: Path | None, 
 
 def test_page_settings(page, base: str, shots: Path | None, created: list[str]) -> None:
     score_id = written_melody(page, base, created, bars=24, tune="cdefgabc")
+    page.select_option("#zoomChoice", "100")  # At its printed size, a page's size on the screen is its size on paper.
     width = lambda: page.evaluate("() => document.querySelector('#pages .page').getBoundingClientRect().width")
     a4 = width()
     step = lambda: page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step")
@@ -2476,7 +2496,16 @@ def test_modes(page, base: str, shots: Path | None, created: list[str]) -> None:
     show_instrument(page)
     page.click('#modeSwitch [data-mode="read"]')
     check("Read puts away the note input, the inspector, the library and the instrument", all(page.is_hidden(name) for name in ("#noteBar", "#inspector", "#library", "#dock", "#practiceBar")))
-    check("and fits a whole page in the window", page.input_value("#zoomChoice") == "page", page.input_value("#zoomChoice"))
+    check("and fits the music to the window's width, larger than in Write", page.input_value("#zoomChoice") == "width" and page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step * 2") > 11, page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step * 2"))
+    top = page.evaluate("() => $('desk').scrollTop")
+    page.keyboard.press(" ")
+    check("where Space reads down the page", page.evaluate("() => $('desk').scrollTop") > top)
+    for _ in range(8):
+        page.keyboard.press(" ")
+    check("and on to the next one below it", page.evaluate("() => pagesInView().shown[0]") >= 1, page.evaluate("() => pagesInView().shown"))
+    page.keyboard.press("Home")
+    page.select_option("#zoomChoice", "page")
+    check("Whole page fits a page in the window", page.evaluate("() => document.querySelector('#pages .page').getBoundingClientRect().height <= $('desk').clientHeight"))
     check("it says which page is in view", page.inner_text("#pageCount").startswith("Page") and f"of {pages}" in page.inner_text("#pageCount"), page.inner_text("#pageCount"))
     start = shown_pages(page)
     page.keyboard.press(" ")
@@ -2528,8 +2557,10 @@ def test_library(page, base: str, created: list[str]) -> None:
     page.click("#projectDialog button[type=submit]")
     settle(page)
     second = written_melody(page, base, created, tune="gfed")
+    check("the library folds away when a score opens", page.is_hidden("#library") and page.get_attribute("#libraryToggle", "aria-pressed") == "false")
+    page.click("#libraryToggle")
     page.wait_for_selector(f'#historyList a[data-score="{first}"]')
-    check("the library is beside the open score", page.is_visible("#library") and page.is_visible("#pages"))
+    check("and its button brings it back beside the open score", page.is_visible("#library") and page.is_visible("#pages"))
     check("and lists the scores, the open one marked", page.get_attribute(f'#historyList a[data-score="{second}"]', "aria-current") == "true" and page.get_attribute(f'#historyList a[data-score="{first}"]', "aria-current") is None)
     page.fill("#homeSearch", "library song")
     shown = page.locator("#historyList a").count()
@@ -2537,6 +2568,8 @@ def test_library(page, base: str, created: list[str]) -> None:
     page.click(f'#historyList a[data-score="{first}"]')
     page.wait_for_function("id => scoreId === id && score !== null", arg=first)
     check("a click opens it in place of the other", page.inner_text("#scoreName") == "Library Song One")
+    check("and folds the library away", page.is_hidden("#library"))
+    page.click("#libraryToggle")
     page.fill("#homeSearch", "")
     page.click("#libraryClose")
     check("the library folds away", page.is_hidden("#library") and page.get_attribute("#libraryToggle", "aria-pressed") == "false")
@@ -2778,7 +2811,8 @@ def test_new_scores_for_players(page, base: str, shots: Path | None, created: li
     page.goto(base)
     page.click("#blankOpen")
     offered = page.locator("#quickStart .quick .name").all_inner_texts()
-    check("New score offers the players' instruments first", offered == ["Piano", "Guitar + tablature", "Violin", "Bass + tablature"], offered)
+    check("New score offers the players' instruments first, as cards", offered == ["Piano", "Guitar", "Violin", "Bass guitar", "Cello", "Viola", "Ukulele", "Voice"], offered)
+    check("with the full list of instruments behind More instruments", page.is_hidden("#newChooser") and page.is_visible("#newMore") and page.is_hidden("#blankDone"))
     if shots:
         page.screenshot(path=str(shots / "new-score.png"))
     page.click('#quickStart [data-quick="guitar-tab"] .start')
@@ -2790,7 +2824,8 @@ def test_new_scores_for_players(page, base: str, shots: Path | None, created: li
     check("ready to write in", page.evaluate("() => editor.on") and page.is_hidden("#newDialog"))
     check("and its staff and tablature are drawn", page.locator("#pages g.measure").first.locator(":scope > g.staff").count() == 2)
     page.keyboard.press("Escape")
-    page.click("#blankOpen")
+    menu(page, "File", "New…")
+    more_instruments(page)
     page.fill("#newChooser input", "tablature")
     found = page.locator('#newChooser [data-list="instruments"] li span').all_inner_texts()
     check("searching for tablature finds a guitar and bass with it", {"Guitar + tablature", "Acoustic Guitar + tablature", "Electric Guitar + tablature", "Bass Guitar + tablature"} <= set(found), found)
@@ -3760,6 +3795,7 @@ def test_practice_details(context, base: str, shots: Path | None, created: list[
     """)
     page.goto(base)
     page.click("#blankOpen")
+    more_instruments(page)
     page.fill("#newChooser input", "treble")
     page.click('#newChooser [data-instrument="treble"] button')
     page.click("#blankNext")

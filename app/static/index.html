@@ -288,8 +288,9 @@
     <h2 id="newTitle">New score</h2>
     <div class="content" id="newInstruments">
       <div id="quickStart" class="quickStart"></div>
-      <p class="quickHint">One click starts writing for it. Or choose instruments below, several at once, then the key, the time and the rest.</p>
-      <div class="columns" id="newChooser"></div>
+      <div class="quickFoot"><p class="quickHint" id="quickHint"></p>
+        <button type="button" id="newMore" aria-expanded="false" aria-controls="newChooser">More instruments, key and time…</button></div>
+      <div class="columns" id="newChooser" hidden></div>
     </div>
     <div class="content" id="newDetails" hidden>
       <div class="pair">
