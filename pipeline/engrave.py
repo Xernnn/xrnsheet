@@ -219,6 +219,47 @@ def set_line_breaks(root: ET.Element) -> None:
                     measures[index].insert(0, ET.Element("print", {"new-system": "yes"}))
 
 
+SYSTEM_START = re.compile(r'<g [^>]*class="system"')
+DRAWN_MEASURE = re.compile(r'<g id="([^"]+)" class="measure')
+KEPT_LINE = f"{BREAK_PREFIX}-kept"  # A line kept as it was drawn, which counts as a break asked for.
+
+
+def system_starts(pages: list[str]) -> list[str]:
+    """Return the id of the measure each line of drawn pages starts with, in order."""
+    found = []
+    for svg in pages:
+        for system in SYSTEM_START.split(svg)[1:]:
+            first = DRAWN_MEASURE.search(system)
+            if first:
+                found.append(first.group(1))
+    return found
+
+
+def keep_lines(root: ET.Element, starts: list[str]) -> None:
+    """Start a line at each of these measures, as the page last drew them, besides those asked for.
+
+    The breaks are only for drawing: they're never saved. A line that no longer holds its measures
+    still breaks early, as Verovio adds a break where one is needed.
+    """
+    wanted = set(starts)
+    parts = root.findall("part")
+    if not parts:
+        return
+    for index, measure in enumerate(parts[0].findall("measure")):
+        if measure.get("id") not in wanted:
+            continue
+        for part in parts:
+            measures = part.findall("measure")
+            if index >= len(measures):
+                continue
+            found = measures[index].find("print")
+            if found is None:
+                measures[index].insert(0, ET.Element("print", {"new-system": "yes", "id": f"{KEPT_LINE}{index}"}))
+            elif found.get("new-system") != "yes" or not (found.get("id") or "").startswith(BREAK_PREFIX):
+                found.set("new-system", "yes")
+                found.set("id", f"{KEPT_LINE}{index}")
+
+
 def octave_direction(kind: str, size: str, number: str, staff: str) -> ET.Element:
     direction = ET.Element("direction", placement="below" if kind == "up" else "above")
     ET.SubElement(ET.SubElement(direction, "direction-type"), "octave-shift", type=kind, size=size, number=number)

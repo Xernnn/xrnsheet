@@ -1252,3 +1252,52 @@ def test_a_drawing_just_made_is_kept_for_the_next_time_it_is_asked_for(client):
     after = server.drawn_pages.cache_info()
     assert after.hits - before.hits == 2 and after.misses == before.misses
     assert client.get(f"/api/scores/{score_id}").json()["pages"] != written["pages"], "the drawing undone to is the earlier one"
+
+
+def line_starts(data):
+    """The measure each drawn line starts with, as the page has them."""
+    return [re.search(r'<g id="([^"]+)" class="measure', system).group(1) for page in data["pages"] for system in re.split(r'<g [^>]*class="system"', page)[1:]]
+
+
+def fill_measure(client, score_id, index, length, count):
+    """Write a run of notes into a measure, a note at a time, as someone entering them would."""
+    measure = saved(client, score_id).find("part").findall("measure")[index]
+    at = next(measure.iter("note")).get("id")
+    for number in range(count):
+        data = write(client, score_id, at, "CDEFGAB"[number % 7], length)
+        at = data["cursor"]
+    return data
+
+
+def test_lines_keep_their_measures_while_notes_are_written(client):
+    score_id = blank(client, clef="piano", measures=32)
+    first = line_starts(client.get(f"/api/scores/{score_id}").json())
+    # A few notes in the third measure leave it room enough, so no line changes.
+    data = fill_measure(client, score_id, 2, "quarter", 4)
+    assert line_starts(data) == first
+    # Undoing them, which makes the measure narrow again, doesn't pull measures back up either.
+    assert line_starts(client.post(f"/api/scores/{score_id}/undo").json()) == first
+    # Once a measure no longer fits, the lines from there on are laid out afresh, with no line left short.
+    data = fill_measure(client, score_id, 3, "16th", 16)
+    data = fill_measure(client, score_id, 4, "16th", 16)
+    after = line_starts(data)
+    assert after != first and after[0] == first[0]
+    counts = [b - a for a, b in zip([int(start[1:]) for start in after], [int(start[1:]) for start in after[1:]] + [32])]
+    assert min(counts[:-1]) >= 3, counts
+    # The PDF has the lines the page has.
+    assert client.get(f"/api/scores/{score_id}/score.pdf").status_code == 200
+
+
+def test_lines_are_laid_out_afresh_when_the_page_changes(client):
+    score_id = blank(client, clef="piano", measures=32)
+    first = line_starts(client.get(f"/api/scores/{score_id}").json())
+    crowded = line_starts(fill_measure(client, score_id, 2, "eighth", 8))
+    assert crowded != first  # Eight eighths no longer fit the first line.
+    for _ in range(8):
+        narrow = line_starts(client.post(f"/api/scores/{score_id}/undo").json())
+    assert narrow == crowded  # Kept, though the measure is empty and narrow again.
+    layout = client.get(f"/api/scores/{score_id}").json()["layout"]
+    data = client.post(f"/api/scores/{score_id}/layout", json=layout | {"left": 50}).json()
+    assert line_starts(data) != narrow and len(line_starts(data)) >= len(first)  # A narrower page: the lines were laid out for it.
+    data = client.post(f"/api/scores/{score_id}/undo").json()
+    assert line_starts(data) == first  # Back on the old page, laid out afresh: the narrow measure is room enough again.
