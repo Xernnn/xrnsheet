@@ -287,6 +287,18 @@ body.inputting #scoreArea::after { content: ""; position: absolute; inset: 0; z-
 .box { position: absolute; border: 1.5px solid var(--good); border-radius: 2px; pointer-events: none; }
 .box.unsure { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .box.active { border-color: var(--voice1); background: color-mix(in srgb, var(--voice1) 16%, transparent); }
+/* A sheet wider than it's tall goes across the top of the score, which keeps the window's width. */
+@media (min-width: 761px) {
+  #scoreArea:has(#original.across:not([hidden])) { flex-direction: column; }
+  #original.across { order: -1; width: auto; height: min(42%, 340px); border-left: 0; border-bottom: 1px solid var(--line); display: grid; grid-template: "head checks" auto "images images" minmax(0, 1fr) / 1fr auto; }
+  #original.across header { grid-area: head; }
+  #original.across #checks { grid-area: checks; border-top: 0; border-bottom: 1px solid var(--line); padding: 4px 12px; }
+  #original.across #images { grid-area: images; display: flex; justify-content: center; gap: 12px; overflow: auto; padding: 8px 12px; }
+  #original.across .imageBox { height: 100%; flex: none; }
+  #original.across .imageBox + .imageBox { margin-top: 0; }
+  #original.across .imageBox img { width: auto; height: 100%; }
+  body:has(#original.across:not([hidden])) #viewTools { right: 14px; }
+}
 #checks { display: flex; flex: none; flex-wrap: wrap; gap: 6px; padding: 8px 12px; align-items: center; border-top: 1px solid var(--line); }
 #checks .label { color: var(--muted); }
 

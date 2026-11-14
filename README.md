@@ -91,7 +91,7 @@ The mode is kept for next time. A score opens fitted to the width it has: its mu
 
 **New score:** Piano, Guitar (with tablature), Violin, Bass guitar (with tablature), Cello, Viola, Ukulele and Voice are large cards. A click on one starts writing for it straight away, in the key and time last chosen, which the dialog names. Its + adds it to the list instead, to choose more instruments. More instruments, key and time opens the rest, chosen by family or by searching: woodwinds from piccolo to contrabassoon with the clarinets and saxophones, accordion, brass, pitched percussion, voices, keyboards, guitars and basses with or without tablature, harp, ukulele, mandolin and banjo, and the bowed strings, each with its clefs and transposition. Searching for "tablature" finds every instrument that has it, here and in Add instruments. Then come the key, time signature, tempo, number of measures, pickup, title and composer. A drum kit and other unpitched percussion aren't there yet, as the score only holds pitched notes.
 
-A score read from a photo or PDF also has the original sheet beside it, in every mode, with a box round each chord it found, the chords to check, and "Mark as checked". The inspector's Score tab, or View ▸ Original sheet, hides or shows it.
+A score read from a photo or PDF also has the original sheet beside it, or across the top of the score when the sheet is wider than it's tall, as a lead sheet often is, so that the score keeps the window's width, in every mode, with a box round each chord it found, the chords to check, and "Mark as checked". The inspector's Score tab, or View ▸ Original sheet, hides or shows it.
 
 **The inspector** shows what's selected, and everything that can be done to it:
 

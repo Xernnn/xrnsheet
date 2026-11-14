@@ -295,10 +295,24 @@ function drawOriginals() {
     const image = new Image();
     image.alt = `Page ${number} of your sheet`;
     image.addEventListener("load", drawBoxes);
+    image.addEventListener("load", () => { if (number === score?.sourcePages?.[0]) layOutOriginal(image); });
     image.src = `/api/scores/${scoreId}/source/${number}.jpg`;
     frame.append(image);
     return frame;
   }));
+}
+
+// A sheet wider than it's tall, such as a lead sheet, is shown across the top of the score, where it
+// can be read at a size, and the score keeps the window's width. A page taller than it's wide is
+// shown beside the score, as it reads best down its height.
+const ACROSS_ABOVE = 1.25; // How much wider than tall a sheet is to go across the top.
+
+function layOutOriginal(image) {
+  const across = image.naturalWidth / image.naturalHeight > ACROSS_ABOVE;
+  if ($("original").classList.contains("across") === across) return;
+  $("original").classList.toggle("across", across);
+  if (fittedZoom()) setZoom(zoom);
+  drawCursor();
 }
 
 function drawBoxes() {

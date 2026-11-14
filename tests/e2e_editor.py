@@ -4092,6 +4092,9 @@ def test_recognized(page, base: str, shots: Path | None, created: list[str]) -> 
     boxes = page.locator(".box").count()
     chords = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]
     check("a recognized sheet shows its chord boxes", boxes == len(chords) and boxes > 0, boxes)
+    sheet = page.locator("#images img").first.bounding_box()
+    space = page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step * 2")
+    check("a sheet wider than it's tall goes across the top, and the score keeps the window's width", page.evaluate("() => $('original').classList.contains('across')") and sheet["width"] > 400 and space > 9, (sheet["width"], space))
     click_on(page, page.locator("#pages g.note").first)
     menu(page, "Add", "Measures", "Insert one measure before selection")
     settle(page)
