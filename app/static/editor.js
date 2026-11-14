@@ -292,6 +292,7 @@ function drawRangeBoxes() {
 }
 
 function drawCursor() {
+  forgetStaves(); // Called whenever the pages are drawn or move on the desk.
   drawRangeBoxes();
   drawLoopMarkers();
   const caret = $("caret");
@@ -532,12 +533,36 @@ function writeAt(step) {
 // The staff and place a click lands on, while entering notes. A tablature staff's lines are strings,
 // not pitches, so a click there is a string, and its place in time is read from the notes and rests
 // of the staff it's linked under.
+// Where each staff's lines are, measured once a drawing, a zoom or the window changes rather than at
+// every move of the mouse: a long score has hundreds of staves, and the ghost note is drawn at each
+// move. They're kept from the pages' own corner, which scrolling doesn't move.
+let staffCache = null;
+
+function forgetStaves() {
+  staffCache = null;
+}
+
+// The staves whose lines are within some steps of a point, with their lines where they are now.
+function stavesNear(x, y, steps) {
+  const frame = $("pagesFrame").getBoundingClientRect();
+  staffCache ??= [...document.querySelectorAll("#pages g.staff")].filter(staff => [...staff.children].some(child => child.tagName === "path")).map(staff => {
+    const lines = staffLines(staff);
+    return { staff, left: lines.left - frame.left, right: lines.right - frame.left, top: lines.top - frame.top, bottom: lines.bottom - frame.top, step: lines.step };
+  });
+  const found = [];
+  for (const known of staffCache) {
+    const left = known.left + frame.left, right = known.right + frame.left, top = known.top + frame.top, bottom = known.bottom + frame.top;
+    if (x < left - HEAD_REACH_PX || x > right + HEAD_REACH_PX || y < top - known.step * steps || y > bottom + known.step * steps) continue;
+    found.push({ staff: known.staff, lines: { left, right, top, bottom, step: known.step } });
+  }
+  return found;
+}
+
 function placeUnder(x, y) {
   let found = null;
   let smallest = Infinity;
-  for (const staff of document.querySelectorAll("#pages g.staff")) {
+  for (const { staff, lines } of stavesNear(x, y, REACH_IN_STEPS)) {
     const tab = isTabStaff(staffNumber(staff));
-    const lines = staffLines(staff);
     if (x < lines.left || x > lines.right) continue;
     const gap = Math.max(lines.top - y, y - lines.bottom, 0);
     if (gap <= lines.step * (tab ? 2 : REACH_IN_STEPS) && gap < smallest) { found = { staff, lines, tab }; smallest = gap; }
@@ -592,9 +617,7 @@ const HEAD_REACH_PX = 3; // A press this near a notehead is on it.
 // The notehead under the pointer, or very near it: a click there selects the note, and a drag moves it.
 function noteheadAt(x, y) {
   let found = null, nearest = Infinity;
-  for (const staff of document.querySelectorAll("#pages g.staff")) {
-    const lines = staffLines(staff);
-    if (x < lines.left - HEAD_REACH_PX || x > lines.right + HEAD_REACH_PX || y < lines.top - lines.step * 14 || y > lines.bottom + lines.step * 14) continue;
+  for (const { staff } of stavesNear(x, y, 14)) {
     for (const note of staff.querySelectorAll("g.note")) {
       const box = headBox(note);
       if (x < box.left - HEAD_REACH_PX || x > box.right + HEAD_REACH_PX || y < box.top - HEAD_REACH_PX || y > box.bottom + HEAD_REACH_PX) continue;
@@ -667,7 +690,7 @@ function drawGhost(x, y, shift = false) {
   const pitch = pitchAtLine(target, spot.line);
   const stacking = shift && spot.isNote;
   const voiceHere = target && layerNumber(target) + 1 === editor.voice;
-  const replaced = !stacking && voiceHere && target.matches("g.note") ? [...(target.closest("g.chord") ?? target).querySelectorAll("g.note")] : [];
+  const replaced = !stacking && voiceHere && target.matches("g.note") ? (target.closest("g.chord") ? [...target.closest("g.chord").querySelectorAll("g.note")] : [target]) : [];
   replaced.forEach(note => note.classList.add("replacing"));
   const names = replaced.map(note => spelledName(note)).filter(Boolean);
   const when = whenOf(target);
@@ -1436,6 +1459,14 @@ function setUpToolbar() {
   window.addEventListener("resize", drawCursor);
   $("pages").addEventListener("mousemove", event => { pointer = { x: event.clientX, y: event.clientY, shift: event.shiftKey }; drawGhost(pointer.x, pointer.y, pointer.shift); });
   $("pages").addEventListener("mouseleave", () => { pointer = null; hideGhost(); });
+  // Shift pressed or let go over the staff changes what a click there does: add to the chord, or write.
+  for (const name of ["keydown", "keyup"]) {
+    window.addEventListener(name, event => {
+      if (event.key !== "Shift" || !pointer || pointer.shift === event.shiftKey) return;
+      pointer.shift = event.shiftKey;
+      drawGhost(pointer.x, pointer.y, pointer.shift);
+    });
+  }
   $("lyricInput").addEventListener("keydown", event => {
     if (event.key === " ") { event.preventDefault(); saveLyric(false, true, " "); }
     else if (event.key === "-") { event.preventDefault(); saveLyric(true, true, "-"); }

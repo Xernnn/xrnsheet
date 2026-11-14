@@ -169,6 +169,8 @@ body.atHome.busy #library { display: none; }
 
 /* The bars above the score that each mode brings: note input in Write, the practice tools in Practice. */
 #noteBar, #practiceBar { display: flex; flex: none; align-items: center; gap: 2px; min-height: 46px; padding: 4px 10px; background: var(--surface); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+/* Beside the library and the inspector the bar wraps, rather than hiding its last buttons. */
+@media (min-width: 761px) { #noteBar { flex-wrap: wrap; row-gap: 2px; } }
 #noteBar button.flat { width: 34px; height: 34px; padding: 0; flex: none; }
 #noteBar .set, #lengths, #voices { display: flex; gap: 1px; }
 #noteBar #inputToggle { width: auto; padding: 0 12px 0 8px; gap: 6px; font-weight: 650; border: 1px solid var(--line); background: var(--raised); }
