@@ -431,10 +431,11 @@ function drawRange() {
   range.ids.forEach(id => markSelected(document.getElementById(id)));
 }
 
-// Measures that don't add up, and notes no string can play, each a chip that goes there.
+// Measures that don't add up, notes no string can play, and notes out of a bowed string's range,
+// each a chip that goes there.
 function drawBarChecks() {
   const checks = score.barChecks ?? [];
-  $("barChecks").hidden = checks.length === 0 && !(score.fretProblems ?? []).length;
+  $("barChecks").hidden = checks.length === 0 && !(score.fretProblems ?? []).length && !(score.rangeProblems ?? []).length;
   const chips = checks.slice(0, 40).map(check => {
     const chip = document.createElement("button");
     chip.className = "chip";

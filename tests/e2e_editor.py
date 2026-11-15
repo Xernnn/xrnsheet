@@ -3814,6 +3814,35 @@ def test_letters_for_a_bowed_string_stay_in_its_range(page, base: str, created: 
     page.keyboard.press("Escape")
 
 
+def test_a_bowed_strings_notes_out_of_range_are_listed(page, base: str, created: list[str]) -> None:
+    """A violin's note below its G string or above the top of its range is listed, as a guitar's unplayable notes are."""
+    score_id = open_blank(page, base, created, bars=2, staff="violin")
+    rest = page.evaluate("() => plainId(editor.cursor)")
+    click_staff(page, rest, 15)
+    written = pitched(read_notes(base, score_id))
+    check("a click three ledger lines under a violin's staff writes E3", written == ["E3"], written)
+    chip = page.locator("#barChecks [data-range-problem]")
+    check("and it's listed as below the violin's lowest string", page.is_visible("#barChecks") and chip.count() == 1 and chip.inner_text() == "Bar 1: E3 is below the violin's lowest string, G3.", chip.all_inner_texts())
+    page.evaluate("() => enqueue(() => send(`notes/${plainId(editor.cursor)}`, { action: 'write', type: 'quarter', dots: 0, midi: 107 }))")
+    settle(page)
+    texts = page.locator("#barChecks [data-range-problem]").all_inner_texts()
+    check("so is a MIDI key above the top of its range", texts == ["Bar 1: E3 is below the violin's lowest string, G3.", "Bar 1: B7 is above the top of the violin's range, A7."], texts)
+    page.keyboard.press("Escape")
+    settle(page)
+    first = page.locator("#barChecks [data-range-problem]").first
+    first.click()
+    settle(page)
+    check("and a click on one selects the note", page.evaluate("() => selected") == first.get_attribute("data-range-problem"))
+    page.keyboard.press("ArrowUp")
+    settle(page)
+    for _ in range(2):
+        page.keyboard.press("ArrowUp")
+        settle(page)
+    texts = page.locator("#barChecks [data-range-problem]").all_inner_texts()
+    check("put right, up to G3, it's no longer listed", texts == ["Bar 1: B7 is above the top of the violin's range, A7."], texts)
+    page.keyboard.press("Escape")
+
+
 def test_cello_and_double_bass_fingerboards(page, base: str, shots: Path | None, created: list[str]) -> None:
     """A cello and a double bass get fingerboards of their own, with their strings, positions and fingers."""
     for instrument, strings, stop, finger, player, positions in [
@@ -5523,6 +5552,7 @@ def main() -> None:
             test_fretboard(page, base, arguments.shots, created)
             test_fingerboard_and_switcher(page, base, arguments.shots, created)
             test_letters_for_a_bowed_string_stay_in_its_range(page, base, created)
+            test_a_bowed_strings_notes_out_of_range_are_listed(page, base, created)
             test_cello_and_double_bass_fingerboards(page, base, arguments.shots, created)
             test_new_scores_for_players(page, base, arguments.shots, created)
             test_guitar_notation(page, base, arguments.shots, created)

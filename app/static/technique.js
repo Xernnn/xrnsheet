@@ -380,16 +380,19 @@ function crossStaff(action) {
   });
 }
 
-// Notes no string can play, listed with the bar checks: a click goes to the note.
+// Notes no string can play, and a violin's, viola's, cello's or double bass's notes out of its
+// range, listed with the bar checks: a click goes to the note.
 function fretChips() {
-  return (score?.fretProblems ?? []).slice(0, 40).map(problem => {
+  const fretted = (score?.fretProblems ?? []).map(problem => ({ ...problem, kind: "fretProblem", title: "No string can play this note, so the tablature leaves it out. Click to go to it." }));
+  const bowed = (score?.rangeProblems ?? []).map(problem => ({ ...problem, kind: "rangeProblem", title: "This instrument can't play this note. Click to go to it." }));
+  return [...fretted, ...bowed].slice(0, 40).map(problem => {
     const chip = document.createElement("button");
     chip.className = "chip";
-    chip.dataset.fretProblem = problem.note;
+    chip.dataset[problem.kind] = problem.note;
     const element = document.getElementById(problem.note);
     const bar = element ? measureFacts(measureIndexOf(element)).number : "";
     chip.textContent = `${bar ? `Bar ${bar}: ` : ""}${problem.reason}`;
-    chip.title = "No string can play this note, so the tablature leaves it out. Click to go to it.";
+    chip.title = problem.title;
     chip.addEventListener("click", () => enqueue(async () => {
       if (editor.on) moveCursor(problem.note); else select(problem.note);
       document.getElementById(problem.note)?.scrollIntoView({ block: "center" });
