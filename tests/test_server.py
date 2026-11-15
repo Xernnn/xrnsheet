@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from helpers import harmony, note, parsed, tied_note
 from PIL import Image
+from reading_stand_in import write_stand_in
 
 from app import server
 from pipeline import rhythm
@@ -25,6 +26,8 @@ from pipeline.musicxml import to_text
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "JOB_DIR", tmp_path)
     monkeypatch.setattr(server, "stopping", threading.Event())  # Each test's app has yet to stop.
+    for name, empty in (("line", []), ("began", {}), ("cancelled", set())):
+        monkeypatch.setattr(server, name, empty)  # And nothing waiting to be read.
     return TestClient(server.app, base_url="http://127.0.0.1:8000")
 
 
@@ -100,12 +103,13 @@ def test_a_sheet_still_reading_cannot_be_checked(client):
     assert client.post(f"/api/scores/{score_id}/checked", json={"checked": True}).status_code == 409
 
 
-def test_finished_sheets_are_listed_and_unfinished_ones_are_not(client, ready_score):
+def test_sheets_are_listed_with_how_far_they_have_got(client, ready_score):
     unfinished = server.JOB_DIR / ("d" * 32)
     unfinished.mkdir()
     server.write_status(unfinished, "processing")
-    sheets = client.get("/api/scores").json()
-    assert [sheet["id"] for sheet in sheets] == [ready_score] and sheets[0]["pages"] == 1
+    sheets = {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}
+    assert sheets[ready_score]["status"] == "ready" and sheets[ready_score]["pages"] == 1
+    assert sheets[unfinished.name]["status"] == "processing"
 
 
 def test_a_missing_source_page_is_not_found(client, ready_score):
@@ -818,6 +822,130 @@ def test_a_sheet_whose_reading_was_stopped_is_left_for_the_next_start_to_report(
     folder, upload = job_for_pdf(3)
     server.recognize_job(folder, upload)
     assert tried == ["page_001", "page_002"] and server.read_status(folder)["status"] == "processing"
+
+
+def photo(shade="black"):
+    """A small photo, with something dark on it unless it's all white."""
+    image = Image.new("RGB", (120, 80), "white")
+    image.paste(Image.new("RGB", (100, 4), shade), (10, 30))
+    data = io.BytesIO()
+    image.save(data, format="PNG")
+    return data.getvalue()
+
+
+def upload_photo(client, name, shade="black"):
+    response = client.post("/api/scores", files={"file": (name, io.BytesIO(photo(shade)))})
+    assert response.status_code == 200
+    return response.json()["id"]
+
+
+def until(condition, seconds=20):
+    for _ in range(int(seconds / 0.05)):
+        if condition():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_sheet_waiting_its_turn_is_listed_with_how_many_are_ahead(client, monkeypatch):
+    """The window used to say nothing about a second sheet, which waited unseen behind the first."""
+    finish = threading.Event()
+    read = []
+
+    def slow(folder, upload):
+        read.append(folder.name)
+        finish.wait(20)
+        server.write_status(folder, "failed", "Recognition failed.")
+
+    monkeypatch.setattr(server, "recognize_job", slow)
+    first = upload_photo(client, "first page.jpg")
+    second = upload_photo(client, "second page.jpg")
+    try:
+        assert until(lambda: read == [first])
+        sheets = {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}
+        assert sheets[first]["status"] == sheets[second]["status"] == "processing"
+        assert (sheets[first]["ahead"], sheets[second]["ahead"]) == (0, 1)
+        assert sheets[first]["name"] == "first page.jpg" and sheets[first]["elapsed"] is not None and sheets[second]["elapsed"] is None
+        assert client.get(f"/api/scores/{second}").json() | {"message": ""} == {"status": "processing", "message": "", "name": "second page.jpg", "pdf": False, "ahead": 1, "elapsed": None}
+    finally:
+        finish.set()
+    assert until(lambda: read == [first, second] and not server.line)
+
+
+def test_cancelling_a_sheet_waiting_its_turn_removes_it_unread(client, monkeypatch):
+    finish = threading.Event()
+    read = []
+
+    def slow(folder, upload):
+        read.append(folder.name)
+        finish.wait(20)
+        server.write_status(folder, "failed", "Recognition failed.")
+
+    monkeypatch.setattr(server, "recognize_job", slow)
+    first = upload_photo(client, "first.png")
+    second = upload_photo(client, "second.png")
+    try:
+        assert until(lambda: read == [first])
+        assert client.delete(f"/api/scores/{second}").json() == {"removed": second}
+        assert not (server.JOB_DIR / second).exists() and [sheet["id"] for sheet in client.get("/api/scores").json()] == [first]
+    finally:
+        finish.set()
+    assert until(lambda: not server.line) and read == [first]
+
+
+def test_cancelling_the_sheet_being_read_stops_its_reader_and_starts_the_next(client, tmp_path, monkeypatch):
+    """Cancel has to stop the reader itself: hidden, it would hold its memory and the line for minutes."""
+    stand_in = write_stand_in(tmp_path / "stand_in", seconds=60)
+    monkeypatch.setattr(server, "ROOT", stand_in)
+    monkeypatch.setattr(server.shutil, "which", lambda name: None)
+    started = stand_in / "started"
+    first = upload_photo(client, "first.png")
+    second = upload_photo(client, "second.png")
+    readers = []
+    try:
+        assert until(lambda: started.exists() and started.read_text())
+        readers.append(int(started.read_text()))
+        assert client.delete(f"/api/scores/{first}").json() == {"removed": first}
+        with pytest.raises(ProcessLookupError):
+            os.kill(readers[0], 0)
+        assert not (server.JOB_DIR / first).exists()
+        assert client.get(f"/api/scores/{first}").status_code == 404
+        assert until(lambda: started.read_text() != str(readers[0]))  # The next sheet's turn has come.
+        readers.append(int(started.read_text()))
+        assert [(sheet["id"], sheet["ahead"]) for sheet in client.get("/api/scores").json()] == [(second, 0)]
+        assert client.delete(f"/api/scores/{second}").json() == {"removed": second}
+        assert until(lambda: not server.line) and not (server.JOB_DIR / second).exists()
+    finally:
+        for reader in readers:
+            try:
+                os.kill(reader, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_a_sheet_that_could_not_be_read_stays_listed_with_why_to_read_again_or_remove(client, ready_score, monkeypatch):
+    """It was dropped with a message that went as soon as anything else was done, and nobody saw it if they'd gone elsewhere."""
+    def ready(folder, upload):
+        root = parsed(note() + note("D") + note("E") + note("F"))
+        server.edit.ensure_note_ids(root)
+        server.save_version(folder, root)
+        server.write_status(folder, "ready")
+
+    monkeypatch.setattr(server, "recognize_job", lambda folder, upload: server.write_status(folder, "failed", server.NO_STAVES))
+    failed = upload_photo(client, "blurry.jpg")
+    assert until(lambda: not server.line)
+    listed = {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}[failed]
+    assert (listed["status"], listed["message"], listed["name"]) == ("failed", server.NO_STAVES, "blurry.jpg")
+    monkeypatch.setattr(server, "recognize_job", ready)
+    assert client.post(f"/api/scores/{failed}/retry").json() == {"id": failed}
+    assert until(lambda: not server.line) and client.get(f"/api/scores/{failed}").json()["status"] == "ready"
+    assert client.post(f"/api/scores/{failed}/retry").status_code == 409  # Read now, so there's nothing to try again.
+
+    monkeypatch.setattr(server, "recognize_job", lambda folder, upload: server.write_status(folder, "failed", server.NO_STAVES))
+    other = upload_photo(client, "dark.jpg")
+    assert until(lambda: not server.line)
+    assert client.delete(f"/api/scores/{other}").json() == {"removed": other} and not (server.JOB_DIR / other).exists()
+    assert client.delete(f"/api/scores/{ready_score}").status_code == 409 and (server.JOB_DIR / ready_score).exists()
 
 
 def long_score(name):

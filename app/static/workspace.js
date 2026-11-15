@@ -53,14 +53,14 @@ function setMode(mode, remember = true) {
 // the score alone, so there it's away.
 function libraryShown() {
   if (document.body.classList.contains("atHome")) return true;
-  if (reading()) return false;
+  if (reading() && score) return false;
   return innerWidth > 1180 ? !document.body.classList.contains("libraryHidden") : document.body.classList.contains("libraryOpen");
 }
 
 function toggleLibrary() {
   if (document.body.classList.contains("atHome")) return;
   const on = !libraryShown();
-  if (on && reading()) setMode("write"); // The library is shown beside the score, as in Write.
+  if (on && reading() && score) setMode("write"); // The library is shown beside the score, as in Write.
   if (innerWidth > 1180) document.body.classList.toggle("libraryHidden", !on);
   else document.body.classList.toggle("libraryOpen", on);
   $("libraryToggle").setAttribute("aria-pressed", String(on));
@@ -362,7 +362,7 @@ function practiceCommands() {
 function allCommands() {
   const modes = Object.entries(MODES).map(([name, mode]) => ({ label: `${mode.label} mode`, where: "Mode", keys: mode.keys, enabled: Boolean(score), checked: currentMode() === name, run: () => setMode(name) }));
   const parts = score ? (score.parts ?? []).map((_, index) => ({ label: `Work with ${partLabel(index)}`, where: "Instrument", keys: "", enabled: true, checked: index === activePart(), run: () => switchPart(index) })) : [];
-  const scores = sheets.map(sheet => ({ label: `Open ${sheet.title || "Untitled score"}`, where: "Library", keys: "", enabled: true, run: () => openScore(sheet.id) }));
+  const scores = sheets.map(sheet => ({ label: `Open ${sheet.status && sheet.status !== "ready" ? sheetName(sheet) : sheet.title || "Untitled score"}`, where: "Library", keys: "", enabled: true, run: () => openScore(sheet.id) }));
   const inspectorItems = [
     { label: "Inspector on the score", where: "View", keys: "F7", enabled: Boolean(score), run: () => showInspector(true, "score") },
     { label: "Play or stop", where: "Playback", keys: "Space", enabled: Boolean(score), run: togglePlaying },

@@ -2,7 +2,8 @@
 const $ = id => document.getElementById(id);
 const UNSURE_BELOW = 0.8;
 let scoreId = null, score = null, selected = null, editing = null;
-let sheets = []; // What the library lists.
+let sheets = []; // What the library lists: scores, and sheets still being read or that couldn't be.
+let opened = 0; // Counts the scores opened and closed, so an answer about one that's gone is dropped.
 let queue = Promise.resolve();
 const UNITS_PER_SPACE = 250; // The music font's outlines count 1000 to four staff spaces.
 
@@ -39,13 +40,14 @@ function enqueue(task) {
   return queue;
 }
 
-// The window is the library while no score is open, the score once one is, and says it's busy while
-// a sheet is being read.
+// The window is the library while no score is open, the score once one is, and how a sheet is getting
+// on while one still being read, or that couldn't be, is open. That doesn't hold up the rest of the
+// app: the library can be shown beside it, as beside a score, and anything else opened.
 function show(view) {
   const open = Boolean(score && scoreId);
   $("busy").hidden = view !== "busy";
   $("workspace").hidden = view !== "workspace";
-  document.body.classList.toggle("atHome", view !== "workspace");
+  document.body.classList.toggle("atHome", view === "start");
   document.body.classList.toggle("busy", view === "busy");
   document.body.classList.toggle("hasScore", open);
   $("libraryToggle").setAttribute("aria-pressed", String(libraryShown()));
@@ -63,6 +65,7 @@ function show(view) {
 }
 
 function tileFor(sheet) {
+  if (sheet.status && sheet.status !== "ready") return jobTile(sheet);
   const link = document.createElement("a");
   link.className = "tile";
   link.href = `#${sheet.id}`;
@@ -91,6 +94,70 @@ function tileFor(sheet) {
   return link;
 }
 
+// The name a sheet goes by until it's read: the file it came from.
+function sheetName(sheet) {
+  return sheet.name || (sheet.pdf ? "A PDF" : "A photo");
+}
+
+function clock(seconds) {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+// How long a sheet has been read for, counted on from what the server last said.
+function readingFor(sheet) {
+  return typeof sheet.elapsed === "number" ? sheet.elapsed + (performance.now() - sheet.heard) / 1000 : null;
+}
+
+// What a sheet still to be read is doing, in a few words: waiting its turn, or being read, and for how long.
+function readingState(sheet) {
+  if (sheet.ahead > 0) return `Waiting: ${sheet.ahead} ${sheet.ahead === 1 ? "sheet" : "sheets"} ahead`;
+  const doing = (sheet.message || "Reading").replace(/\.$/, "");
+  const time = readingFor(sheet);
+  return time === null ? doing : `${doing} · ${clock(time)}`;
+}
+
+// A sheet that isn't a score yet: waiting its turn or being read, with Cancel, or one that couldn't be
+// read, saying why, with Try again and Remove. It opens like a score, into how it's getting on.
+function jobTile(sheet) {
+  const holder = document.createElement("div");
+  holder.className = "jobTile";
+  holder.setAttribute("role", "listitem");
+  const failed = sheet.status === "failed";
+  holder.dataset.state = failed ? "failed" : sheet.ahead > 0 ? "waiting" : "reading";
+  const link = document.createElement("a");
+  link.className = "tile";
+  link.href = `#${sheet.id}`;
+  link.dataset.score = sheet.id;
+  if (sheet.id === scoreId) link.setAttribute("aria-current", "true");
+  link.addEventListener("click", event => { event.preventDefault(); if (sheet.id !== scoreId) openScore(sheet.id); closeDrawers(); });
+  const picture = document.createElement("span");
+  picture.className = "sheet";
+  picture.innerHTML = failed ? icon("alert") : sheet.ahead > 0 ? icon("clock") : `<span class="spinner"></span>`;
+  const name = document.createElement("span");
+  name.className = "name";
+  name.textContent = sheetName(sheet);
+  const state = document.createElement("span");
+  state.className = "state";
+  state.textContent = failed ? `Couldn't be read. ${sheet.message || ""}`.trim() : readingState(sheet);
+  link.title = `${name.textContent}: ${state.textContent}`;
+  link.append(picture, name, state);
+  const actions = document.createElement("span");
+  actions.className = "actions";
+  const button = (label, title, run) => {
+    const made = document.createElement("button");
+    made.type = "button";
+    made.textContent = label;
+    made.title = title;
+    made.addEventListener("click", () => run(sheet.id));
+    return made;
+  };
+  if (failed) actions.append(button("Try again", "Read this sheet again", readAgain), button("Remove", "Remove it from the library", removeSheet));
+  else actions.append(button("Cancel", "Stop reading this sheet and remove it", removeSheet));
+  holder.append(link, actions);
+  return holder;
+}
+
 // The library's picture of the open score follows its edits, a moment after the last one, and so
 // does when it was saved. Hidden, the library is listed afresh when it's shown.
 let tileTimer = 0;
@@ -112,6 +179,10 @@ function refreshTile() {
   }, TILE_DELAY_MS);
 }
 
+// A tile that would be drawn just as it was is kept, as the library is listed afresh every few
+// seconds while a sheet is read, and drawing every picture again each time would make them flicker.
+let tiles = new Map();
+
 function drawTiles() {
   const wanted = $("homeSearch").value.trim().toLowerCase();
   const create = document.createElement("button");
@@ -120,19 +191,84 @@ function drawTiles() {
   create.innerHTML = `<span class="sheet">${icon("plus")}</span><span class="name">New score</span><span class="state">Piano, guitar, violin or anything</span>`;
   create.addEventListener("click", openNewScore);
   // A score is found by its title or by who wrote it, as a musician asks for "the Joplin".
-  const shown = sheets.filter(sheet => !wanted || `${sheet.title || "Untitled score"} ${sheet.composer ?? ""}`.toLowerCase().includes(wanted));
-  $("historyList").replaceChildren(...(wanted ? [] : [create]), ...shown.map(tileFor));
+  const called = sheet => sheet.status && sheet.status !== "ready" ? sheetName(sheet) : `${sheet.title || "Untitled score"} ${sheet.composer ?? ""}`;
+  const shown = sheets.filter(sheet => !wanted || called(sheet).toLowerCase().includes(wanted));
+  const drawn = new Map();
+  $("historyList").replaceChildren(...(wanted ? [] : [create]), ...shown.map(sheet => {
+    const { elapsed, heard, ...said } = sheet;
+    const key = JSON.stringify([said, sheet.id === scoreId]);
+    const tile = tiles.get(key) ?? tileFor(sheet);
+    drawn.set(key, tile);
+    return tile;
+  }));
+  tiles = drawn;
   $("libraryEmpty").hidden = sheets.length > 0;
   // A search that finds nothing says so, rather than leaving an empty space that looks like no library.
   $("libraryNone").hidden = !wanted || shown.length > 0 || !sheets.length;
   $("libraryNone").textContent = `No score in your library is called “${$("homeSearch").value.trim()}” or is by anyone of that name.`;
 }
 
+let listed = 0; // Counts the times the library is asked for, so an answer overtaken by a later one is dropped.
+
 async function drawHistory() {
+  const asked = ++listed;
   const response = await fetch("/api/scores");
-  if (!response.ok) return;
-  sheets = await response.json();
+  if (!response.ok || asked !== listed) return;
+  const found = await response.json();
+  if (asked !== listed) return;
+  const before = new Map(sheets.map(sheet => [sheet.id, sheet.status]));
+  const heard = performance.now();
+  sheets = found.map(sheet => ({ ...sheet, heard }));
   drawTiles();
+  tellWhatFinished(before);
+  watchReading();
+}
+
+// A sheet that has been read while something else was open says so, and so does one that couldn't be.
+function tellWhatFinished(before) {
+  for (const sheet of sheets) {
+    if (before.get(sheet.id) !== "processing" || sheet.status === "processing" || sheet.id === scoreId) continue;
+    if (sheet.status === "ready") toast(`${sheet.title || sheet.name || "Your sheet"} has been read.`, { label: "Open", run: () => openScore(sheet.id) });
+    else toast(`${sheetName(sheet)} couldn't be read. ${sheet.message || ""}`.trim(), { label: "Try again", run: () => readAgain(sheet.id) });
+  }
+}
+
+// While a sheet is being read the library is asked again every few seconds, wherever the window is, so
+// its tile keeps up and the sheet can say when it's done.
+let watchTimer = 0;
+const WATCH_MS = 2000;
+
+function watchReading() {
+  clearTimeout(watchTimer);
+  if (sheets.some(sheet => sheet.status === "processing")) watchTimer = setTimeout(drawHistory, WATCH_MS);
+}
+
+// The time a sheet has been read for counts up on its tile, and where it's open.
+function tickReading() {
+  for (const sheet of sheets) {
+    if (sheet.status !== "processing" || sheet.ahead !== 0) continue;
+    const state = document.querySelector(`#historyList a[data-score="${sheet.id}"] .state`);
+    if (state) state.textContent = readingState(sheet);
+  }
+  if (!$("busy").hidden) drawReadingTime();
+}
+
+let toastTimer = 0;
+
+// A note that something has happened, with one thing to do about it, such as Undo, for a few seconds.
+function toast(text, action = null) {
+  clearTimeout(toastTimer);
+  $("toastText").textContent = text;
+  $("toastAction").hidden = !action;
+  $("toastAction").textContent = action?.label ?? "";
+  $("toastAction").onclick = action ? () => { hideToast(); action.run(); } : null;
+  $("toast").hidden = false;
+  toastTimer = setTimeout(hideToast, action ? 10000 : 5000);
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  $("toast").hidden = true;
 }
 
 function message(text) {
@@ -141,6 +277,7 @@ function message(text) {
 }
 
 function openScore(id) {
+  opened++;
   forgetPlayback();
   // What was being written or chosen belongs to the score that was open. Notes are named the same
   // way in every score, note0, note1 and so on, so a cursor or a selection kept would land on other
@@ -162,6 +299,7 @@ function openScore(id) {
 
 // The score stays where it is, as it's saved with every edit, and the library lists it.
 function closeScore() {
+  opened++;
   forgetPlayback();
   history.replaceState(null, "", " ");
   scoreId = null;
@@ -174,26 +312,78 @@ function closeScore() {
 async function upload(file) {
   if (!file) return;
   message("");
-  show("busy");
+  toast(`Opening ${file.name}…`);
   const body = new FormData();
   body.append("file", file);
   const response = await fetch("/api/scores", { method: "POST", body });
   const data = await response.json();
-  if (!response.ok) { show("start"); message(data.detail); return; }
-  openScore(data.id);
+  hideToast();
+  if (!response.ok) { message(data.detail); return; }
+  await openScore(data.id);
+  drawHistory(); // A photo or a PDF is listed at once, as it's read.
+}
+
+// A sheet still to be read, or one that couldn't be, as it's shown open: its place in the line or how
+// long it has been read for, and what can be done with it.
+let shownSheet = null;
+
+function showReading(data) {
+  shownSheet = { ...data, heard: performance.now() };
+  const failed = data.status === "failed";
+  $("readingName").textContent = sheetName(data);
+  $("readingIcon").innerHTML = failed ? icon("alert") : data.ahead > 0 ? icon("clock") : `<div class="spinner"></div>`;
+  $("readingIcon").classList.toggle("failed", failed);
+  $("busyText").textContent = failed ? `This sheet couldn't be read. ${data.message || ""}`.trim()
+    : data.ahead > 0 ? `Waiting its turn, behind ${data.ahead} ${data.ahead === 1 ? "sheet" : "sheets"}: sheets are read one at a time.`
+    : data.message || "Reading your sheet.";
+  $("readingHint").hidden = failed;
+  $("readingRetry").hidden = $("readingRemove").hidden = !failed;
+  $("readingCancel").hidden = failed;
+  drawReadingTime();
+  show("busy");
+}
+
+function drawReadingTime() {
+  const time = shownSheet?.status === "processing" ? readingFor(shownSheet) : null;
+  $("readingTime").textContent = time === null ? "" : `${clock(time)} so far. A page usually takes under a minute.`;
+}
+
+// Stop reading a sheet and remove it, or remove one that couldn't be read. The server stops its reader.
+async function removeSheet(id) {
+  const response = await fetch(`/api/scores/${id}`, { method: "DELETE" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    message(typeof data.detail === "string" ? data.detail : "That sheet couldn't be removed.");
+    drawHistory();
+    return;
+  }
+  if (id === scoreId) closeScore();
+  sheets = sheets.filter(sheet => sheet.id !== id);
+  drawTiles();
+  drawHistory();
+}
+
+async function readAgain(id) {
+  const response = await fetch(`/api/scores/${id}/retry`, { method: "POST" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) message(typeof data.detail === "string" ? data.detail : "That sheet couldn't be read again.");
+  else if (id === scoreId && !score) poll();
+  drawHistory();
 }
 
 async function poll() {
+  const turn = opened;
   const response = await fetch(`/api/scores/${scoreId}`);
-  if (!response.ok) { closeScore(); return; }
+  if (turn !== opened) return; // Something else has been opened meanwhile.
+  if (!response.ok) { closeScore(); drawHistory(); return; }
   const data = await response.json();
-  if (data.status === "processing") {
-    $("busyText").textContent = data.message || "Reading your sheet. This usually takes under a minute.";
-    show("busy");
-    setTimeout(poll, 1500);
+  if (turn !== opened) return;
+  if (data.status !== "ready") {
+    showReading(data);
+    if (data.status === "processing") setTimeout(() => { if (turn === opened) poll(); }, 1500);
     return;
   }
-  if (data.status === "failed") { closeScore(); message(data.message); return; }
+  shownSheet = null;
   message(data.message);
   score = data;
   drawOriginals();
@@ -551,4 +741,18 @@ function setUpPage() {
     label.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); } });
   });
   $("homeSearch").addEventListener("input", drawTiles);
+  $("readingCancel").addEventListener("click", () => removeSheet(scoreId));
+  $("readingRemove").addEventListener("click", () => removeSheet(scoreId));
+  $("readingRetry").addEventListener("click", () => readAgain(scoreId));
+  $("readingLibrary").addEventListener("click", goHome);
+  $("brand").addEventListener("click", goHome);
+  $("toastClose").addEventListener("click", hideToast);
+  setInterval(tickReading, 1000);
+}
+
+// The logo, and Library where a sheet is being read, go back to the library. Whatever was open is
+// kept as it is: a score is saved with every edit, and a sheet goes on being read.
+function goHome() {
+  if (document.body.classList.contains("atHome")) return;
+  closeScore();
 }

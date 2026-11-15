@@ -75,7 +75,8 @@ input[type="range"] { accent-color: var(--accent); }
 
 /* The top bar. */
 #topBar { display: flex; flex: none; align-items: center; gap: 6px; min-height: 54px; padding: 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
-#brand { flex: none; border-radius: 7px; }
+#brand { flex: none; padding: 2px; min-height: 30px; border-radius: 7px; }
+#brand img { display: block; border-radius: 7px; }
 /* A block, as a flex box's text can't end in an ellipsis. */
 #scoreName { display: block; min-width: 0; max-width: 260px; padding: 4px 8px; font-size: 15px; font-weight: 700; text-align: left; overflow: hidden; text-overflow: ellipsis; }
 #modeSwitch { margin-left: auto; }
@@ -101,7 +102,7 @@ input[type="range"] { accent-color: var(--accent); }
 #commandOpen .words { overflow: hidden; text-overflow: ellipsis; }
 #mainMenu, #inspectorToggle, #libraryToggle { flex: none; }
 body:not(.hasScore) .scoreOnly, body.atHome .scoreOnly { display: none !important; }
-body.atHome #commandOpen { margin-left: auto; }
+body.atHome #commandOpen, body.busy #commandOpen { margin-left: auto; }
 
 /* Menus and popups. */
 .menu { position: fixed; z-index: 40; min-width: 230px; max-height: calc(100vh - 40px); overflow-y: auto; padding: 5px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 10px 30px var(--shadow); }
@@ -157,15 +158,39 @@ body.atHome .libraryHead h2 { font-size: 28px; }
 body.atHome #homeSearch { max-width: 360px; }
 body.atHome .libraryActions { max-width: 520px; }
 body.atHome .libraryActions > * { flex: 0 0 auto; }
-body.atHome #historyList { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 22px 18px; }
+body.atHome #historyList { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 22px 18px; align-items: start; }
 body.atHome .tile { grid-template-columns: 1fr; padding: 0; gap: 6px; border: 0; background: none; }
 body.atHome .tile .sheet { width: 100%; grid-row: auto; border-radius: 6px; box-shadow: 0 1px 2px var(--shadow); }
 body.atHome .tile:hover .sheet { outline: 2px solid var(--accent); outline-offset: 2px; }
 body.atHome .tile .sheet svg.icon { width: 40px; height: 40px; }
 body.atHome #centre { display: none; }
-body.atHome.busy #centre { display: flex; }
-body.atHome.busy #library { display: none; }
-#busy { flex: 1; display: grid; place-content: center; text-align: center; color: var(--muted); }
+/* A sheet being read, or one that couldn't be, as it's shown open. The rest of the app can be used
+   meanwhile: the library beside it, as beside a score, and its button. */
+#busy { flex: 1; display: grid; place-content: center; padding: 24px 16px; text-align: center; color: var(--muted); overflow-y: auto; }
+#readingCard { display: grid; justify-items: center; gap: 6px; max-width: 460px; }
+#readingCard h2 { color: var(--ink); font-size: 18px; overflow-wrap: anywhere; }
+#readingCard p { margin: 0; }
+#busyText { color: var(--ink); }
+#readingTime { font-variant-numeric: tabular-nums; }
+#readingHint { font-size: 12.5px; margin-top: 6px !important; }
+#readingCard .buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
+#readingIcon { display: grid; place-items: center; min-height: 44px; }
+#readingIcon svg.icon { width: 34px; height: 34px; color: var(--muted); }
+#readingIcon.failed svg.icon { color: var(--bad); }
+body.busy #inspector, body.busy #dock { display: none !important; }
+body.busy #libraryToggle { display: inline-flex !important; }
+/* What the library shows of a sheet that isn't a score yet: waiting, being read, or failed. */
+.jobTile { display: grid; align-content: start; gap: 2px; }
+.jobTile .actions { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 60px; }
+.jobTile .actions button { min-height: 26px; padding: 1px 9px; font-size: 12px; }
+body.atHome .jobTile .actions { padding-left: 0; }
+.jobTile .sheet .spinner { width: 18px; height: 18px; margin: 0; border-width: 2px; }
+body.atHome .jobTile .sheet .spinner { width: 30px; height: 30px; border-width: 3px; }
+.jobTile[data-state="failed"] .sheet svg.icon { color: var(--bad); }
+.jobTile[data-state="failed"] .state { color: var(--bad); white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+#toast { position: fixed; z-index: 45; top: 62px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 32px); padding: 6px 6px 6px 14px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: 0 10px 30px var(--shadow); }
+#toastText { min-width: 0; }
+#toastAction { color: var(--accent); font-weight: 600; }
 .spinner { width: 30px; height: 30px; margin: 0 auto 14px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
@@ -520,7 +545,7 @@ body[data-mode="read"] #desk { background: var(--bg); }
 body[data-mode="read"] #pages g.note:hover, body[data-mode="read"] #pages g.rest:hover { fill: inherit; stroke: inherit; }
 body[data-mode="read"] #pages g.note, body[data-mode="read"] #pages g.rest, body[data-mode="read"] #pages g.mRest, body[data-mode="read"] #pages g.harm, body[data-mode="read"] #pages g[data-mark] { cursor: inherit; }
 body[data-mode="read"] #desk { cursor: pointer; }
-body[data-mode="read"] #hintBar, body[data-mode="read"]:not(.atHome) #library { display: none; }
+body[data-mode="read"] #hintBar, body[data-mode="read"]:not(.atHome):not(.busy) #library { display: none; }
 body[data-mode="read"] #pagesFrame { padding: 16px; }
 body[data-mode="read"] #pages { gap: 16px; justify-content: center; }
 

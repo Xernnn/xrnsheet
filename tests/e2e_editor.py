@@ -16,9 +16,16 @@ import json
 import math
 import os
 import shutil
+import socket
+import struct
+import subprocess
+import tempfile
+import time
 import urllib.request
 import wave
 import xml.etree.ElementTree as ET
+import zlib
+from contextlib import contextmanager
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -4959,6 +4966,127 @@ def test_recognized(page, base: str, shots: Path | None, created: list[str]) -> 
     page.set_viewport_size(size)
 
 
+def png(width: int, height: int, dark_rows: range | tuple = ()) -> bytes:
+    """A grey picture, white but for the rows given, made without an imaging library."""
+    rows = b"".join(b"\x00" + (b"\x00" if y in dark_rows else b"\xff") * width for y in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+
+def photo(name: str, blank: bool = False) -> dict:
+    """A photo to open: five staff lines, or nothing on it at all."""
+    return {"name": name, "mimeType": "image/png", "buffer": png(480, 320, () if blank else tuple(range(120, 200, 16)))}
+
+
+@contextmanager
+def slow_reader(seconds: float):
+    """Serve the app on a port of its own, with a stand-in that reads a page in this many seconds.
+
+    The real reader takes the fixture's page in a few seconds, too quickly to see the screens shown
+    while a sheet waits or is read, and too quickly to cancel. Its scores live in a folder of their
+    own, removed afterwards.
+    """
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    jobs = Path(tempfile.mkdtemp(prefix="xrnsheet-e2e-"))
+    command = [str(ROOT / ".venv" / "bin" / "python"), str(ROOT / "tests" / "reading_stand_in.py"), "--seconds", str(seconds), "--port", str(port), "--jobs", str(jobs)]
+    server = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for _ in range(300):
+            try:
+                urllib.request.urlopen(f"{base}/api/scores").close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        yield base
+    finally:
+        server.terminate()  # It stops the page it's reading as it goes.
+        try:
+            server.wait(20)
+        except subprocess.TimeoutExpired:
+            server.kill()
+        shutil.rmtree(jobs, ignore_errors=True)
+
+
+def listed(base: str) -> dict[str, dict]:
+    return {sheet["id"]: sheet for sheet in json.loads(fetch_text(base, "/api/scores"))}
+
+
+def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
+    """A sheet being read used to take the whole window, with a spinner and no way out: no library,
+    no F6, no Cancel, no time, and a second sheet waited unseen behind it. One that failed was told
+    of only in a line that went with the next thing done."""
+    with slow_reader(10) as base:
+        page.goto(base)
+        page.set_input_files("#file", files=[photo("first page.png")])
+        page.wait_for_selector("#busy:not([hidden])")
+        first = page.evaluate("() => scoreId")
+        page.wait_for_function("() => /so far/.test(document.getElementById('readingTime')?.textContent ?? '')", timeout=5000)
+        check("a sheet being read says which it is, how long it has taken, and can be cancelled", page.inner_text("#readingName") == "first page.png" and page.is_visible("#readingCancel"), page.inner_text("#readingTime"))
+        check("and the library's button is there", page.is_visible("#libraryToggle"))
+        page.keyboard.press("F6")
+        tile = lambda score_id: page.locator(f'#historyList a[data-score="{score_id}"]')
+        page.wait_for_selector(f'#historyList a[data-score="{first}"]', timeout=5000)
+        check("F6 shows the library beside it, listing it as being read", page.is_visible("#library") and "Reading" in tile(first).inner_text(), tile(first).inner_text())
+
+        page.set_input_files("#file", files=[photo("second page.png")])
+        page.wait_for_function("id => scoreId && scoreId !== id && !document.getElementById('busy').hidden", arg=first)
+        second = page.evaluate("() => scoreId")
+        page.wait_for_function("id => /ahead/.test(document.querySelector(`#historyList a[data-score='${id}']`)?.textContent ?? '')", arg=second, timeout=5000)
+        check("a second sheet says it waits its turn, and behind how many", "behind 1 sheet" in page.inner_text("#busyText") and "1 sheet ahead" in tile(second).inner_text(), page.inner_text("#busyText"))
+        if shots:
+            page.screenshot(path=str(shots / "reading-two-sheets.png"))
+        page.keyboard.press("F6")  # Opening the second folded the library away, as opening a score does.
+        page.wait_for_selector("#library", state="visible")
+        page.locator(f'.jobTile:has(a[data-score="{second}"]) .actions button', has_text="Cancel").click()
+        page.wait_for_selector(f'#historyList a[data-score="{second}"]', state="detached", timeout=5000)
+        check("Cancel on its tile takes it away, here and on the server", second not in listed(base) and page.evaluate("() => document.body.classList.contains('atHome')"))
+
+        other = post_json(base, "/api/scores/blank", {"measures": 4, "title": "Something else"})["id"]
+        page.evaluate("drawHistory()")
+        tile(other).click()
+        page.wait_for_selector("#pages svg")
+        check("another score can be opened and used while the first is read", page.evaluate("() => scoreId") == other and listed(base)[first]["status"] == "processing")
+        page.click("#brand")
+        check("the logo goes back to the library", page.evaluate("() => document.body.classList.contains('atHome')") and "Reading" in tile(first).inner_text())
+
+        page.wait_for_selector("#toast:not([hidden])", timeout=30000)
+        check("a sheet read meanwhile says so when it's done", "has been read" in page.inner_text("#toastText") and page.inner_text("#toastAction") == "Open", page.inner_text("#toastText"))
+        page.click("#toastAction")
+        page.wait_for_selector("#pages svg")
+        check("and opens from there", page.evaluate("() => scoreId") == first and page.is_hidden("#busy"))
+
+        page.set_input_files("#file", files=[photo("blank.png", blank=True)])
+        page.wait_for_selector("#busy:not([hidden])")
+        failed = page.evaluate("() => scoreId")
+        page.click("#readingLibrary")
+        page.wait_for_selector(f'.jobTile[data-state="failed"] a[data-score="{failed}"]', timeout=30000)
+        check("a sheet that couldn't be read stays in the library, saying why", "No staves" in tile(failed).inner_text() and page.locator(f'.jobTile:has(a[data-score="{failed}"]) .actions button').all_inner_texts() == ["Try again", "Remove"], tile(failed).inner_text())
+        check("and says so wherever the window is", "couldn't be read" in page.inner_text("#toastText"), page.inner_text("#toastText"))
+        if shots:
+            page.screenshot(path=str(shots / "reading-failed.png"))
+        tile(failed).click()
+        page.wait_for_selector("#readingRemove:not([hidden])")
+        check("opened, it says why, with Try again and Remove", "No staves" in page.inner_text("#busyText") and page.is_visible("#readingRetry") and page.is_hidden("#readingCancel"))
+        page.click("#readingRemove")
+        page.wait_for_selector(f'#historyList a[data-score="{failed}"]', state="detached", timeout=5000)
+        check("Remove takes it away", failed not in listed(base))
+
+        page.set_input_files("#file", files=[photo("third page.png")])
+        page.wait_for_selector("#readingCancel:not([hidden])")
+        third = page.evaluate("() => scoreId")
+        page.wait_for_function("() => /so far/.test(document.getElementById('readingTime').textContent)", timeout=5000)
+        page.click("#readingCancel")
+        page.wait_for_function("() => document.body.classList.contains('atHome')", timeout=15000)
+        check("Cancel where it's shown stops it and goes back to the library", third not in listed(base) and page.locator(f'#historyList a[data-score="{third}"]').count() == 0)
+
+
 def head_point(page, element_id: str) -> tuple[float, float]:
     """The middle of a note's head, where a mouse aims."""
     box = page.evaluate("""id => {
@@ -5253,6 +5381,7 @@ def main() -> None:
             test_practice_details(context, base, arguments.shots, created)
             test_found_by_the_bug_hunt(context, base, created)
             test_phone(context, base, arguments.shots, created)
+            test_reading_leaves_the_window_free(page, arguments.shots)
             test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])
             browser.close()

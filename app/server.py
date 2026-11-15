@@ -64,6 +64,8 @@ MEMORY_LIMIT = "6G"
 DRAWINGS_KEPT = 4  # A long score's drawing is a few megabytes, so only the last few are kept.
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
+SOURCE_FILE = "source.json"  # The name of the file a sheet is read from, to call it by until it has a title.
+CANCEL_WAIT_SECONDS = 10  # How long a cancel waits for the page being read to stop, which is usually at once.
 OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
 ONLY_READS = {"GET", "HEAD", "OPTIONS"}
 OPENED_FILE = "opened.json"  # Beside a score opened from a MusicXML file.
@@ -148,9 +150,15 @@ class SizeLimit:
 app = FastAPI(title="xrnsheet", lifespan=lifespan)
 app.add_middleware(SizeLimit)
 app.add_middleware(OwnPagesOnly)
-one_at_a_time = threading.Semaphore(1)  # Recognition is memory hungry.
-# The page being read now, and whether the app is stopping, so that the page can stop with it.
-reading: set[subprocess.Popen] = set()
+# Sheets to be read, by id, in the order they came. The first is the one being read: recognition is
+# memory hungry, so sheets are read one at a time, and the page shows each its place in the line.
+line: list[str] = []
+line_changed = threading.Condition()
+began: dict[str, float] = {}  # When the sheet being read began, for the page to show how long it has taken.
+cancelled: set[str] = set()  # Sheets whose reading is being stopped, to be removed as they leave the line.
+# The page being read now, by the folder it's read into, and whether the app is stopping, so that
+# the page can stop with it.
+reading: dict[subprocess.Popen, Path] = {}
 reading_lock = threading.Lock()
 stopping = threading.Event()
 # Edits read the latest version and write the next one, so two at once would lose one of them.
@@ -453,7 +461,7 @@ def recognize_page(image: Path, out_dir: Path) -> str | None:
         if stopping.is_set():
             return INTERRUPTED
         process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        reading.add(process)
+        reading[process] = out_dir
     try:
         _, errors = process.communicate(timeout=PAGE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
@@ -462,7 +470,7 @@ def recognize_page(image: Path, out_dir: Path) -> str | None:
         return "Recognition took too long."
     finally:
         with reading_lock:
-            reading.discard(process)
+            reading.pop(process, None)
     if process.returncode == 0 and list(out_dir.glob("*.musicxml")):
         return None
     print(errors[-2000:], file=sys.stderr)
@@ -479,6 +487,8 @@ def stop_reading() -> None:
         stopping.set()
         for process in reading:
             process.kill()
+    with line_changed:
+        line_changed.notify_all()  # Sheets waiting their turn stop waiting, and are reported at the next start.
 
 
 def combine_pages(folder: Path, numbers: list[int]) -> ET.Element:
@@ -494,38 +504,97 @@ def combine_pages(folder: Path, numbers: list[int]) -> ET.Element:
     return merged
 
 
+def given_up(folder: Path) -> bool:
+    """Say whether a sheet's reading is to stop: the app is stopping, or someone cancelled it."""
+    return stopping.is_set() or folder.name in cancelled
+
+
 def recognize_job(folder: Path, upload: Path) -> None:
-    with one_at_a_time:
-        try:
-            images, note = pdf_to_images(upload) if upload.suffix.lower() == ".pdf" else ([upload], "")
-            if not images:
-                write_status(folder, "failed", "That PDF has no pages.")
+    try:
+        images, note = pdf_to_images(upload) if upload.suffix.lower() == ".pdf" else ([upload], "")
+        if not images:
+            write_status(folder, "failed", "That PDF has no pages.")
+            return
+        read, failed = [], {}
+        for number, image in enumerate(images, start=1):
+            if given_up(folder):
                 return
-            read, failed = [], {}
-            for number, image in enumerate(images, start=1):
-                if len(images) > 1:
-                    write_status(folder, "processing", f"Reading page {number} of {len(images)}.")
-                reason = recognize_page(image, folder / "recognized" / f"page_{number:03d}")
-                if stopping.is_set():
-                    return  # It's left as still being read, which the next start reports as interrupted.
-                if reason is None:
-                    read.append(number)
-                else:
-                    failed[number] = reason
-            if not read:
-                write_status(folder, "failed", next(iter(failed.values())))
-                return
-            root = combine_pages(folder, read)
-            edit.ensure_note_ids(root)
-            structure.ensure_measure_ids(root)
-            save_version(folder, root)
-            if failed:
-                listed = ", ".join(str(number) for number in failed)
-                note = f"{note} Couldn't read page {listed}, so it was left out.".strip()
-            write_status(folder, "ready", note)
-        except Exception as error:  # A background thread has no one else to report to.
-            print(f"recognition error: {error}", file=sys.stderr)
-            write_status(folder, "failed", "Recognition failed.")
+            if len(images) > 1:
+                write_status(folder, "processing", f"Reading page {number} of {len(images)}.")
+            reason = recognize_page(image, folder / "recognized" / f"page_{number:03d}")
+            if given_up(folder):
+                return  # Stopping, it's left as still being read, which the next start reports as interrupted.
+            if reason is None:
+                read.append(number)
+            else:
+                failed[number] = reason
+        if not read:
+            write_status(folder, "failed", next(iter(failed.values())))
+            return
+        root = combine_pages(folder, read)
+        edit.ensure_note_ids(root)
+        structure.ensure_measure_ids(root)
+        save_version(folder, root)
+        if failed:
+            listed = ", ".join(str(number) for number in failed)
+            note = f"{note} Couldn't read page {listed}, so it was left out.".strip()
+        write_status(folder, "ready", note)
+    except Exception as error:  # A background thread has no one else to report to.
+        print(f"recognition error: {error}", file=sys.stderr)
+        write_status(folder, "failed", "Recognition failed.")
+
+
+def queue_reading(folder: Path, upload: Path) -> None:
+    """Put a sheet at the end of the line, to be read when its turn comes."""
+    with line_changed:
+        line.append(folder.name)
+    threading.Thread(target=read_in_turn, args=(folder, upload), daemon=True).start()
+
+
+def read_in_turn(folder: Path, upload: Path) -> None:
+    """Wait for the sheets ahead to be read, then read this one, and give the next its turn.
+
+    A sheet cancelled while it waits has left the line already, with its folder. One cancelled while
+    it's read is removed here, once its reader has stopped, so nothing is still writing into it.
+    """
+    name = folder.name
+    with line_changed:
+        line_changed.wait_for(lambda: name not in line or line[0] == name or stopping.is_set())
+        if name not in line or stopping.is_set():
+            return
+        began[name] = time.time()
+    try:
+        recognize_job(folder, upload)
+    finally:
+        with line_changed:
+            line.remove(name)
+            began.pop(name, None)
+            if name in cancelled:
+                cancelled.discard(name)
+                shutil.rmtree(folder, ignore_errors=True)
+            line_changed.notify_all()
+
+
+def source_of(folder: Path) -> dict:
+    """Say what a sheet was read from: the file's name, if it was kept, and whether it was a PDF."""
+    try:
+        name = json.loads((folder / SOURCE_FILE).read_text(encoding="utf-8")).get("name")
+    except (OSError, ValueError, AttributeError):
+        name = None
+    return {"name": name if isinstance(name, str) and name else None, "pdf": (folder / "upload.pdf").exists()}
+
+
+def reading_state(folder: Path) -> dict:
+    """Say how a sheet still to be read is getting on: how many sheets are ahead of it, and how long it has been read for."""
+    with line_changed:
+        ahead = line.index(folder.name) if folder.name in line else None
+        started = began.get(folder.name)
+    return {"ahead": ahead, "elapsed": round(time.time() - started, 1) if ahead == 0 and started else None}
+
+
+def unfinished(folder: Path, status: dict) -> dict:
+    """Describe a sheet that isn't ready: being read, waiting its turn, or failed, with why."""
+    return status | source_of(folder) | (reading_state(folder) if status["status"] == "processing" else {})
 
 
 @app.post("/api/scores")
@@ -545,8 +614,9 @@ async def create_score(file: UploadFile) -> dict:
     folder.mkdir(parents=True)
     upload = folder / f"upload{suffix}"
     upload.write_bytes(data)
+    write_whole(folder / SOURCE_FILE, json.dumps({"name": Path(file.filename or "").name[:200]}))
     write_status(folder, "processing")
-    threading.Thread(target=recognize_job, args=(folder, upload), daemon=True).start()
+    queue_reading(folder, upload)
     return {"id": score_id}
 
 
@@ -821,16 +891,25 @@ def list_instruments() -> list[dict]:
 
 @app.get("/api/scores")
 def list_scores() -> list[dict]:
-    """List finished sheets, newest first, so one can be reopened after closing the page.
+    """List the sheets, newest first, so one can be reopened after closing the page.
 
+    A sheet still being read is listed too, with how it's getting on, so the window can be used for
+    something else meanwhile, and so is one that couldn't be read, with why, to read again or remove.
     A sheet whose files can't be read is left out, rather than taking every other sheet with it.
     """
     found = []
     for folder in JOB_DIR.glob("*") if JOB_DIR.exists() else []:
         try:
-            if not (folder / "status.json").exists() or read_status(folder)["status"] != "ready":
+            if not (folder / "status.json").exists() or folder.name in cancelled:
+                continue
+            status = read_status(folder)
+            if status["status"] != "ready":
+                upload = next(folder.glob("upload.*"), folder / "status.json")
+                found.append(unfinished(folder, status) | {"id": folder.name, "saved": upload.stat().st_mtime})
                 continue
             found.append({
+                "status": "ready",
+                "name": source_of(folder)["name"],
                 "id": folder.name,
                 "saved": versions(folder)[-1].stat().st_mtime,
                 "pages": len(source_pages(folder)),
@@ -847,8 +926,56 @@ def list_scores() -> list[dict]:
 @app.get("/api/scores/{score_id}")
 def get_score(score_id: str) -> dict:
     folder = job_folder(score_id)
+    if score_id in cancelled:
+        raise HTTPException(404, "That sheet's reading was cancelled.")
     status = read_status(folder)
-    return describe(folder, status) if status["status"] == "ready" else status
+    return describe(folder, status) if status["status"] == "ready" else unfinished(folder, status)
+
+
+@app.delete("/api/scores/{score_id}")
+def remove_sheet(score_id: str) -> dict:
+    """Stop reading a sheet and remove it, or remove one that couldn't be read.
+
+    A sheet waiting its turn just leaves the line. The one being read has its reader stopped, not
+    merely hidden, as it would otherwise hold its memory, and the sheets behind it, for minutes more.
+    A score that has been read is kept: it may have finished just as Cancel was pressed.
+    """
+    folder = job_folder(score_id)
+    with line_changed:
+        if score_id in line:
+            if line[0] != score_id:
+                line.remove(score_id)
+                line_changed.notify_all()
+                shutil.rmtree(folder, ignore_errors=True)
+                return {"removed": score_id}
+            cancelled.add(score_id)
+            with reading_lock:
+                for process, out_dir in reading.items():
+                    if folder in out_dir.parents:
+                        process.kill()
+            # Its reader stops at once and removes the folder as it leaves the line. A PDF still
+            # being turned into pictures stops after that, and is listed as gone meanwhile.
+            line_changed.wait_for(lambda: score_id not in line, timeout=CANCEL_WAIT_SECONDS)
+            return {"removed": score_id}
+    if read_status(folder)["status"] == "ready":
+        raise HTTPException(409, "This sheet has been read, so it's kept in your library.")
+    shutil.rmtree(folder)
+    return {"removed": score_id}
+
+
+@app.post("/api/scores/{score_id}/retry")
+def read_again(score_id: str) -> dict:
+    """Read a sheet that couldn't be read once more, from the file it came from."""
+    folder = job_folder(score_id)
+    with line_changed:
+        upload = next(folder.glob("upload.*"), None)
+        if score_id in line or read_status(folder)["status"] != "failed" or upload is None:
+            raise HTTPException(409, "Only a sheet that couldn't be read can be read again.")
+        for leftover in ("recognized", "pages"):
+            shutil.rmtree(folder / leftover, ignore_errors=True)
+        write_status(folder, "processing")
+        queue_reading(folder, upload)
+    return {"id": score_id}
 
 
 @app.get("/api/scores/{score_id}/source/{number}.jpg")
