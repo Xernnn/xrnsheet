@@ -3638,6 +3638,7 @@ def test_new_scores_for_players(page, base: str, shots: Path | None, created: li
     """Guitarists and bassists get tablature from New score, one click away, and from the instrument choosers."""
     page.goto(base)
     page.click("#blankOpen")
+    page.wait_for_selector("#newDialog[open]")
     offered = page.locator("#quickStart .quick .name").all_inner_texts()
     check("New score offers the players' instruments first, as cards", offered == ["Piano", "Guitar", "Violin", "Bass guitar", "Cello", "Viola", "Ukulele", "Voice"], offered)
     check("with the full list of instruments behind More instruments", page.is_hidden("#newChooser") and page.is_visible("#newMore") and page.is_hidden("#blankDone"))
