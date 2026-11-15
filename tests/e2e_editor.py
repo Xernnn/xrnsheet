@@ -2878,6 +2878,32 @@ def test_zooming_keeps_the_music_in_sight(page, base: str, created: list[str]) -
     page.set_viewport_size(size)
 
 
+def test_the_zoom_menu_reads_in_full(page, base: str, created: list[str]) -> None:
+    """Every zoom in the menu at the bottom right reads in full, and the bar keeps its width whichever is chosen."""
+    open_blank(page, base, created)
+    page.keyboard.press("Escape")
+    cut = page.evaluate("""() => {
+        const choice = $("zoomChoice"), style = getComputedStyle(choice);
+        // A menu of that one choice alone is as wide as a browser needs to show it whole.
+        return [...choice.options].map(option => {
+            const alone = document.createElement("select");
+            alone.style.cssText = `position: absolute; visibility: hidden; width: auto; font: ${style.font}; padding: ${style.padding}; border: ${style.border}`;
+            alone.append(new Option(option.text));
+            choice.parentElement.append(alone);
+            const needs = alone.offsetWidth;
+            alone.remove();
+            return [option.text, needs, choice.offsetWidth];
+        }).filter(([, needs, has]) => needs > has);
+    }""")
+    check("every zoom in the menu, Whole page too, reads in full", not cut, cut)
+    widths = set()
+    for value in page.eval_on_selector_all("#zoomChoice option", "options => options.map(option => option.value)"):
+        page.select_option("#zoomChoice", value)
+        widths.add(round(page.locator("#viewTools").bounding_box()["width"]))
+    check("and the zoom bar keeps its width whichever is chosen", len(widths) == 1, widths)
+    page.select_option("#zoomChoice", "width")
+
+
 def test_top_bar_at_half_a_screen(page, base: str, created: list[str]) -> None:
     """A window tiled to half a laptop's screen keeps the title and the instrument readable."""
     open_blank(page, base, created, staff="piano")
@@ -4771,6 +4797,7 @@ def main() -> None:
             test_reading_on_a_laptop(page, base, created)
             test_reading_on_a_system_at_a_time(page, base, created)
             test_zooming_keeps_the_music_in_sight(page, base, created)
+            test_the_zoom_menu_reads_in_full(page, base, created)
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
             test_inspector(page, base, arguments.shots, created)
