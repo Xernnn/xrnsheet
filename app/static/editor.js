@@ -737,7 +737,7 @@ function hearNote(element) {
   const part = partOfStaff(staffNumber(element)) ?? 0;
   for (const note of notes) {
     const [step, alter, octave] = score?.notes?.[ownId(note.id)] ?? [];
-    if (step) hearKey(soundingPitch(12 * (octave + 1) + STEP_SEMITONES[step] + alter, part));
+    if (step) hearKey(soundingPitch(12 * (octave + 1) + STEP_SEMITONES[step] + alter, part), part);
   }
 }
 
@@ -1335,7 +1335,8 @@ function moveDrag(event) {
   paintGhost({ lines: drag.lines, line: drag.line - drag.steps, x: drag.x, type: type || "quarter", dots, voice: layerNumber(drag.note) + 1, label: drag.steps ? pitch.name : `${pitch.name}, as it was` });
   if (drag.heard !== pitch.midi) {
     drag.heard = pitch.midi;
-    hearKey(soundingPitch(pitch.midi, partOfStaff(staffNumber(drag.note)) ?? 0));
+    const part = partOfStaff(staffNumber(drag.note)) ?? 0;
+    hearKey(soundingPitch(pitch.midi, part), part);
   }
 }
 

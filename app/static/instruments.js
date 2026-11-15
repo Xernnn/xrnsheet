@@ -518,10 +518,22 @@ function stringToKeep(part, sounding, where) {
   return {};
 }
 
-function hearKey(midi) {
+// A key, a MIDI keyboard's note or a note selected is heard as its part plays: a piano from its
+// recording, fetched the first time that key needs it, and any other part on the plain triangle
+// every key had before.
+function hearKey(midi, part = activePart()) {
+  const sounded = sound => {
+    try {
+      play(keyPreview, sound, midi, keyPreview.currentTime + 0.01, PREVIEW_SECONDS, 0.3);
+    } catch {
+      // Without sound the key still writes its note.
+    }
+  };
   try {
     keyPreview ??= new (window.AudioContext || window.webkitAudioContext)();
-    tone(keyPreview, midi, keyPreview.currentTime + 0.01, PREVIEW_SECONDS, 0.3, "triangle");
+    const samples = samplesOf(playState.data ?? {}, part);
+    if (samples) loadRecording(recordingOf(samples, midi).url).then(() => sounded({ ...USUAL_SOUND, samples }));
+    else sounded(USUAL_SOUND);
   } catch {
     // Without sound the key still writes its note.
   }
