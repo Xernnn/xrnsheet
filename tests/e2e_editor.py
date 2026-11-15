@@ -2493,6 +2493,39 @@ def test_pizzicato_sound(context, base: str, created: list[str]) -> None:
     page.close()
 
 
+# A violin, a viola and a cello, named as a quartet's parts are, and a guitar and a bass guitar: each
+# part's name, clef and the octave of the A it holds for a bar.
+STRING_TRIO = [("Violin I", "G", 2, 4), ("Viola", "C", 3, 4), ("Violoncello", "F", 4, 3)]
+GUITARS = [("Guitar", "G", 2, 4), ("Bass Guitar", "F", 4, 2)]
+
+
+def named_parts(parts: list[tuple], program: int | None) -> bytes:
+    """A MusicXML score of the parts, each an A held for a bar, all with one General MIDI sound or none."""
+    sound = lambda number: f'<score-instrument id="P{number}-I1"><instrument-name>Strings</instrument-name></score-instrument><midi-instrument id="P{number}-I1"><midi-program>{program}</midi-program></midi-instrument>' if program else ""
+    listed = "".join(f'<score-part id="P{number}"><part-name>{name}</part-name>{sound(number)}</score-part>' for number, (name, *_rest) in enumerate(parts, start=1))
+    music = "".join(
+        f'<part id="P{number}"><measure number="1"><attributes><divisions>1</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time>'
+        f"<clef><sign>{sign}</sign><line>{line}</line></clef></attributes><note><pitch><step>A</step><octave>{octave}</octave></pitch><duration>4</duration><type>whole</type></note></measure></part>"
+        for number, (_name, sign, line, octave) in enumerate(parts, start=1)
+    )
+    return f'<?xml version="1.0" encoding="UTF-8"?><score-partwise version="4.0"><part-list>{listed}</part-list>{music}</score-partwise>'.encode()
+
+
+def test_string_parts_by_their_names(page, base: str, created: list[str]) -> None:
+    for parts, program, where in [(STRING_TRIO + GUITARS, None, "with no sound named, as many files' quartets are"), (STRING_TRIO, 49, "given a string section's sound, as Mozart's in music21's corpus are")]:
+        page.goto(base)
+        page.set_input_files("#file", files=[{"name": "parts.musicxml", "mimeType": "application/xml", "buffer": named_parts(parts, program)}])
+        page.wait_for_selector("#pages svg")
+        created.append(page.evaluate("() => scoreId"))
+        page.wait_for_function("() => playState.data !== null")
+        # Each part's A is above a violin's lowest note, so only its name says it isn't a violin.
+        played_on = page.evaluate("() => playState.data.notes.map(note => [note.part, note.midi, soundOf(playState.data, note).samples?.name ?? null]).sort()")
+        wanted = [[0, 69, "violin"], [1, 69, "viola"], [2, 57, "cello"], [3, 69, "guitar"], [4, 45, "bass guitar"]][: len(parts)]
+        check(f"a violin, viola and cello{' and two guitars' if len(parts) > 3 else ''} {where} play their own recordings", played_on == wanted, played_on)
+        made = played(page)
+        check("so Play sounds no oscillator", made["recordings"] == len(parts) and made["oscillators"] == 0, made)
+
+
 def mixer_strip(page, name: str):
     return page.locator(f'#mixerStrips .strip:has(.name:text-is("{name}"))')
 
@@ -5132,6 +5165,7 @@ def main() -> None:
             test_guitar_sound(context, base, created)
             test_bowed_sound(context, base, created)
             test_pizzicato_sound(context, base, created)
+            test_string_parts_by_their_names(page, base, created)
             test_held_keys(context, base, created)
             test_mixer(page, base, arguments.shots, created)
             test_piano_keyboard(page, base, arguments.shots, created)

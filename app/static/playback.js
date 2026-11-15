@@ -315,12 +315,35 @@ function soundOf(data, note) {
 
 // The recordings a part's note is played with, if its sound has them. A part that names no sound is
 // given program 1, the grand piano, so that one is a piano only when the part is a keyboard by its
-// name or its staves, as the instrument below decides, and a melody on a plain staff keeps its triangle.
+// name or its staves, as the instrument below decides. Otherwise it goes by its name, as a string
+// quartet's parts often come with none: a violin or a cello named so plays its own recordings, as
+// does a guitar or a bass guitar, and a melody on a plain staff keeps its triangle. A part named for
+// one bowed instrument but given a string section's sound, as files often give a quartet, is that
+// instrument too, so a viola's A4 isn't a violin's.
 function samplesOf(data, part, midi) {
   const program = data.programs?.[part] ?? 1;
-  if (program === 1 && kindOfPart(part) !== "piano") return null;
-  if (SECTION_SOUNDS.has(program)) return program === PIZZICATO_SOUND ? sectionAt(midi).pizzicato : sectionAt(midi);
+  if (program === 1) return namedSamples(part);
+  if (SECTION_SOUNDS.has(program)) {
+    const set = bowedByName(part) ?? sectionAt(midi);
+    return program === PIZZICATO_SOUND ? set.pizzicato : set;
+  }
   return BOWED_SOUNDS[program] ?? SAMPLED_FAMILIES[Math.floor((program - 1) / 8)] ?? null;
+}
+
+function namedSamples(part) {
+  const kind = kindOfPart(part), name = (score?.parts?.[part] ?? "").toLowerCase();
+  if (kind === "piano") return SAMPLE_SETS.piano;
+  if (/bass guitar|electric bass/.test(name) || (kind === "guitar" && /bass/.test(name))) return SAMPLE_SETS.bassGuitar;
+  return kind === "guitar" ? SAMPLE_SETS.guitar : bowedByName(part);
+}
+
+// The bowed instrument a part is named for, if any: "Violoncello" is a cello, "Fiddle" a violin.
+function bowedByName(part) {
+  const name = (score?.parts?.[part] ?? "").toLowerCase();
+  if (/double bass|contrabass/.test(name)) return SAMPLE_SETS.doubleBass;
+  if (/cello/.test(name)) return SAMPLE_SETS.cello;
+  if (/viola/.test(name)) return SAMPLE_SETS.viola;
+  return /violin|fiddle/.test(name) ? SAMPLE_SETS.violin : null;
 }
 
 // A string section's note is played by the highest of its instruments that reaches down to it.
