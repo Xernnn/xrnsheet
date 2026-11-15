@@ -2718,6 +2718,33 @@ def test_sound(page, base: str, created: list[str]) -> None:
     check("playback stops", page.locator("#pages .playing").count() == 0)
 
 
+def test_rewind_shows_where_play_starts(page, base: str, created: list[str]) -> None:
+    """Rewind, stopped, brings the place Play will start from into sight: the beginning, or the loop's start."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.keyboard.press("Alt+p")
+    page.wait_for_function("() => playState.data")
+    page.evaluate("() => { $('desk').scrollTop = $('desk').scrollHeight; }")
+    page.click("#rewind")
+    top = page.evaluate("() => pageElements()[0].getBoundingClientRect().top - $('desk').getBoundingClientRect().top")
+    check("Rewind with the end of the score in sight goes back to its first page", 0 <= top < 30, top)
+    notes = page.locator("#pages g.note")
+    click_on(page, notes.nth(40))
+    page.keyboard.press("a")
+    click_on(page, notes.nth(48))
+    page.keyboard.press("b")
+    page.evaluate("() => { $('desk').scrollTop = $('desk').scrollHeight; }")
+    page.click("#rewind")
+    shown = page.evaluate("() => { const box = document.getElementById(playState.loop.first).closest('g.measure').getBoundingClientRect(), room = $('desk').getBoundingClientRect(); return box.top >= room.top && box.bottom <= room.bottom; }")
+    check("and with a loop, to the bar of the loop's first note, whole", shown, page.evaluate("() => $('desk').scrollTop"))
+    page.click("#practiceLoop")
+    page.keyboard.press("Escape")
+    page.keyboard.press("Alt+w")
+
+
 def wait_playing(page, playing: bool) -> None:
     page.wait_for_function("wanted => document.querySelector('#play').getAttribute('aria-pressed') === wanted", arg=str(playing).lower())
 
@@ -5169,6 +5196,7 @@ def main() -> None:
             test_a_file_titled_only_on_its_page(page, base, created)
             test_sound_of_marks(page, base, created)
             test_playback_toolbar(page, base, arguments.shots, created)
+            test_rewind_shows_where_play_starts(page, base, created)
             test_modes(page, base, arguments.shots, created)
             test_writing_starts_in_write(page, base, created)
             test_reading_on_a_laptop(page, base, created)

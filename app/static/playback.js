@@ -600,7 +600,14 @@ function playFrom(place) {
 
 function rewind() {
   const data = playState.data;
-  playFrom(playState.looping && data ? loopWindow(data).start : 0);
+  const looping = Boolean(playState.looping && data);
+  playFrom(looping ? loopWindow(data).start : 0);
+  // Stopped, the page goes to where Play will start, as it follows the music while it plays: only
+  // the counters changed before, so Rewind seemed to do nothing with the end of the score in sight.
+  if (player || practice.follower) return;
+  const first = looping && playState.loop?.first && document.getElementById(plainId(playState.loop.first));
+  if (first) followNote(first.closest("g.measure") ?? first); // Its whole bar, as playback follows one.
+  else turnToEnd(false);
 }
 
 function toggleLoop() {
