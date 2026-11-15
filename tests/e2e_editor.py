@@ -2131,6 +2131,57 @@ def test_pickup(page, base: str, created: list[str]) -> None:
     settle(page)
 
 
+def test_measures_numbered_as_the_page_numbers_them(page, base: str, created: list[str]) -> None:
+    """After a pickup, the counter, the timeline and the bar checks number the measures as the page does, from 0."""
+    score_id = open_blank(page, base, created, bars=8)
+    page.select_option("#pickupChoice", "4")
+    settle(page)
+    page.keyboard.press("5")
+    page.keyboard.type("g" + "cdef" * 3, delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    click_on(page, page.locator("#pages g.note").nth(9))
+    settle(page)
+    page.wait_for_function("() => playState.data?.events?.[plainId(selected)] && $('beatCounter').value !== '1.1'")
+    check("a note in the measure the inspector calls 3 is in measure 3 by the counter too", (page.inner_text("#propMeasureName"), page.input_value("#beatCounter")) == ("Measure 3", "3.1"), (page.inner_text("#propMeasureName"), page.input_value("#beatCounter")))
+    page.fill("#beatCounter", "2.1")
+    page.keyboard.press("Enter")
+    check("and measure 2 typed in goes to the measure numbered 2, a pickup and a bar in", page.input_value("#timeCounter") == "00:00:03.0", page.input_value("#timeCounter"))
+    page.keyboard.press("F12")
+    numbers = page.evaluate("() => [...document.querySelectorAll('#timelineGrid .row.numbers .cell')].map((cell, index) => [index, cell.textContent]).filter(([, text]) => text)")
+    check("the timeline numbers its columns so too, the pickup 0", numbers == [[0, "0"], [5, "5"]], numbers)
+    page.keyboard.press("F12")
+    click_on(page, page.locator("#pages g.note").nth(5))
+    settle(page)
+    choose(page, "time:3/4")
+    settle(page)
+    chip = page.locator("#barChecks .chip").first.inner_text()
+    check("and a bar check names the measure the page numbers", chip.startswith("Bar 2:"), chip)
+    page.keyboard.press("Control+z")
+    settle(page)
+    page.keyboard.press("Escape")
+
+
+def test_files_saved_are_named_after_the_score(page, base: str, created: list[str]) -> None:
+    """A file saved from a score is named after its title, so two scores' PDFs aren't score.pdf and score (1).pdf."""
+    score_id = written_melody(page, base, created, bars=2, tune="cdef")
+    menu(page, "File", "Title and composer…")
+    page.fill("#titleInput", "Étude: Day/Night")
+    page.click("#projectDialog button[type=submit]")
+    settle(page)
+    said = {}
+    for kind in ("score.musicxml", "score.mid", "score.pdf", "score.pdf?part=0"):
+        with urllib.request.urlopen(f"{base}/api/scores/{score_id}/{kind}") as response:
+            said[kind] = response.headers.get("Content-Disposition", "")
+    check("MusicXML and MIDI are saved under the title, without the characters a file name can't have", "filename*=UTF-8''%C3%89tude%20Day%20Night.musicxml" in said["score.musicxml"] and "Night.mid" in said["score.mid"], said)
+    check("and so are the PDF and a part's, which names its instrument", "%C3%89tude%20Day%20Night.pdf" in said["score.pdf"] and "Night%20%28" in said["score.pdf?part=0"], said)
+    check("Export PDF saves it under the title too", page.get_attribute("#pdfSave", "download") == "Étude Day Night.pdf", page.get_attribute("#pdfSave", "download"))
+    with page.expect_download() as download:
+        menu(page, "File", "Export", "Audio (WAV)")
+    check("and the audio file", download.value.suggested_filename == "Étude Day Night.wav", download.value.suggested_filename)
+
+
 def test_audio_file(page, base: str, created: list[str]) -> None:
     written_melody(page, base, created, bars=2, tune="cdef")
     with page.expect_download() as download:
@@ -2686,6 +2737,33 @@ def test_sound(page, base: str, created: list[str]) -> None:
     check("playback stops", page.locator("#pages .playing").count() == 0)
 
 
+def test_rewind_shows_where_play_starts(page, base: str, created: list[str]) -> None:
+    """Rewind, stopped, brings the place Play will start from into sight: the beginning, or the loop's start."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.keyboard.press("Alt+p")
+    page.wait_for_function("() => playState.data")
+    page.evaluate("() => { $('desk').scrollTop = $('desk').scrollHeight; }")
+    page.click("#rewind")
+    top = page.evaluate("() => pageElements()[0].getBoundingClientRect().top - $('desk').getBoundingClientRect().top")
+    check("Rewind with the end of the score in sight goes back to its first page", 0 <= top < 30, top)
+    notes = page.locator("#pages g.note")
+    click_on(page, notes.nth(40))
+    page.keyboard.press("a")
+    click_on(page, notes.nth(48))
+    page.keyboard.press("b")
+    page.evaluate("() => { $('desk').scrollTop = $('desk').scrollHeight; }")
+    page.click("#rewind")
+    shown = page.evaluate("() => { const box = document.getElementById(playState.loop.first).closest('g.measure').getBoundingClientRect(), room = $('desk').getBoundingClientRect(); return box.top >= room.top && box.bottom <= room.bottom; }")
+    check("and with a loop, to the bar of the loop's first note, whole", shown, page.evaluate("() => $('desk').scrollTop"))
+    page.click("#practiceLoop")
+    page.keyboard.press("Escape")
+    page.keyboard.press("Alt+w")
+
+
 def wait_playing(page, playing: bool) -> None:
     page.wait_for_function("wanted => document.querySelector('#play').getAttribute('aria-pressed') === wanted", arg=str(playing).lower())
 
@@ -3064,6 +3142,35 @@ def test_zooming_keeps_the_music_in_sight(page, base: str, created: list[str]) -
     page.set_viewport_size(size)
 
 
+def test_pages_turned_back_to_are_the_ones_kept(page, base: str, created: list[str]) -> None:
+    """After turning the pages in Whole page, another zoom or mode shows the pages turned to, not those of an older zoom."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    size = page.viewport_size
+    page.set_viewport_size({"width": 1886, "height": 1080})
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "width")
+    page.keyboard.press("Home")
+    on_page = lambda: page.evaluate("index => pageElements().indexOf(document.querySelectorAll('#pages g.system')[index].closest('.page'))", music_at_the_top(page))
+    for _ in range(10):
+        if on_page() == 1:
+            break
+        page.keyboard.press(" ")
+    page.select_option("#zoomChoice", "page")
+    page.keyboard.press(" ")
+    page.keyboard.press("Home")
+    check("reading the second page at Fit width, then Whole page, a spread on and Home, shows the first spread", shown_pages(page) == [0, 1], shown_pages(page))
+    page.keyboard.press("Alt+p")
+    top = page.evaluate("() => pageElements()[0].getBoundingClientRect().top - $('desk').getBoundingClientRect().top")
+    check("Practice at Fit width then starts from the top of the first page, not the second page read before", 0 <= top < 30, (top, music_at_the_top(page)))
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "width")
+    page.set_viewport_size(size)
+
+
 def test_the_zoom_menu_reads_in_full(page, base: str, created: list[str]) -> None:
     """Every zoom in the menu at the bottom right reads in full, and the bar keeps its width whichever is chosen."""
     open_blank(page, base, created)
@@ -3145,6 +3252,85 @@ def test_library(page, base: str, created: list[str]) -> None:
     menu(page, "File", "Close")
     check("with nothing open the library is the whole window", page.is_visible("#library") and page.is_hidden("#workspace") and page.is_hidden("#inspector"))
     check("and shows each score as a page", page.locator(f'#historyList a[data-score="{first}"] img').count() == 1)
+
+
+def test_library_search_by_composer(page, base: str, created: list[str]) -> None:
+    """The library finds a score by who wrote it, and says when a search finds nothing."""
+    score_id = written_melody(page, base, created, tune="cdef")
+    menu(page, "File", "Title and composer…")
+    page.fill("#titleInput", "Library Rag")
+    page.fill("#composerInput", "Scottie Joplinson")
+    page.click("#projectDialog button[type=submit]")
+    settle(page)
+    page.click("#libraryToggle")
+    page.fill("#homeSearch", "joplinson")
+    page.wait_for_timeout(100)
+    found = page.locator("#historyList a").evaluate_all("tiles => tiles.map(tile => tile.dataset.score)")
+    check("its search finds a score by its composer", score_id in found and page.is_hidden("#libraryNone"), found)
+    tooltip = page.evaluate("id => document.querySelector(`#historyList a[data-score='${id}']`)?.title ?? ''", score_id)
+    check("whose picture names the composer when pointed at", "by Scottie Joplinson" in tooltip, tooltip)
+    page.fill("#homeSearch", "nothing is called this")
+    page.wait_for_timeout(100)
+    said = page.evaluate("() => document.getElementById('libraryNone')?.hidden === false ? document.getElementById('libraryNone').textContent : ''")
+    check("a search that finds nothing says so", page.locator("#historyList a").count() == 0 and "nothing is called this" in said, said)
+    page.fill("#homeSearch", "")
+    page.wait_for_timeout(100)
+    check("and says nothing once the search is cleared", page.is_hidden("#libraryNone"))
+    page.click("#libraryClose")
+
+
+def test_another_score_opened_while_writing(page, base: str, created: list[str]) -> None:
+    """A score opened from the library beside one being written in isn't written in by the old cursor."""
+    other = written_melody(page, base, created, tune="gfed")
+    before = pitched(read_notes(base, other))
+    first = written_melody(page, base, created, tune="cd")
+    page.keyboard.press("n")
+    page.keyboard.type("e", delay=0)
+    settle(page)
+    check("note input is on in the score being written", page.evaluate("() => editor.on"))
+    page.click("#libraryToggle")
+    page.click(f'#historyList a[data-score="{other}"]')
+    page.wait_for_function("id => scoreId === id && score !== null", arg=other)
+    settle(page)
+    check("another score opened from the library isn't being written in", not page.evaluate("() => editor.on") and page.get_attribute("#inputToggle", "aria-pressed") != "true", page.evaluate("() => [editor.on, editor.cursor, editor.last]"))
+    check("and nothing in it is chosen, so the inspector shows the score", page.evaluate("() => actionTarget()") is None and page.is_visible("#propScore"), page.evaluate("() => actionTarget()"))
+    page.keyboard.type("ab", delay=0)
+    settle(page)
+    check("so letters typed straight away don't write in it", pitched(read_notes(base, other)) == before, pitched(read_notes(base, other)))
+    check("and the first score kept what was written in it", pitched(read_notes(base, first)) == ["C5", "D5", "E5"], pitched(read_notes(base, first)))
+
+
+def test_a_score_opens_at_its_start(page, base: str, created: list[str]) -> None:
+    """Another score opened while one is read far down shows its own beginning, not the same depth of it."""
+    short = written_melody(page, base, created, tune="cdef")
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.keyboard.press("Alt+w")
+    far_down = "() => { const desk = document.getElementById('desk'); desk.scrollTop = desk.scrollHeight; return desk.scrollTop; }"
+    check("the long score is read far down", page.evaluate(far_down) > 2000)
+    page.click("#libraryToggle")
+    page.click(f'#historyList a[data-score="{short}"]')
+    page.wait_for_function("id => scoreId === id && score !== null", arg=short)
+    page.wait_for_timeout(200)
+    top = "() => [document.getElementById('desk').scrollTop, document.querySelector('#pages g.staff').getBoundingClientRect().top - document.getElementById('desk').getBoundingClientRect().top]"
+    scrolled, staff = page.evaluate(top)
+    check("a score opened from the library beside it starts at its beginning, its first staff in sight", scrolled == 0 and staff > 0, (scrolled, staff))
+    page.click("#libraryToggle")
+    page.click(f'#historyList a[data-score="{created[-1]}"]')
+    page.wait_for_function("id => scoreId === id && score !== null", arg=created[-1])
+    page.evaluate(far_down)
+    page.click("#libraryToggle")
+    page.click("#blankOpen")
+    page.click('#quickStart [data-quick="piano"] .start')
+    page.wait_for_function("id => scoreId !== id && score !== null && editor.on", arg=created[-1])
+    created.append(page.evaluate("() => scoreId"))
+    page.wait_for_timeout(200)
+    scrolled, staff = page.evaluate(top)
+    check("and so does a new score, with the cursor's staff whole", scrolled == 0 and staff > 0, (scrolled, staff))
+    page.keyboard.press("Escape")
 
 
 def test_inspector(page, base: str, shots: Path | None, created: list[str]) -> None:
@@ -3303,6 +3489,28 @@ def test_command_palette(page, base: str, created: list[str]) -> None:
     page.keyboard.press("Escape")
 
 
+def test_dynamics_found_by_name(page, base: str, created: list[str]) -> None:
+    """The command palette finds a dynamic by its word, as a musician says it, not only by its letters."""
+    score_id = written_melody(page, base, created, tune="cdef")
+    select_notes(page, 0)
+    page.keyboard.press("Control+Shift+P")
+    page.fill("#commandInput", "forte")
+    first = page.locator("#commandList li").first.inner_text()
+    check("forte finds the dynamic f first", first.startswith("f,") and "forte" in first, first)
+    page.keyboard.press("Enter")
+    settle(page)
+    select_notes(page, 2)
+    command(page, "mezzo forte")
+    settle(page)
+    marks = [next(iter(found)).tag for found in saved_score(base, score_id).iter("dynamics")]
+    check("and mezzo forte finds mf, each put on the note chosen", marks == ["f", "mf"], marks)
+    page.keyboard.press("Control+Shift+P")
+    page.fill("#commandInput", "mf")
+    first = page.locator("#commandList li").first.inner_text()
+    check("the letters still find it first", first.startswith("mf,"), first)
+    page.keyboard.press("Escape")
+
+
 def neck_spots(page, holder: str, kind: str) -> list[list[int]]:
     return page.evaluate("([holder, kind]) => [...document.querySelectorAll(`#${holder} .spot.${kind}`)].map(spot => [Number(spot.dataset.string), Number(spot.dataset.stop)])", [holder, kind])
 
@@ -3430,6 +3638,7 @@ def test_new_scores_for_players(page, base: str, shots: Path | None, created: li
     """Guitarists and bassists get tablature from New score, one click away, and from the instrument choosers."""
     page.goto(base)
     page.click("#blankOpen")
+    page.wait_for_selector("#newDialog[open]")
     offered = page.locator("#quickStart .quick .name").all_inner_texts()
     check("New score offers the players' instruments first, as cards", offered == ["Piano", "Guitar", "Violin", "Bass guitar", "Cello", "Viola", "Ukulele", "Voice"], offered)
     check("with the full list of instruments behind More instruments", page.is_hidden("#newChooser") and page.is_visible("#newMore") and page.is_hidden("#blankDone"))
@@ -4297,6 +4506,29 @@ def test_tablature_editing(page, base: str, shots: Path | None, created: list[st
     settle(page)
 
 
+def test_tablature_clicked_past_its_fret_numbers(page, base: str, created: list[str]) -> None:
+    """A string of the tablature is a string all along its bar, past the fret numbers drawn on it."""
+    score_id = open_blank(page, base, created, bars=2, staff="guitar-tab")
+    page.keyboard.type("eg", delay=0)
+    settle(page)
+    rest = next(note.get("id") for note in saved_score(base, score_id).find("part").findall("measure")[0].iter("note") if note.find("rest") is not None and (note.findtext("staff") or "1") == "1")
+    x, y = tab_point(page, rest, 1)
+    page.mouse.move(x, y)
+    check("past the frets on its first string, the ghost is a box on that string", page.locator("#ghost.onTab:not([hidden])").count() == 1, page.evaluate("() => [document.getElementById('ghost').className, document.getElementById('ghostLabel')?.textContent]"))
+    page.mouse.click(x, y)
+    settle(page)
+    root = saved_score(base, score_id)
+    written = [(note.findtext("pitch/step"), note.findtext("pitch/octave"), string_and_fret(root, note.get("id"))) for note in own_notes(root)]
+    check("and a click there writes that string open, not a note far below the staff above", written[-1] == ("E", "4", ("1", "0")) and len(written) == 3, written)
+    x, y = tab_point(page, page.evaluate("() => plainId(editor.cursor)"), 3)
+    page.mouse.click(x, y)
+    settle(page)
+    root = saved_score(base, score_id)
+    written = [(note.findtext("pitch/step"), note.findtext("pitch/octave"), string_and_fret(root, note.get("id"))) for note in own_notes(root)]
+    check("and so does a click on another string in the same bar", written[-1] == ("G", "3", ("3", "0")) and len(written) == 4, written)
+    page.keyboard.press("Escape")
+
+
 def fretted_place(note: ET.Element) -> tuple | None:
     for technical in note.iterfind("notations/technical"):
         if technical.find("fret") is not None:
@@ -4972,7 +5204,9 @@ def main() -> None:
             test_tuplets_and_verses(page, base, arguments.shots, created)
             test_instrument_sounds(page, base, created)
             test_pickup(page, base, created)
+            test_measures_numbered_as_the_page_numbers_them(page, base, created)
             test_audio_file(page, base, created)
+            test_files_saved_are_named_after_the_score(page, base, created)
             test_piano_sound(context, base, created)
             test_held_keys(context, base, created)
             test_mixer(page, base, arguments.shots, created)
@@ -4983,17 +5217,23 @@ def main() -> None:
             test_a_file_titled_only_on_its_page(page, base, created)
             test_sound_of_marks(page, base, created)
             test_playback_toolbar(page, base, arguments.shots, created)
+            test_rewind_shows_where_play_starts(page, base, created)
             test_modes(page, base, arguments.shots, created)
             test_writing_starts_in_write(page, base, created)
             test_reading_on_a_laptop(page, base, created)
             test_reading_on_a_system_at_a_time(page, base, created)
             test_zooming_keeps_the_music_in_sight(page, base, created)
+            test_pages_turned_back_to_are_the_ones_kept(page, base, created)
             test_the_zoom_menu_reads_in_full(page, base, created)
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
+            test_library_search_by_composer(page, base, created)
+            test_another_score_opened_while_writing(page, base, created)
+            test_a_score_opens_at_its_start(page, base, created)
             test_inspector(page, base, arguments.shots, created)
             test_a_rest_in_the_instrument_box(page, base, created)
             test_command_palette(page, base, created)
+            test_dynamics_found_by_name(page, base, created)
             test_fretboard(page, base, arguments.shots, created)
             test_fingerboard_and_switcher(page, base, arguments.shots, created)
             test_cello_and_double_bass_fingerboards(page, base, arguments.shots, created)
@@ -5005,6 +5245,7 @@ def main() -> None:
             test_techniques_at_concert_pitch(page, base, arguments.shots, created)
             test_techniques_copied_and_the_capo(page, base, arguments.shots, created)
             test_tablature_editing(page, base, arguments.shots, created)
+            test_tablature_clicked_past_its_fret_numbers(page, base, created)
             test_marks_drawn_on_notes(page, base, arguments.shots, created)
             test_words_copied_with_a_passage(page, base, created)
             test_chord_diagram_editing(page, base, arguments.shots, created)

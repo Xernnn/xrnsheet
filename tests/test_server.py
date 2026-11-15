@@ -1251,7 +1251,8 @@ def test_the_printable_score_and_parts_show_where_they_open(client, ready_score)
         assert answer.status_code == 200 and answer.content.startswith(b"%PDF")
         disposition = answer.headers["content-disposition"]
         assert disposition.startswith("inline;"), disposition
-        assert 'filename="score.pdf"' in disposition or 'filename="part_1.pdf"' in disposition
+        # Named after the score, untitled here, and a part after its instrument too, as "score (Violin).pdf".
+        assert 'filename="score.pdf"' in disposition if not query else "filename*=utf-8''score%20%28" in disposition, disposition
 
 
 def test_each_note_is_named_as_it_is_shown(client):

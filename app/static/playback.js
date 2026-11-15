@@ -373,7 +373,7 @@ function saveAudio() {
     const rendered = await audio.startRendering();
     const link = document.createElement("a");
     link.href = URL.createObjectURL(wavFile([rendered.getChannelData(0), rendered.getChannelData(1)], AUDIO_RATE));
-    link.download = "score.wav";
+    link.download = savedName(".wav");
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   });
@@ -600,7 +600,14 @@ function playFrom(place) {
 
 function rewind() {
   const data = playState.data;
-  playFrom(playState.looping && data ? loopWindow(data).start : 0);
+  const looping = Boolean(playState.looping && data);
+  playFrom(looping ? loopWindow(data).start : 0);
+  // Stopped, the page goes to where Play will start, as it follows the music while it plays: only
+  // the counters changed before, so Rewind seemed to do nothing with the end of the score in sight.
+  if (player || practice.follower) return;
+  const first = looping && playState.loop?.first && document.getElementById(plainId(playState.loop.first));
+  if (first) followNote(first.closest("g.measure") ?? first); // Its whole bar, as playback follows one.
+  else turnToEnd(false);
 }
 
 function toggleLoop() {
@@ -658,15 +665,19 @@ function secondsIn(text) {
   return parts.reduce((total, part) => total * 60 + part, 0);
 }
 
-// The measure and beat of a place, counting measures from 1 as the bar checks do.
+// The measure and beat of a place, the measure numbered as the page and the inspector number it: a
+// pickup is measure 0 there, so counting from 1 put the counter a measure ahead of the page.
 function beatAt(data, place) {
   const bar = data.bars.findLast(item => item.start <= place + EARLY) ?? data.bars[0];
   if (!bar) return { measure: 1, beat: 1 };
-  return { measure: bar.index + 1, beat: Math.floor((place - barBegins(bar)) / beatOf(bar) + EARLY) + 1 };
+  return { measure: measureFacts(bar.index).number, beat: Math.floor((place - barBegins(bar)) / beatOf(bar) + EARLY) + 1 };
 }
 
+// A measure typed in is the one the page numbers so, or failing that, the one counted so from 1.
 function placeAtBeat(data, measure, beat) {
-  const bar = data.bars.find(item => item.index === measure - 1);
+  const numbered = (score?.timeline?.measures ?? []).findIndex(item => item.number === String(measure));
+  const index = numbered >= 0 ? numbered : measure - 1;
+  const bar = data.bars.find(item => item.index === index);
   if (!bar) return null;
   return Math.min(Math.max(barBegins(bar) + (beat - 1) * beatOf(bar), bar.start), bar.start + bar.length - EARLY);
 }

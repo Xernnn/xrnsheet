@@ -118,6 +118,11 @@ function atNote(run) {
   return { needs: "note", run };
 }
 
+const DYNAMIC_WORDS = {
+  ppp: "pianississimo", pp: "pianissimo", p: "piano", mp: "mezzo-piano", mf: "mezzo-forte", f: "forte", ff: "fortissimo", fff: "fortississimo",
+  fp: "fortepiano", sf: "sforzando", sfz: "sforzato", sfp: "sforzando-piano", rfz: "rinforzando", fz: "forzando",
+};
+
 // Every group of cells, with where the inspector shows it: for a note, for a measure, or for the score.
 function buildPalettes() {
   const key = fifths => ({ key: `key:${fifths}`, label: keyName(fifths), html: keyCell(fifths), run: () => barAction("key", { fifths }) });
@@ -128,7 +133,8 @@ function buildPalettes() {
   const clef = (name, label, glyph, line) => ({ key: `clef:${name}`, label, html: clefCell(glyph, line), ...atNote(() => barAction("clef", { clef: name })) });
   const tempo = (words, speed) => ({ key: `tempo:${words} ${speed}`, label: `${words}, ${speed} beats a minute`, html: wordsCell(words, "bold"), ...atNote(() => markAction("tempo", { text: `${words} ${speed}` })) });
   const beat = (label, glyph, unit, dots) => ({ key: `tempo:${unit}${dots ? "." : ""}=80`, label: `${label} = 80`, html: tempoCell(glyph, 80), ...atNote(() => markAction("tempo", { text: "80", unit, dots })) });
-  const dynamic = (name, glyph) => ({ key: `dynamic:${name}`, label: `${name} (dynamic)`, html: glyphCell(glyph), ...atNote(() => markAction("dynamic", { name })) });
+  // A dynamic is named by its letters and its word, so "forte" or "mezzo" finds it in the command palette.
+  const dynamic = (name, glyph) => ({ key: `dynamic:${name}`, label: `${name}, ${DYNAMIC_WORDS[name]} (dynamic)`, html: glyphCell(glyph), ...atNote(() => markAction("dynamic", { name })) });
   const mark = (name, label, glyph) => ({ key: `mark:${name}`, label, html: glyphCell(glyph, 8), ...atNote(() => markAction("toggle", { name })) });
   const jump = (name, label, html) => ({ key: `jump:${name}`, label, html: html ?? wordsCell(label), ...atNote(() => markAction("jump", { name })) });
   const hairpin = (name, label) => ({ key: `hairpin:${name}`, label, html: hairpinCell(name), ...atNote(() => markAction("hairpin", { name })) });

@@ -25,7 +25,7 @@ from fractions import Fraction
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import uvicorn
 import cv2
@@ -838,8 +838,7 @@ def list_scores() -> list[dict]:
                 "checked": (folder / "checked.json").exists(),
                 "blank": not (folder / "recognized").exists(),
                 "opened": opened_from_file(folder),
-                "title": structure.title_of(current_root(folder))["title"],
-            })
+            } | structure.title_of(current_root(folder)))
         except (OSError, ValueError, TypeError, KeyError, IndexError, ET.ParseError) as error:
             print(f"left an unreadable sheet out of the list, {folder.name}: {error!r}", file=sys.stderr)
     return sorted(found, key=lambda item: item["saved"], reverse=True)
@@ -1332,6 +1331,23 @@ def get_playback(score_id: str) -> dict:
     return playback(current_root(job_folder(score_id)))
 
 
+def download_name(root: ET.Element, suffix: str) -> str:
+    """Name a file saved from a score after its title, as "Maple Leaf Rag.pdf", or "score.pdf" untitled.
+
+    Every file saved was score.pdf, score.mid and so on, so the next score saved beside one became
+    "score (1).pdf", and which was which could only be told by opening them. Characters a file's name
+    can't hold on Windows or Linux are left out.
+    """
+    title = " ".join(re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", structure.title_of(root)["title"]).split())[:100].strip(" .")
+    return f"{title or 'score'}{suffix}"
+
+
+def attachment(name: str) -> dict:
+    """The header that saves a file under this name: in full, and in plain ASCII for older programs."""
+    plain = name.encode("ascii", "replace").decode().replace("?", "_")
+    return {"Content-Disposition": f"attachment; filename=\"{plain}\"; filename*=UTF-8''{quote(name)}"}
+
+
 @app.get("/api/scores/{score_id}/score.musicxml")
 def download_musicxml(score_id: str) -> Response:
     folder = job_folder(score_id)
@@ -1339,8 +1355,7 @@ def download_musicxml(score_id: str) -> Response:
     if saved_mixer(folder) is not None:
         root = mixer.with_mixer(root, mixer_of(folder, root))
     text = to_text(technique.drawn_on_other_staves(diagrams.with_frames(root)))  # With its chord diagrams, and notes on the staff they're drawn on.
-    headers = {"Content-Disposition": 'attachment; filename="score.musicxml"'}
-    return Response(text, media_type="application/vnd.recordare.musicxml+xml", headers=headers)
+    return Response(text, media_type="application/vnd.recordare.musicxml+xml", headers=attachment(download_name(root, ".musicxml")))
 
 
 @app.get("/api/scores/{score_id}/score.mid")
@@ -1349,7 +1364,7 @@ def download_midi(score_id: str) -> Response:
     root = current_root(folder)
     levels = mixer_of(folder, root)
     data = midi_bytes(playback(root) | {"mixer": [levels["parts"][part_id] for part_id in part_ids(root)]})
-    return Response(data, media_type="audio/midi", headers={"Content-Disposition": 'attachment; filename="score.mid"'})
+    return Response(data, media_type="audio/midi", headers=attachment(download_name(root, ".mid")))
 
 
 @app.get("/api/scores/{score_id}/score.pdf")
@@ -1357,13 +1372,15 @@ def download_pdf(score_id: str, part: int | None = None) -> FileResponse:
     """Print the score, or one player's part."""
     folder = job_folder(score_id)
     root = current_root(folder)
-    name = "score.pdf"
+    name, saved = "score.pdf", download_name(root, ".pdf")
     if part is not None:
         try:
             root = structure.only_part(root, part)
         except edit.EditError as error:
             raise HTTPException(404, str(error)) from error
         name = f"part_{part + 1}.pdf"
+        player = " ".join((root.findtext("part-list/score-part/part-name") or "").split())
+        saved = download_name(root, f" ({player}).pdf" if player else f" (part {part + 1}).pdf")
     path = folder / name
     shown = concert.shown(root)
     # Printed as it's shown, at concert pitch if that's chosen, and with the lines the page has.
@@ -1371,7 +1388,7 @@ def download_pdf(score_id: str, part: int | None = None) -> FileResponse:
     # Shown where it opens, as Print and Parts open it in a window of its own to print from. As an
     # attachment, Chromium and the desktop app would only offer to save it. Export PDF still saves
     # it, as its link says to.
-    return FileResponse(path, media_type="application/pdf", filename=name, content_disposition_type="inline")
+    return FileResponse(path, media_type="application/pdf", filename=saved, content_disposition_type="inline")
 
 
 @app.get("/api/scores/{score_id}/thumbnail.svg")
