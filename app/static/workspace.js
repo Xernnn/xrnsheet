@@ -45,6 +45,7 @@ function setMode(mode, remember = true) {
   if (score) updateTools();
   drawMidiState();
   drawPageCount();
+  drawStart(); // An A–B loop is played from A in Practice only.
   $("libraryToggle").setAttribute("aria-pressed", String(libraryShown()));
   $("inspectorToggle").setAttribute("aria-pressed", String(inspectorShown()));
 }
