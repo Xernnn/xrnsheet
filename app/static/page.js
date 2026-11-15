@@ -138,6 +138,11 @@ function message(text) {
 
 function openScore(id) {
   forgetPlayback();
+  // What was being written or chosen belongs to the score that was open. Notes are named the same
+  // way in every score, note0, note1 and so on, so a cursor or a selection kept would land on other
+  // notes in this one, and letters typed straight away would be written there.
+  setInput(false);
+  select(null);
   foldLibrary();
   scoreId = id;
   score = null;

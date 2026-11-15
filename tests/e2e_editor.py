@@ -3147,6 +3147,27 @@ def test_library(page, base: str, created: list[str]) -> None:
     check("and shows each score as a page", page.locator(f'#historyList a[data-score="{first}"] img').count() == 1)
 
 
+def test_another_score_opened_while_writing(page, base: str, created: list[str]) -> None:
+    """A score opened from the library beside one being written in isn't written in by the old cursor."""
+    other = written_melody(page, base, created, tune="gfed")
+    before = pitched(read_notes(base, other))
+    first = written_melody(page, base, created, tune="cd")
+    page.keyboard.press("n")
+    page.keyboard.type("e", delay=0)
+    settle(page)
+    check("note input is on in the score being written", page.evaluate("() => editor.on"))
+    page.click("#libraryToggle")
+    page.click(f'#historyList a[data-score="{other}"]')
+    page.wait_for_function("id => scoreId === id && score !== null", arg=other)
+    settle(page)
+    check("another score opened from the library isn't being written in", not page.evaluate("() => editor.on") and page.get_attribute("#inputToggle", "aria-pressed") != "true", page.evaluate("() => [editor.on, editor.cursor, editor.last]"))
+    check("and nothing in it is chosen, so the inspector shows the score", page.evaluate("() => actionTarget()") is None and page.is_visible("#propScore"), page.evaluate("() => actionTarget()"))
+    page.keyboard.type("ab", delay=0)
+    settle(page)
+    check("so letters typed straight away don't write in it", pitched(read_notes(base, other)) == before, pitched(read_notes(base, other)))
+    check("and the first score kept what was written in it", pitched(read_notes(base, first)) == ["C5", "D5", "E5"], pitched(read_notes(base, first)))
+
+
 def test_inspector(page, base: str, shots: Path | None, created: list[str]) -> None:
     score_id = open_blank(page, base, created, bars=4, staff="piano")
     page.keyboard.press("5")
@@ -4991,6 +5012,7 @@ def main() -> None:
             test_the_zoom_menu_reads_in_full(page, base, created)
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
+            test_another_score_opened_while_writing(page, base, created)
             test_inspector(page, base, arguments.shots, created)
             test_a_rest_in_the_instrument_box(page, base, created)
             test_command_palette(page, base, created)
