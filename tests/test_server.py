@@ -118,6 +118,28 @@ def test_a_sheet_un_marked_is_no_longer_learnt_from(client, tmp_path, monkeypatc
     assert server.corrections.checked_sheets(server.JOB_DIR) == [other, sheet]  # Marked again, it's gathered next time.
 
 
+def test_a_checked_sheet_deleted_is_no_longer_learnt_from(client, tmp_path, monkeypatch):
+    """A deleted sheet sits in the trash, where gathering doesn't look, but what was gathered from it
+    already must come out too, as retraining reads that until it's gathered again."""
+    from test_corrections import recognized, write_sheet
+
+    out = tmp_path / "corrections"
+    monkeypatch.setattr(server.corrections, "OUT_DIR", out)
+    sheet = write_sheet(server.JOB_DIR, "f" * 32, [recognized(0, 0.0, "C")], ["D"])
+    other = write_sheet(server.JOB_DIR, "e" * 32, [recognized(0, 0.0, "F")], ["G"], upload=b"other")
+    for folder in (sheet, other):
+        server.write_status(folder, "ready")
+        (folder / "recognized" / "pages.json").write_text("[1]")
+    server.corrections.export(server.JOB_DIR, out)
+    gathered = {row["sheet"]: row["image"] for row in server.corrections.load_labels(out)}
+    assert client.delete(f"/api/scores/{sheet.name}").json()["undo"] is True
+    assert [row["sheet"] for row in server.corrections.load_labels(out)] == [other.name]
+    assert not (out / gathered[sheet.name]).exists() and (out / gathered[other.name]).exists()
+    assert server.corrections.checked_sheets(server.JOB_DIR) == [other]
+    assert client.post(f"/api/scores/{sheet.name}/restore").status_code == 200
+    assert server.corrections.checked_sheets(server.JOB_DIR) == [other, sheet]  # Back, and still checked, it's gathered next time.
+
+
 def test_a_sheet_still_reading_cannot_be_checked(client):
     score_id = "c" * 32
     folder = server.JOB_DIR / score_id

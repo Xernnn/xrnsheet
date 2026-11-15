@@ -1007,6 +1007,9 @@ def remove_sheet(score_id: str) -> dict:
             shutil.rmtree(trash / score_id, ignore_errors=True)
             os.replace(folder, trash / score_id)
             os.utime(trash / score_id)  # When it was deleted, which the trash is emptied by.
+        # Gathering corrections doesn't look in the trash, but retraining reads what was gathered last,
+        # which would still teach a deleted sheet's chords as right. Brought back, it's gathered again.
+        corrections.forget(score_id, corrections.OUT_DIR)
     empty_trash()
     return {"removed": score_id, "undo": True}
 
