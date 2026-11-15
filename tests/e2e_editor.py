@@ -425,6 +425,40 @@ def test_the_ghost_keeps_up_with_the_page(page, base: str, created: list[str]) -
     settle(page)
 
 
+def ghost_is_current(page) -> bool:
+    """Say whether the ghost shows what it would if drawn afresh where the pointer is."""
+    return page.evaluate("() => { const shown = [$('ghost').hidden, $('ghost').dataset.voice, $('ghost').innerHTML]; drawGhost(pointer.x, pointer.y, pointer.shift); return JSON.stringify(shown) === JSON.stringify([$('ghost').hidden, $('ghost').dataset.voice, $('ghost').innerHTML]); }")
+
+
+def test_a_click_writes_what_the_ghost_shows(page, base: str, created: list[str]) -> None:
+    """One rule: a click writes exactly the note the ghost shows, and where it shows none, nothing."""
+    score_id = open_blank(page, base, created, staff="piano")
+    page.keyboard.press("Escape")
+    settle(page)
+    x, y = staff_point(page, page.evaluate("() => document.querySelector('#pages g.staff g.mRest, #pages g.staff g.rest').id"), 6)
+    page.mouse.move(x, y)
+    page.keyboard.press("n")
+    settle(page)
+    check("starting note input with the pointer on the staff shows the ghost there at once", page.is_visible("#ghost") and page.inner_text("#ghost .tag").startswith("G4 · bar 1, beat 1"), page.is_visible("#ghost"))
+    page.keyboard.press("6")
+    settle(page)
+    check("a new length shows on the ghost before the pointer moves", ghost_is_current(page))
+    page.keyboard.press("Control+Alt+2")
+    settle(page)
+    check("and a new voice in its colour", page.get_attribute("#ghost", "data-voice") == "2" and ghost_is_current(page), page.get_attribute("#ghost", "data-voice"))
+    shown, written = ghost_and_click(page)
+    detail = page.evaluate("() => { const note = document.getElementById(editor.last); return [score.notes[note.id][3], layerNumber(note) + 1]; }") if written else None
+    check("and a click writes that note, in that length and voice", shown is not None and shown == written and detail == ["half", 2], (shown, written, detail))
+    # Well beyond five ledger lines above the top staff, where only the title is.
+    lines = page.evaluate("() => { const lines = staffLines(document.querySelector('#pages g.staff')); return [lines.left + 40, lines.top, lines.step]; }")
+    page.mouse.move(lines[0], lines[1] - lines[2] * 13)
+    before = read_notes(base, score_id)
+    shown, written = ghost_and_click(page)
+    check("far from any staff no ghost shows, and a click writes nothing", shown is None and written is None and read_notes(base, score_id) == before, (shown, written))
+    page.keyboard.press("Escape")
+    settle(page)
+
+
 def test_end_of_score(page, base: str, created: list[str]) -> None:
     score_id = open_blank(page, base, created, bars=1)
     page.keyboard.press("5")
@@ -4558,6 +4592,7 @@ def main() -> None:
             test_clicking_notes(page, base, arguments.shots, created)
             test_writing_with_the_mouse(page, base, arguments.shots, created)
             test_the_ghost_keeps_up_with_the_page(page, base, created)
+            test_a_click_writes_what_the_ghost_shows(page, base, created)
             test_end_of_score(page, base, created)
             test_quick_keys(page, base, created)
             test_triplets(page, base, created)

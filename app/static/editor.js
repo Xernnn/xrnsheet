@@ -43,6 +43,7 @@ let hint = "";
 let dragged = false;
 let drag = null;
 let pointer = null; // Where the mouse is over the pages, so the ghost note is drawn again when they are.
+let ghostSpot = null; // Where the ghost note is, and so what a click writes: nothing while none shows.
 let lastMidiKey = 0;
 let midiAsked = false;
 
@@ -246,6 +247,8 @@ function updateTools() {
   markTimeline();
   if (dockOpen("instrument")) $("trayNote").textContent = trayNote();
   $("trayNote").classList.toggle("writing", editor.on && !practice.follower);
+  // Note input turned on, or another length or voice chosen, changes the ghost under a still pointer.
+  redrawGhost();
 }
 
 function staffLines(staff) {
@@ -636,6 +639,7 @@ function noteheadAt(x, y) {
 
 function hideGhost() {
   $("ghost").hidden = true;
+  ghostSpot = null;
   document.querySelectorAll("#pages .replacing, #pages .picked").forEach(element => element.classList.remove("replacing", "picked"));
 }
 
@@ -698,6 +702,7 @@ function drawGhost(x, y, shift = false) {
     ghost.querySelector(".tag").textContent = [`${noteName(pitchAtFret(spot.part, spot.string, 0))}, string ${spot.string} open: type its fret`, whenOf(target)].filter(Boolean).join(" · ");
     Object.assign(ghost.style, { width: `${width}px`, height: `${height}px`, left: `${spot.x - width / 2 - frame.left}px`, top: `${spot.y - height / 2 - frame.top}px` });
     ghost.hidden = false;
+    ghostSpot = spot;
     return;
   }
   const pitch = pitchAtLine(target, spot.line);
@@ -710,6 +715,7 @@ function drawGhost(x, y, shift = false) {
   const label = [stacking ? `+ ${pitch?.name ?? ""} to the chord` : pitch?.name, when, names.length ? `replaces ${names.join(" ")}` : ""].filter(Boolean).join(" · ");
   const box = headBox(target);
   paintGhost({ lines: spot.lines, line: spot.line, x: spot.x, type: editor.type, dots: editor.dots, voice: editor.voice, label, band: { left: box.left - 3, width: box.width + 6 } });
+  ghostSpot = spot;
 }
 
 // A note clicked while writing becomes the one the tools act on, as a note just written is: the
