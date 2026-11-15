@@ -438,7 +438,7 @@ function drawBarChecks() {
   const chips = checks.slice(0, 40).map(check => {
     const chip = document.createElement("button");
     chip.className = "chip";
-    chip.textContent = `Bar ${check.measure + 1}: ${check.problem === "long" ? "too many beats" : "too few beats"}`;
+    chip.textContent = `Bar ${measureFacts(check.measure).number}: ${check.problem === "long" ? "too many beats" : "too few beats"}`;
     chip.addEventListener("click", () => enqueue(async () => {
       if (editor.on) moveCursor(check.note); else select(check.note);
       document.getElementById(check.note)?.scrollIntoView({ block: "center" });

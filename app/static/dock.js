@@ -183,7 +183,8 @@ function drawTimeline() {
     if (text) { found.textContent = text; found.title = text; }
     return found;
   };
-  const numbers = line.measures.map((measure, index) => cell(index, 0, index === 0 || (index + 1) % 5 === 0 ? String(index + 1) : ""));
+  // Numbered as the page numbers them, from 0 after a pickup: the first, and every fifth.
+  const numbers = line.measures.map((measure, index) => cell(index, 0, index === 0 || Number(measure.number) % 5 === 0 ? measure.number : ""));
   const rows = [row("", numbers, "numbers")];
   for (const [key, label] of TIMELINE_ROWS) rows.push(row(label, line.measures.map((measure, index) => cell(index, 0, measure[key])), "meta"));
   line.parts.forEach((filled, part) => {

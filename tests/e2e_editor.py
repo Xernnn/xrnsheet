@@ -2131,6 +2131,38 @@ def test_pickup(page, base: str, created: list[str]) -> None:
     settle(page)
 
 
+def test_measures_numbered_as_the_page_numbers_them(page, base: str, created: list[str]) -> None:
+    """After a pickup, the counter, the timeline and the bar checks number the measures as the page does, from 0."""
+    score_id = open_blank(page, base, created, bars=8)
+    page.select_option("#pickupChoice", "4")
+    settle(page)
+    page.keyboard.press("5")
+    page.keyboard.type("g" + "cdef" * 3, delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    click_on(page, page.locator("#pages g.note").nth(9))
+    settle(page)
+    page.wait_for_function("() => playState.data?.events?.[plainId(selected)] && $('beatCounter').value !== '1.1'")
+    check("a note in the measure the inspector calls 3 is in measure 3 by the counter too", (page.inner_text("#propMeasureName"), page.input_value("#beatCounter")) == ("Measure 3", "3.1"), (page.inner_text("#propMeasureName"), page.input_value("#beatCounter")))
+    page.fill("#beatCounter", "2.1")
+    page.keyboard.press("Enter")
+    check("and measure 2 typed in goes to the measure numbered 2, a pickup and a bar in", page.input_value("#timeCounter") == "00:00:03.0", page.input_value("#timeCounter"))
+    page.keyboard.press("F12")
+    numbers = page.evaluate("() => [...document.querySelectorAll('#timelineGrid .row.numbers .cell')].map((cell, index) => [index, cell.textContent]).filter(([, text]) => text)")
+    check("the timeline numbers its columns so too, the pickup 0", numbers == [[0, "0"], [5, "5"]], numbers)
+    page.keyboard.press("F12")
+    click_on(page, page.locator("#pages g.note").nth(5))
+    settle(page)
+    choose(page, "time:3/4")
+    settle(page)
+    chip = page.locator("#barChecks .chip").first.inner_text()
+    check("and a bar check names the measure the page numbers", chip.startswith("Bar 2:"), chip)
+    page.keyboard.press("Control+z")
+    settle(page)
+    page.keyboard.press("Escape")
+
+
 def test_audio_file(page, base: str, created: list[str]) -> None:
     written_melody(page, base, created, bars=2, tune="cdef")
     with page.expect_download() as download:
@@ -5049,6 +5081,7 @@ def main() -> None:
             test_tuplets_and_verses(page, base, arguments.shots, created)
             test_instrument_sounds(page, base, created)
             test_pickup(page, base, created)
+            test_measures_numbered_as_the_page_numbers_them(page, base, created)
             test_audio_file(page, base, created)
             test_piano_sound(context, base, created)
             test_held_keys(context, base, created)
