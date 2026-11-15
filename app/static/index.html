@@ -460,6 +460,17 @@
   </form>
 </dialog>
 
+<dialog id="checkedDialog" aria-labelledby="checkedTitle">
+  <form method="dialog">
+    <h2 id="checkedTitle">Mark as checked with things still listed?</h2>
+    <div class="content" style="max-width: 480px">
+      <div id="checkedWhat"></div>
+      <div>A checked sheet's chords are taught to the chord reader as right, so a chord still wrong would be learnt wrong. You can un-mark it later with the same button.</div>
+    </div>
+    <div class="buttons"><button type="submit" value="mark" id="checkedAnyway">Mark as checked anyway</button><button type="submit" value="back" class="primary" autofocus>Go back and check</button></div>
+  </form>
+</dialog>
+
 <dialog id="aboutDialog" aria-labelledby="aboutTitle">
   <form method="dialog">
     <h2 id="aboutTitle">About xrnsheet</h2>

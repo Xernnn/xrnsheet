@@ -267,6 +267,7 @@ function menuList() {
       { label: "Close", enabled: open, run: closeScore },
       null,
       { label: "Title and composer…", enabled: open, run: openProject },
+      { label: "Checked, for retraining", checked: open && Boolean(score.checked), enabled: open && !score.blank, run: markChecked },
       { label: "Parts…", enabled: open, run: openParts },
       null,
       { label: "Export", enabled: open, items: [

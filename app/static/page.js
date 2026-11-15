@@ -451,6 +451,7 @@ function draw() {
   $("redo").disabled = !score.canRedo;
   $("checked").textContent = score.checked ? "Checked ✓" : "Mark as checked";
   $("checked").classList.toggle("done", score.checked);
+  $("checked").title = score.checked ? "Checked: its chords are learnt from as right. Press to un-mark it, so they aren't." : "Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.";
   const shown = [...document.querySelectorAll("#pages g.harm")];
   score.chords.forEach((chord, index) => {
     const element = shown[index];
@@ -965,7 +966,8 @@ function setUpPage() {
   });
   $("desk").addEventListener("scroll", () => { if (!$("editor").hidden && document.activeElement !== $("chordInput")) closeEditor(); });
   $("undo").addEventListener("click", () => undoEdit());
-  $("checked").addEventListener("click", () => enqueue(() => send("checked", { checked: !score.checked })));
+  $("checked").addEventListener("click", markChecked);
+  $("checkedDialog").addEventListener("close", () => { if ($("checkedDialog").returnValue === "mark") setChecked(true); });
   for (const id of ["file", "camera"]) {
     // Cleared afterwards, so choosing the same file again still counts as a choice.
     $(id).addEventListener("change", event => { upload(event.target.files[0]); event.target.value = ""; });
@@ -987,6 +989,32 @@ function setUpPage() {
   $("brand").addEventListener("click", goHome);
   $("toastClose").addEventListener("click", hideToast);
   setInterval(tickReading, 1000);
+}
+
+// A checked sheet is learnt from as right, so marking one with chords or bars still listed to check
+// asks first, saying how many, and either way can be undone at once or un-marked later.
+function stillListed() {
+  const chords = score.chords.filter(chord => chord.confidence !== null && chord.confidence < UNSURE_BELOW).length;
+  const bars = (score.barChecks ?? []).length;
+  const counted = [chords && `${chords} ${chords === 1 ? "chord" : "chords"}`, bars && `${bars} ${bars === 1 ? "bar" : "bars"}`].filter(Boolean);
+  return counted.length ? `${counted.join(" and ")} ${chords + bars === 1 ? "is" : "are"} still listed to check.` : "";
+}
+
+function markChecked() {
+  if (!score) return;
+  if (score.checked) { setChecked(false); return; }
+  const listed = stillListed();
+  if (!listed) { setChecked(true); return; }
+  $("checkedWhat").textContent = listed;
+  $("checkedDialog").returnValue = "";
+  $("checkedDialog").showModal();
+}
+
+function setChecked(on) {
+  return enqueue(async () => {
+    await send("checked", { checked: on });
+    toast(on ? "Marked as checked: its chords will be learnt from." : "No longer marked as checked, so it won't be learnt from.", { label: "Undo", run: () => setChecked(!on) });
+  });
 }
 
 // The logo, and Library where a sheet is being read, go back to the library. Whatever was open is

@@ -5192,6 +5192,45 @@ def test_the_original_sheet(page, base: str, shots: Path | None, created: list[s
     page.evaluate("() => { keepSetting('originalHeight', ''); originalRoom(''); }")
 
 
+def test_marking_checked_with_things_still_listed(page, base: str, created: list[str]) -> None:
+    """Mark as checked was taken at once with 13 chords and 21 bars still listed, and a checked sheet's
+    chords are taught to the chord reader as right, so an early press taught wrong chords as confirmed."""
+    page.goto(base)
+    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.wait_for_selector("#pages svg", timeout=120000)
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    first = page.evaluate("() => score.places && Object.keys(score.places)[0]")
+    post_json(base, f"/api/scores/{score_id}/bars", {"action": "time", "note": first, "beats": 3, "beat_type": 4})  # Bars that no longer add up.
+    page.evaluate("id => openScore(id)", score_id)
+    page.wait_for_selector("#pages svg")
+    data = json.loads(fetch_text(base, f"/api/scores/{score_id}"))
+    chords = sum(chord["confidence"] is not None and chord["confidence"] < 0.8 for chord in data["chords"])
+    bars = len(data["barChecks"])
+    checked = lambda: json.loads(fetch_text(base, f"/api/scores/{score_id}"))["checked"]
+    page.click("#checked")
+    said = page.inner_text("#checkedWhat") if page.is_visible("#checkedDialog") else None
+    check("with chords and bars still listed, Mark as checked asks first, saying how many", chords > 0 and bars > 0 and said == f"{chords} chords and {bars} bars are still listed to check.", said)
+    page.click('#checkedDialog button[value="back"]')
+    settle(page)
+    check("going back leaves it unchecked", checked() is False and page.inner_text("#checked") == "Mark as checked")
+    page.click("#checked")
+    page.click("#checkedAnyway")
+    settle(page)
+    check("it can be marked anyway", checked() is True and page.inner_text("#checked") == "Checked ✓")
+    check("and says so, with Undo", "Marked as checked" in page.inner_text("#toastText") and page.inner_text("#toastAction") == "Undo")
+    page.click("#toastAction")
+    settle(page)
+    check("which un-marks it", checked() is False and page.inner_text("#checked") == "Mark as checked")
+    page.click("#checked")
+    page.click("#checkedAnyway")
+    settle(page)
+    check("the File menu says it's checked", menu_ticked(page, "File", "Checked, for retraining") == "true")
+    page.click("#checked")
+    settle(page)
+    check("and it can be un-marked later with the same button", checked() is False and "No longer marked" in page.inner_text("#toastText"))
+
+
 def head_point(page, element_id: str) -> tuple[float, float]:
     """The middle of a note's head, where a mouse aims."""
     box = page.evaluate("""id => {
@@ -5488,6 +5527,7 @@ def main() -> None:
             test_phone(context, base, arguments.shots, created)
             test_reading_leaves_the_window_free(page, arguments.shots)
             test_the_original_sheet(page, base, arguments.shots, created)
+            test_marking_checked_with_things_still_listed(page, base, created)
             test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])
             browser.close()

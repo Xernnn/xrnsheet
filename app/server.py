@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from chords import corrections
 from chords.fonts import ROOT
 from pipeline import align, concert, diagrams, edit, fretted, layout, marks, mixer, structure, technique, transpose
 from pipeline.engrave import VIEWS, export_pdf, glyph_script, keep_lines, page_size, render_pages, system_starts
@@ -1079,7 +1080,10 @@ def mark_checked(score_id: str, body: CheckedMark) -> dict:
     if body.checked:
         path.write_text(json.dumps({"checked_at": time.time()}), encoding="utf-8")
     else:
+        # Un-marked, it's no longer learnt from: gathering corrections takes only checked sheets, and
+        # what was gathered from it already is taken out, as retraining reads that.
         path.unlink(missing_ok=True)
+        corrections.forget(score_id, corrections.OUT_DIR)
     return describe(folder, read_status(folder))
 
 
