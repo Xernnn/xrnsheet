@@ -33,16 +33,25 @@ const SAMPLE_SETS = {
   viola: { name: "viola", folder: "sounds/viola", type: "flac", level: 4.2, sustain: 0.5, notes: [[48, 0, -1], [52, 0, 1], [55], [59, 0, -2], [65], [69, 0, -5], [76], [83, 0, 2]] },
   cello: { name: "cello", folder: "sounds/cello", type: "flac", level: 4.6, sustain: 0.5, notes: [[36, 7, -1], [39, 0, -3], [42, -6, -1], [45, 0, -2], [48, 0, -3], [51, 0, -3], [54, 0, 1], [60, 0, 1], [66, 0, 5], [72, 0, 1], [78, 0, 5], [84, 7, 3]] },
   doubleBass: { name: "double bass", folder: "sounds/double-bass", type: "flac", level: 9.6, sustain: 0.5, notes: [[30, 0, 2], [34, 15, -4], [38], [42, 0, 1], [45, 0, -9], [49, 0, 3], [52, 0, 2], [56, 0, -3], [59, 0, -8]] },
+  // The same instruments plucked, for pizz. until arco: VSCO 2's violin and violas, Karoryfer's
+  // cello, and its Meatbass for the double bass (see their READMEs).
+  violinPizzicato: { name: "violin", folder: "sounds/violin/pizzicato", type: "flac", level: 6.4, notes: [[55, -10, 12], [60, -20, -5], [64, -15, 7], [67, -12, 1], [72, 0, -6], [76, 6, -1], [81, 0, -5], [93, 0, 6]] },
+  violaPizzicato: { name: "viola", folder: "sounds/viola/pizzicato", type: "flac", level: 4.9, notes: [[48, -7, 1], [52, 0, 2], [55], [62, 0, -4], [69], [79, -5, -6]] },
+  celloPizzicato: { name: "cello", folder: "sounds/cello/pizzicato", type: "flac", level: 4.2, notes: [[36], [42, -10, -1], [48, -11], [54, 11], [60, 0, 3], [66, 0, -5], [72, 0, -2]] },
+  doubleBassPizzicato: { name: "double bass", folder: "sounds/double-bass/pizzicato", type: "flac", level: 1.8, notes: [[27, -17, -2], [30, 0, 2], [33, 0, -1], [39, 8, -1], [45, -6], [54, 0, 3], [60, -11, 2]] },
 };
+for (const name of ["violin", "viola", "cello", "doubleBass"]) SAMPLE_SETS[name].pizzicato = SAMPLE_SETS[`${name}Pizzicato`];
 // General MIDI's families by their first sound: the pianos (1 to 8), the guitars (25 to 32) and the
 // basses (33 to 40).
 const SAMPLED_FAMILIES = { 0: SAMPLE_SETS.piano, 3: SAMPLE_SETS.guitar, 4: SAMPLE_SETS.bassGuitar };
 // And its bowed strings, sound by sound: a violin, a viola, a cello and a double bass (41 to 44)
-// each their own, and the tremolo strings (45) and the two string ensembles (49 and 50) each note on
-// the instrument whose range it's in, as a section shares its music out. A harp (47), the timpani
-// (48) and the synthesizers' strings keep their stand-ins.
+// each their own, and the tremolo strings (45), the pizzicato strings (46) and the two string
+// ensembles (49 and 50) each note on the instrument whose range it's in, as a section shares its
+// music out. A harp (47), the timpani (48) and the synthesizers' strings keep their stand-ins.
 const BOWED_SOUNDS = { 41: SAMPLE_SETS.violin, 42: SAMPLE_SETS.viola, 43: SAMPLE_SETS.cello, 44: SAMPLE_SETS.doubleBass };
-const SECTION_SOUNDS = new Set([45, 49, 50]);
+const SECTION_SOUNDS = new Set([45, 46, 49, 50]);
+// A bowed part's note marked pizz., until arco, comes as General MIDI's pizzicato strings.
+const PIZZICATO_SOUND = 46;
 // A bowed note going round its recording again crosses from its end back to its steady part this long.
 const BOW_CROSSFADE_SECONDS = 0.2;
 // Chord symbols are played softly under the music on the piano, the usual accompaniment, or on the
@@ -294,10 +303,13 @@ function clockFor(data, speed) {
   return clock;
 }
 
+// A note's sound. One plucked, pizz. until arco, plays its bowed instrument's pizzicato recordings,
+// or its stand-in's short note without them.
 function soundOf(data, note) {
   const program = data.programs?.[note.part] ?? 1;
   const standIn = FAMILY_SOUNDS[Math.floor((program - 1) / 8)] ?? USUAL_SOUND;
-  const samples = samplesOf(data, note.part ?? 0, note.midi);
+  const part = samplesOf(data, note.part ?? 0, note.midi);
+  const samples = note.program === PIZZICATO_SOUND ? part?.pizzicato ?? part : part;
   return samples ? { ...standIn, samples } : standIn; // The stand-in is what it plays if its recordings can't be had.
 }
 
@@ -307,7 +319,7 @@ function soundOf(data, note) {
 function samplesOf(data, part, midi) {
   const program = data.programs?.[part] ?? 1;
   if (program === 1 && kindOfPart(part) !== "piano") return null;
-  if (SECTION_SOUNDS.has(program)) return sectionAt(midi);
+  if (SECTION_SOUNDS.has(program)) return program === PIZZICATO_SOUND ? sectionAt(midi).pizzicato : sectionAt(midi);
   return BOWED_SOUNDS[program] ?? SAMPLED_FAMILIES[Math.floor((program - 1) / 8)] ?? null;
 }
 

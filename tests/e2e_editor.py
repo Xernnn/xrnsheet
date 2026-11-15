@@ -2457,6 +2457,42 @@ def test_bowed_sound(context, base: str, created: list[str]) -> None:
     page.close()
 
 
+def test_pizzicato_sound(context, base: str, created: list[str]) -> None:
+    """A violin's half note plucked, pizz., then one bowed again, arco, at 40 a minute."""
+    page = context.new_page()
+    score_id = open_blank(page, base, created, bars=1, staff="violin")
+    page.keyboard.press("6")
+    page.keyboard.type("aa", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    select_notes(page, 0)
+    menu(page, "Add", "Text", "Tempo marking")
+    page.fill("#chordInput", "40")
+    page.keyboard.press("Enter")
+    settle(page)
+    notes = [note.get("id") for note in own_notes(saved_score(base, score_id))]
+    marks_api(base, score_id, {"action": "pizzicato", "notes": notes[:1], "on": True})
+    marks_api(base, score_id, {"action": "pizzicato", "notes": notes[1:], "on": False})
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    if page.evaluate("() => playState.metronome"):
+        page.click("#metronome")
+    data = json.loads(fetch_text(base, f"/api/scores/{score_id}/playback"))
+    check("the first note is plucked and the second bowed", [note.get("program") for note in data["notes"]] == [46, None], data["notes"])
+    rate, samples = exported(page)
+    plucked, after = loudness(samples, rate, 0, 0.2), loudness(samples, rate, 0.45, 0.7)
+    # The sawtooth it had was still seven tenths as loud as it ended.
+    check("exported, the pizz. note is plucked: it dies away at once", max(abs(sample) for sample in samples[: int(rate * 0.2) * 2]) > 3000 and plucked > 4 * after, (round(plucked), round(after)))
+    bowing, held = loudness(samples, rate, 3.5, 4.0), loudness(samples, rate, 5.0, 5.9)
+    check("and the arco note after it is bowed, held to its end", held > 0.6 * bowing, (round(bowing), round(held)))
+    made = played(page)
+    check("Play sounds both from recordings, with no oscillator", made["recordings"] >= 2 and made["oscillators"] == 0, made)
+    heard = page.evaluate("() => [...recordings.buffers.keys()].filter(url => url.includes('violin')).map(url => url.includes('/pizzicato/') ? 'plucked' : 'bowed').sort()")
+    check("the violin's plucked recordings for pizz. and its bowed ones for arco", heard == ["bowed", "plucked"], heard)
+    page.close()
+
+
 def mixer_strip(page, name: str):
     return page.locator(f'#mixerStrips .strip:has(.name:text-is("{name}"))')
 
@@ -5095,6 +5131,7 @@ def main() -> None:
             test_piano_sound(context, base, created)
             test_guitar_sound(context, base, created)
             test_bowed_sound(context, base, created)
+            test_pizzicato_sound(context, base, created)
             test_held_keys(context, base, created)
             test_mixer(page, base, arguments.shots, created)
             test_piano_keyboard(page, base, arguments.shots, created)
