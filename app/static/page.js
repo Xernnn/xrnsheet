@@ -86,7 +86,7 @@ function tileFor(sheet) {
   state.className = "state";
   const made = sheet.opened ? "opened from a file" : sheet.blank ? "written here" : `read from ${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.checked ? "checked" : "not checked"}`;
   state.textContent = `${when} · ${made}`;
-  link.title = `${name.textContent}, ${state.textContent}`;
+  link.title = `${name.textContent}${sheet.composer ? `, by ${sheet.composer}` : ""}, ${state.textContent}`;
   link.append(picture, name, state);
   return link;
 }
@@ -106,7 +106,7 @@ function refreshTile() {
     const now = Date.now() / 1000;
     tile.querySelector("img").src = `/api/scores/${id}/thumbnail.svg?${now}`;
     const sheet = sheets.find(item => item.id === id);
-    if (sheet) { sheet.saved = now; sheet.title = score?.title ?? sheet.title; }
+    if (sheet) { sheet.saved = now; sheet.title = score?.title ?? sheet.title; sheet.composer = score?.composer ?? sheet.composer; }
     const state = tile.querySelector(".state");
     if (sheet && state) state.textContent = tileFor(sheet).querySelector(".state").textContent;
   }, TILE_DELAY_MS);
@@ -119,9 +119,13 @@ function drawTiles() {
   create.id = "newTile";
   create.innerHTML = `<span class="sheet">${icon("plus")}</span><span class="name">New score</span><span class="state">Piano, guitar, violin or anything</span>`;
   create.addEventListener("click", openNewScore);
-  const shown = sheets.filter(sheet => !wanted || (sheet.title || "Untitled score").toLowerCase().includes(wanted));
+  // A score is found by its title or by who wrote it, as a musician asks for "the Joplin".
+  const shown = sheets.filter(sheet => !wanted || `${sheet.title || "Untitled score"} ${sheet.composer ?? ""}`.toLowerCase().includes(wanted));
   $("historyList").replaceChildren(...(wanted ? [] : [create]), ...shown.map(tileFor));
   $("libraryEmpty").hidden = sheets.length > 0;
+  // A search that finds nothing says so, rather than leaving an empty space that looks like no library.
+  $("libraryNone").hidden = !wanted || shown.length > 0 || !sheets.length;
+  $("libraryNone").textContent = `No score in your library is called “${$("homeSearch").value.trim()}” or is by anyone of that name.`;
 }
 
 async function drawHistory() {

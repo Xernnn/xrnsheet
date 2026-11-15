@@ -148,6 +148,7 @@ body.atHome #libraryClose { display: none; }
 #newTile .sheet { border-style: dashed; background: transparent; }
 .libraryFoot { margin: 0; color: var(--faint); font-size: 12px; }
 #libraryEmpty { padding: 24px 6px; color: var(--muted); }
+#libraryNone { margin: 0; padding: 12px 6px; color: var(--muted); }
 #libraryEmpty h3 { color: var(--ink); font-size: 18px; margin-bottom: 6px; }
 body.dropping #library { outline: 2px dashed var(--accent); outline-offset: -6px; }
 /* With nothing open the library is the window: the scores as pages, large enough to know them by. */

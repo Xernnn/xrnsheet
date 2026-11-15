@@ -3179,6 +3179,31 @@ def test_library(page, base: str, created: list[str]) -> None:
     check("and shows each score as a page", page.locator(f'#historyList a[data-score="{first}"] img').count() == 1)
 
 
+def test_library_search_by_composer(page, base: str, created: list[str]) -> None:
+    """The library finds a score by who wrote it, and says when a search finds nothing."""
+    score_id = written_melody(page, base, created, tune="cdef")
+    menu(page, "File", "Title and composer…")
+    page.fill("#titleInput", "Library Rag")
+    page.fill("#composerInput", "Scottie Joplinson")
+    page.click("#projectDialog button[type=submit]")
+    settle(page)
+    page.click("#libraryToggle")
+    page.fill("#homeSearch", "joplinson")
+    page.wait_for_timeout(100)
+    found = page.locator("#historyList a").evaluate_all("tiles => tiles.map(tile => tile.dataset.score)")
+    check("its search finds a score by its composer", score_id in found and page.is_hidden("#libraryNone"), found)
+    tooltip = page.evaluate("id => document.querySelector(`#historyList a[data-score='${id}']`)?.title ?? ''", score_id)
+    check("whose picture names the composer when pointed at", "by Scottie Joplinson" in tooltip, tooltip)
+    page.fill("#homeSearch", "nothing is called this")
+    page.wait_for_timeout(100)
+    said = page.evaluate("() => document.getElementById('libraryNone')?.hidden === false ? document.getElementById('libraryNone').textContent : ''")
+    check("a search that finds nothing says so", page.locator("#historyList a").count() == 0 and "nothing is called this" in said, said)
+    page.fill("#homeSearch", "")
+    page.wait_for_timeout(100)
+    check("and says nothing once the search is cleared", page.is_hidden("#libraryNone"))
+    page.click("#libraryClose")
+
+
 def test_another_score_opened_while_writing(page, base: str, created: list[str]) -> None:
     """A score opened from the library beside one being written in isn't written in by the old cursor."""
     other = written_melody(page, base, created, tune="gfed")
@@ -5101,6 +5126,7 @@ def main() -> None:
             test_the_zoom_menu_reads_in_full(page, base, created)
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
+            test_library_search_by_composer(page, base, created)
             test_another_score_opened_while_writing(page, base, created)
             test_a_score_opens_at_its_start(page, base, created)
             test_inspector(page, base, arguments.shots, created)

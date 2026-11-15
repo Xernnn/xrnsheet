@@ -838,8 +838,7 @@ def list_scores() -> list[dict]:
                 "checked": (folder / "checked.json").exists(),
                 "blank": not (folder / "recognized").exists(),
                 "opened": opened_from_file(folder),
-                "title": structure.title_of(current_root(folder))["title"],
-            })
+            } | structure.title_of(current_root(folder)))
         except (OSError, ValueError, TypeError, KeyError, IndexError, ET.ParseError) as error:
             print(f"left an unreadable sheet out of the list, {folder.name}: {error!r}", file=sys.stderr)
     return sorted(found, key=lambda item: item["saved"], reverse=True)
