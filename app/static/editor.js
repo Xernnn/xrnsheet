@@ -448,11 +448,19 @@ function drawBarChecks() {
   $("barChecks").replaceChildren(...chips, ...fretChips());
 }
 
+// A file saved from the score is named after its title, as the server names the ones it sends, so
+// each score's files can be told apart in a folder: "Maple Leaf Rag.wav", or "score.wav" untitled.
+function savedName(extension) {
+  const title = (score?.title ?? "").replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").split(/\s+/).join(" ").slice(0, 100).replace(/^[\s.]+|[\s.]+$/g, "");
+  return `${title || "score"}${extension}`;
+}
+
 function drawTitle() {
   $("scoreName").textContent = score.title || "Untitled score";
   $("scoreName").title = `${[score.title || "Untitled score", score.composer].filter(Boolean).join(", ")}. Click to change the title and composer`;
   fitTopBar();
   document.title = score.title ? `${score.title} - xrnsheet` : "xrnsheet";
+  $("pdfSave").download = savedName(".pdf");
   const tile = document.querySelector(`#historyList a[data-score="${scoreId}"] .name`);
   if (tile) tile.textContent = score.title || "Untitled score";
   // The inspector's fields, unless they're being typed in.

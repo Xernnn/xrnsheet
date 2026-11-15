@@ -2163,6 +2163,25 @@ def test_measures_numbered_as_the_page_numbers_them(page, base: str, created: li
     page.keyboard.press("Escape")
 
 
+def test_files_saved_are_named_after_the_score(page, base: str, created: list[str]) -> None:
+    """A file saved from a score is named after its title, so two scores' PDFs aren't score.pdf and score (1).pdf."""
+    score_id = written_melody(page, base, created, bars=2, tune="cdef")
+    menu(page, "File", "Title and composer…")
+    page.fill("#titleInput", "Étude: Day/Night")
+    page.click("#projectDialog button[type=submit]")
+    settle(page)
+    said = {}
+    for kind in ("score.musicxml", "score.mid", "score.pdf", "score.pdf?part=0"):
+        with urllib.request.urlopen(f"{base}/api/scores/{score_id}/{kind}") as response:
+            said[kind] = response.headers.get("Content-Disposition", "")
+    check("MusicXML and MIDI are saved under the title, without the characters a file name can't have", "filename*=UTF-8''%C3%89tude%20Day%20Night.musicxml" in said["score.musicxml"] and "Night.mid" in said["score.mid"], said)
+    check("and so are the PDF and a part's, which names its instrument", "%C3%89tude%20Day%20Night.pdf" in said["score.pdf"] and "Night%20%28" in said["score.pdf?part=0"], said)
+    check("Export PDF saves it under the title too", page.get_attribute("#pdfSave", "download") == "Étude Day Night.pdf", page.get_attribute("#pdfSave", "download"))
+    with page.expect_download() as download:
+        menu(page, "File", "Export", "Audio (WAV)")
+    check("and the audio file", download.value.suggested_filename == "Étude Day Night.wav", download.value.suggested_filename)
+
+
 def test_audio_file(page, base: str, created: list[str]) -> None:
     written_melody(page, base, created, bars=2, tune="cdef")
     with page.expect_download() as download:
@@ -5186,6 +5205,7 @@ def main() -> None:
             test_pickup(page, base, created)
             test_measures_numbered_as_the_page_numbers_them(page, base, created)
             test_audio_file(page, base, created)
+            test_files_saved_are_named_after_the_score(page, base, created)
             test_piano_sound(context, base, created)
             test_held_keys(context, base, created)
             test_mixer(page, base, arguments.shots, created)

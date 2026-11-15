@@ -373,7 +373,7 @@ function saveAudio() {
     const rendered = await audio.startRendering();
     const link = document.createElement("a");
     link.href = URL.createObjectURL(wavFile([rendered.getChannelData(0), rendered.getChannelData(1)], AUDIO_RATE));
-    link.download = "score.wav";
+    link.download = savedName(".wav");
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   });
