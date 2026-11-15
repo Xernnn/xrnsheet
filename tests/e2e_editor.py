@@ -2576,7 +2576,7 @@ def test_modes(page, base: str, shots: Path | None, created: list[str]) -> None:
     show_instrument(page)
     page.click('#modeSwitch [data-mode="read"]')
     check("Read puts away the note input, the inspector, the library and the instrument", all(page.is_hidden(name) for name in ("#noteBar", "#inspector", "#library", "#dock", "#practiceBar")))
-    check("and fits the music to the window's width, larger than in Write", page.input_value("#zoomChoice") == "width" and page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step * 2") > 11, page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step * 2"))
+    check("and fits the music to the window's width, up to one and a half times its printed size", page.input_value("#zoomChoice") == "width" and abs(zoom_factor(page) - 1.5) < 0.01, zoom_factor(page))
     top = page.evaluate("() => $('desk').scrollTop")
     page.keyboard.press(" ")
     check("where Space reads down the page", page.evaluate("() => $('desk').scrollTop") > top)
@@ -2656,6 +2656,71 @@ def test_writing_starts_in_write(page, base: str, created: list[str]) -> None:
     settle(page)
     check("and so does Note input from the command palette in Read", page.get_attribute("body", "data-mode") == "write" and page.evaluate("() => editor.on"), page.get_attribute("body", "data-mode"))
     page.keyboard.press("Escape")
+
+
+def zoom_factor(page) -> float:
+    return float(page.evaluate("() => getComputedStyle(document.documentElement).getPropertyValue('--zoom')"))
+
+
+def page_boxes(page) -> list[dict]:
+    """Where each page is on the desk, and the desk itself, as the window shows them."""
+    return page.evaluate("() => [...document.querySelectorAll('#pages .page')].map(page => { const box = page.getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top }; })")
+
+
+def test_reading_on_a_laptop(page, base: str, created: list[str]) -> None:
+    """At a laptop's whole window, Read and Practice show more of the music than one system at a time."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    size = page.viewport_size
+    page.set_viewport_size({"width": 1886, "height": 1080})
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    pages = page.locator("#pages .page").count()
+    page.keyboard.press("Alt+w")
+    page.select_option("#zoomChoice", "width")
+    writing = zoom_factor(page)
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "width")
+    desk = page.locator("#desk").bounding_box()
+    first = page_boxes(page)[0]
+    check("Read fitted to a wide window draws the music no larger than one and a half times its printed size", abs(zoom_factor(page) - 1.5) < 0.01, zoom_factor(page))
+    check("with the pages in the middle of the window", abs((first["left"] - desk["x"]) - (desk["x"] + desk["width"] - first["right"])) < 20, (first, desk))
+    page.keyboard.press("Alt+p")
+    page.select_option("#zoomChoice", "width")
+    check("and so does Practice", abs(zoom_factor(page) - 1.5) < 0.01, zoom_factor(page))
+    check("while Write keeps the music as wide as it has room for, to aim at", writing > 1.6, writing)
+
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "page")
+    boxes = page_boxes(page)
+    check("Whole page shows two pages side by side, as an open book, when the window has room", pages >= 4 and boxes[0]["top"] == boxes[1]["top"] and boxes[1]["right"] <= desk["x"] + desk["width"] and boxes[2]["top"] > boxes[0]["top"], boxes[:3])
+    page.wait_for_timeout(100)
+    check("and says so", page.inner_text("#pageCount") == f"Pages 1–2 of {pages}", page.inner_text("#pageCount"))
+    page.keyboard.press(" ")
+    check("Space turns both pages at once", shown_pages(page) == [2, 3], shown_pages(page))
+    page.keyboard.press("Shift+ ")
+    check("and Shift+Space turns both back", shown_pages(page) == [0, 1], shown_pages(page))
+    page.mouse.click(desk["x"] + desk["width"] * 0.8, desk["y"] + desk["height"] / 2)
+    check("a click on the right turns a spread on too", shown_pages(page) == [2, 3], shown_pages(page))
+    page.keyboard.press("Home")
+    check("Home goes back to the first spread", shown_pages(page) == [0, 1], shown_pages(page))
+    page.keyboard.press("End")
+    check("and End to the last", shown_pages(page)[-1] == pages - 1 and page.locator("#pages .page").nth(pages - 1).bounding_box()["y"] >= desk["y"] - 1, shown_pages(page))
+    page.keyboard.press("Home")
+    page.evaluate("() => followNote([...document.querySelectorAll('#pages .page')][2].querySelector('g.note'))")
+    check("playback following a note turns to its spread", shown_pages(page) == [2, 3], shown_pages(page))
+
+    page.set_viewport_size({"width": 940, "height": 1080})
+    page.wait_for_timeout(200)
+    boxes = page_boxes(page)
+    check("on a window with room for one page, Whole page shows one to a row", boxes[1]["top"] > boxes[0]["top"] and boxes[0]["left"] == boxes[1]["left"], boxes[:2])
+    page.keyboard.press("Home")
+    page.keyboard.press(" ")
+    check("and Space turns one page", shown_pages(page) == [1], shown_pages(page))
+    page.select_option("#zoomChoice", "width")
+    page.keyboard.press("Alt+w")
+    page.set_viewport_size(size)
 
 
 def test_library(page, base: str, created: list[str]) -> None:
@@ -4473,6 +4538,7 @@ def main() -> None:
             test_playback_toolbar(page, base, arguments.shots, created)
             test_modes(page, base, arguments.shots, created)
             test_writing_starts_in_write(page, base, created)
+            test_reading_on_a_laptop(page, base, created)
             test_library(page, base, created)
             test_inspector(page, base, arguments.shots, created)
             test_command_palette(page, base, created)

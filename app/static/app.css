@@ -213,6 +213,10 @@ body[data-view="vertical"] #pages, body[data-view="horizontal"] #pages { justify
 /* Fitted to the width: the pages one below the other, the music filling the desk's width. */
 body.fitWidth #pages { flex-direction: column; align-items: center; }
 body.fitWidth #desk { overflow-x: hidden; }
+/* Whole page: a row of pages at a time, one or two side by side, the rows one below the other. The
+   scroll bar's room is kept, so whether two pages fit doesn't change with it. */
+body.wholePages #pages { display: grid; grid-template-columns: repeat(var(--across, 1), max-content); justify-content: center; }
+body.wholePages #desk { scrollbar-gutter: stable; }
 #pages .page { flex: none; width: calc(210mm * var(--zoom)); background: var(--paper); color: var(--notes); border-radius: 2px; box-shadow: 0 1px 2px var(--shadow), 0 6px 22px color-mix(in srgb, var(--shadow) 60%, transparent); }
 #pages svg { display: block; width: 100%; height: auto; }
 #pages g.note, #pages g.rest, #pages g.mRest, #pages g.harm { cursor: pointer; }

@@ -124,7 +124,7 @@ function pageElements() {
 function pagesInView() {
   const desk = $("desk");
   const pages = pageElements();
-  const down = fittedToWidth();
+  const down = fittedToWidth() || wholePages();
   const from = down ? desk.scrollTop : desk.scrollLeft, to = from + (down ? desk.clientHeight : desk.clientWidth);
   const middle = page => (down ? page.offsetTop + page.offsetHeight / 2 : page.offsetLeft + page.offsetWidth / 2);
   let shown = pages.map((page, index) => ({ page, index })).filter(({ page }) => middle(page) > from && middle(page) < to);
@@ -141,6 +141,16 @@ function turnPage(by) {
   const { pages, shown } = pagesInView();
   if (!pages.length) return;
   const padding = parseFloat(getComputedStyle($("pagesFrame")).paddingTop);
+  if (wholePages()) {
+    // A row of whole pages, one or two side by side, is turned at once, to the next row below.
+    const tops = [...new Set(pages.map(page => page.offsetTop))];
+    const row = tops.indexOf(pages[shown[0]].offsetTop);
+    const target = Math.min(Math.max(row + by, 0), tops.length - 1);
+    if (target === row) return;
+    desk.scrollTop = tops[target] - padding;
+    drawPageCount();
+    return;
+  }
   if (fittedToWidth()) {
     // One below the other: a page is read down, then the next one's top is brought up.
     const page = pages[shown[0]];
@@ -169,7 +179,7 @@ function turnPage(by) {
 function turnToEnd(last) {
   const pages = pageElements();
   if (!pages.length) return;
-  if (fittedToWidth()) {
+  if (fittedToWidth() || wholePages()) {
     $("desk").scrollTop = last ? pages.at(-1).offsetTop - parseFloat(getComputedStyle($("pagesFrame")).paddingTop) : 0;
     drawPageCount();
     return;
@@ -197,6 +207,12 @@ function followNote(element) {
   const desk = $("desk"), room = desk.getBoundingClientRect(), box = element.getBoundingClientRect();
   if (box.left >= room.left && box.right <= room.right && box.top >= room.top && box.bottom <= room.bottom) return;
   const page = element.closest(".page");
+  if (wholePages()) {
+    // Whole pages turn to the row the note is on.
+    desk.scrollTop = page.offsetTop - parseFloat(getComputedStyle($("pagesFrame")).paddingTop);
+    drawPageCount();
+    return;
+  }
   if (fittedToWidth()) {
     // One below the other, the window moves down to the line being played, near its top.
     desk.scrollTop += box.top - room.top - room.height * 0.15;

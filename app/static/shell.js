@@ -380,10 +380,15 @@ function setView(view) {
 // space of six or seven pixels: neighbouring notes three pixels apart, too close to aim a click
 // at. So a score opens fitted to the width it has: its music as wide as the desk, with a little of
 // the paper either side, and the pages one below the other. That's a staff space of ten pixels or
-// so in Write beside the inspector, and more in Read and Practice, where nothing sits beside it.
+// so in Write beside the inspector. In Read and Practice nothing sits beside the music, and fitted
+// to a laptop's whole window it would be well over twice its printed size, a system or two to a
+// screen, so there it's fitted no larger than one and a half times its printed size, in the middle
+// of the window, and more of it is in sight at once. Write keeps its larger notes to aim at.
 // The one-line view's music is as large as it would be on its page, as a line that long can't be
-// fitted across. "Whole page" fits a page into the window, margins and all.
+// fitted across. "Whole page" fits a page into the window, margins and all, and two side by side
+// when the window has room for both.
 const PAPER_BESIDE_MM = 5; // The paper left in sight either side of the music, fitted to the width.
+const MOST_READING_ZOOM = 1.5; // The largest Read and Practice are fitted to the width, times the printed size.
 
 function fitZoom(kind) {
   const desk = $("desk");
@@ -391,7 +396,7 @@ function fitZoom(kind) {
   const page = score?.layout ?? { width: drawnWidth, left: 15, right: 15 };
   const music = page.width - page.left - page.right + 2 * PAPER_BESIDE_MM;
   const room = desk.clientWidth - DESK_PADDING_PX;
-  if (kind === "width") return Math.max(0.1, room / (music * MM_TO_PX));
+  if (kind === "width") return Math.max(0.1, Math.min(room / (music * MM_TO_PX), writing() ? Infinity : MOST_READING_ZOOM));
   const tall = (desk.clientHeight - DESK_PADDING_PX) / (height * MM_TO_PX);
   if (score?.view === "horizontal") return Math.max(0.1, tall);
   return Math.max(0.1, Math.min(room / (drawnWidth * MM_TO_PX), score?.view === "vertical" ? Infinity : tall));
@@ -401,6 +406,19 @@ function fitZoom(kind) {
 // centred on the music, with the edges of the paper beyond it.
 function fittedToWidth() {
   return zoom === "width" && (score?.view ?? "page") !== "horizontal";
+}
+
+// Whole page shows the pages a row at a time, one below the other: two side by side, as an open
+// book, when both fit the desk's width whole, or else one. Reading on turns a row at a time.
+function wholePages() {
+  return zoom === "page" && (score?.view ?? "page") === "page";
+}
+
+function pagesAcross(factor) {
+  if (!wholePages() || (score?.pages?.length ?? 0) < 2) return 1;
+  const widest = Math.max(...score.pageSizes.map(([width]) => width));
+  const gap = parseFloat(getComputedStyle($("pages")).columnGap) || 0;
+  return 2 * widest * MM_TO_PX * factor + gap <= $("desk").clientWidth - DESK_PADDING_PX ? 2 : 1;
 }
 
 function centreDesk() {
@@ -433,15 +451,19 @@ function fittedZoom() {
 function setZoom(value) {
   zoom = String(value);
   if (scoreId) keepSetting(zoomSetting(), zoom);
+  // The pages are laid out first, as that decides whether the desk has a scroll bar to fit beside.
+  document.body.classList.toggle("fitWidth", fittedToWidth());
+  document.body.classList.toggle("wholePages", wholePages());
   const factor = fittedZoom() ? fitZoom(zoom) : Number(zoom) / 100;
   document.documentElement.style.setProperty("--zoom", String(factor));
-  document.body.classList.toggle("fitWidth", fittedToWidth());
+  document.documentElement.style.setProperty("--across", String(pagesAcross(factor)));
   const choice = $("zoomChoice");
   if (![...choice.options].some(option => option.value === zoom)) choice.append(new Option(`${zoom}%`, zoom));
   choice.value = zoom;
   centreDesk();
   drawCursor();
   redrawGhost();
+  drawPageCount(); // A new size shows other pages, or more of them.
   if (score) drawStickyStart();
 }
 
