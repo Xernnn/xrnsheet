@@ -69,7 +69,7 @@ function tone(audio, midi, at, length, volume, wave, destination = audio.destina
   oscillator.stop(end + 0.02);
 }
 
-// The recording nearest a pitch, where its file is and how far it's from the pitch wanted.
+// The recording nearest a pitch: the note it was recorded at, and where its file is.
 function recordingOf(set, midi) {
   const count = Math.floor((set.highest - set.lowest) / set.every);
   const recorded = set.lowest + Math.min(count, Math.max(0, Math.round((midi - set.lowest) / set.every))) * set.every;

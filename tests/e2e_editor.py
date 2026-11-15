@@ -2246,6 +2246,18 @@ def test_piano_sound(context, base: str, created: list[str]) -> None:
     wait_playing(page, False)
     check("chord symbols are played softly on the piano too: the note and C E G", made == {"oscillators": 0, "recordings": 4}, made)
 
+    fresh = context.new_page()
+    fresh.goto(f"{base}/#{score_id}")
+    fresh.wait_for_selector("#pages svg")
+    fresh.evaluate(COUNT_SOUNDS)
+    fresh.click("#play")
+    wait_playing(fresh, True)
+    made = fresh.evaluate("() => made")
+    fresh.click("#play")
+    check("the first Play waits for the recordings, so none of its notes is left to the old sound", made == {"oscillators": 0, "recordings": 4}, made)
+    check("and says nothing about it, as they're here in a moment", fresh.is_hidden("#message"), fresh.inner_text("#message"))
+    fresh.close()
+
     broken = context.new_page()
     warned: list[str] = []
     broken.on("console", lambda item: warned.append(item.text) if item.type == "warning" else None)
