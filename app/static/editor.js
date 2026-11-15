@@ -43,6 +43,7 @@ let hint = "";
 let dragged = false;
 let drag = null;
 let pointer = null; // Where the mouse is over the pages, so the ghost note is drawn again when they are.
+let ghostSpot = null; // Where the ghost note is, and so what a click writes: nothing while none shows.
 let lastMidiKey = 0;
 let midiAsked = false;
 
@@ -246,6 +247,8 @@ function updateTools() {
   markTimeline();
   if (dockOpen("instrument")) $("trayNote").textContent = trayNote();
   $("trayNote").classList.toggle("writing", editor.on && !practice.follower);
+  // Note input turned on, or another length or voice chosen, changes the ghost under a still pointer.
+  redrawGhost();
 }
 
 function staffLines(staff) {
@@ -445,6 +448,8 @@ function drawBarChecks() {
 
 function drawTitle() {
   $("scoreName").textContent = score.title || "Untitled score";
+  $("scoreName").title = `${[score.title || "Untitled score", score.composer].filter(Boolean).join(", ")}. Click to change the title and composer`;
+  fitTopBar();
   document.title = score.title ? `${score.title} - xrnsheet` : "xrnsheet";
   const tile = document.querySelector(`#historyList a[data-score="${scoreId}"] .name`);
   if (tile) tile.textContent = score.title || "Untitled score";
@@ -493,6 +498,10 @@ function startingPlace() {
 
 function setInput(on) {
   if (on === editor.on) return;
+  // Note input is only of use in Write, where the staff takes clicks and letters. Turned on from
+  // Read or Practice, by a new score, the menu or the command palette, it goes there too, as N does,
+  // or it would show its blue edge and ghost note while nothing could be written.
+  if (on && !writing()) setMode("write");
   editor.on = on;
   document.body.classList.toggle("inputting", on);
   if (on) {
@@ -630,6 +639,7 @@ function noteheadAt(x, y) {
 
 function hideGhost() {
   $("ghost").hidden = true;
+  ghostSpot = null;
   document.querySelectorAll("#pages .replacing, #pages .picked").forEach(element => element.classList.remove("replacing", "picked"));
 }
 
@@ -665,6 +675,13 @@ function paintGhost({ lines, line, x, type, dots = 0, voice, label, band = null 
   ghost.hidden = false;
 }
 
+// The page can move under a pointer that stays where it is: scrolled by the wheel or the keys,
+// zoomed, or with the window resized. What a click there writes moves with it, so the ghost is drawn
+// again where the pointer is, or the click would write something other than the ghost shows.
+function redrawGhost() {
+  if (pointer) drawGhost(pointer.x, pointer.y, pointer.shift);
+}
+
 function drawGhost(x, y, shift = false) {
   if (drag) return; // A note being dragged has the ghost.
   hideGhost();
@@ -685,6 +702,7 @@ function drawGhost(x, y, shift = false) {
     ghost.querySelector(".tag").textContent = [`${noteName(pitchAtFret(spot.part, spot.string, 0))}, string ${spot.string} open: type its fret`, whenOf(target)].filter(Boolean).join(" · ");
     Object.assign(ghost.style, { width: `${width}px`, height: `${height}px`, left: `${spot.x - width / 2 - frame.left}px`, top: `${spot.y - height / 2 - frame.top}px` });
     ghost.hidden = false;
+    ghostSpot = spot;
     return;
   }
   const pitch = pitchAtLine(target, spot.line);
@@ -697,6 +715,7 @@ function drawGhost(x, y, shift = false) {
   const label = [stacking ? `+ ${pitch?.name ?? ""} to the chord` : pitch?.name, when, names.length ? `replaces ${names.join(" ")}` : ""].filter(Boolean).join(" · ");
   const box = headBox(target);
   paintGhost({ lines: spot.lines, line: spot.line, x: spot.x, type: editor.type, dots: editor.dots, voice: editor.voice, label, band: { left: box.left - 3, width: box.width + 6 } });
+  ghostSpot = spot;
 }
 
 // A note clicked while writing becomes the one the tools act on, as a note just written is: the
@@ -1456,7 +1475,8 @@ function setUpToolbar() {
   // A clicked button keeps the focus, and Space would press it again instead of playing.
   for (const id of ["noteBar", "viewTools", "pitches", "playPopup", "speedPopup", "library"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
   $("redo").addEventListener("click", redoEdit);
-  window.addEventListener("resize", drawCursor);
+  window.addEventListener("resize", () => { drawCursor(); redrawGhost(); });
+  $("desk").addEventListener("scroll", redrawGhost, { passive: true });
   $("pages").addEventListener("mousemove", event => { pointer = { x: event.clientX, y: event.clientY, shift: event.shiftKey }; drawGhost(pointer.x, pointer.y, pointer.shift); });
   $("pages").addEventListener("mouseleave", () => { pointer = null; hideGhost(); });
   // Shift pressed or let go over the staff changes what a click there does: add to the chord, or write.

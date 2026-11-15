@@ -133,8 +133,9 @@ function buildPalettes() {
   const jump = (name, label, html) => ({ key: `jump:${name}`, label, html: html ?? wordsCell(label), ...atNote(() => markAction("jump", { name })) });
   const hairpin = (name, label) => ({ key: `hairpin:${name}`, label, html: hairpinCell(name), ...atNote(() => markAction("hairpin", { name })) });
   const slur = { key: "slur", label: "Slur", html: drawnCell(SLUR_CELL), ...atNote(() => markAction("slur")) };
-  const ottava = (name, label, glyph, above) => ({ key: `line:${name}`, label, html: drawnCell(ottavaCell(glyph, above)), ...atNote(() => markAction("ottava", { name })) });
-  const pedal = (style, label) => ({ key: `line:pedal-${style}`, label, html: drawnCell(PEDAL_CELLS[style]), ...atNote(() => markAction("pedal", { name: style })) });
+  // An octave line or a pedal can start on a rest, so a rest's box for the instrument keeps them (rest: true).
+  const ottava = (name, label, glyph, above) => ({ key: `line:${name}`, label, html: drawnCell(ottavaCell(glyph, above)), rest: true, ...atNote(() => markAction("ottava", { name })) });
+  const pedal = (style, label) => ({ key: `line:pedal-${style}`, label, html: drawnCell(PEDAL_CELLS[style]), rest: true, ...atNote(() => markAction("pedal", { name: style })) });
   const volta = (number, label) => ({ key: `ending:${number}`, label, html: voltaCell(number), ...atNote(() => barAction("ending", { number, last: range?.last ?? null })) });
   const repeat = (prefix, side, label) => ({ key: `${prefix}:${side}`, label, html: repeatCell(side), run: () => barAction(side) });
   return [

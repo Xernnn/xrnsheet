@@ -66,6 +66,8 @@ NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
 OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
 ONLY_READS = {"GET", "HEAD", "OPTIONS"}
+OPENED_FILE = "opened.json"  # Beside a score opened from a MusicXML file.
+FIRST_VERSION_HEAD = 8192  # Where a file names the program that wrote it, near its start.
 
 
 @asynccontextmanager
@@ -569,10 +571,25 @@ def open_score_file(data: bytes, suffix: str) -> dict:
     folder = JOB_DIR / score_id
     folder.mkdir(parents=True)
     save_version(folder, root)
+    write_whole(folder / OPENED_FILE, json.dumps({"type": suffix}))  # So the library can say where it came from.
     if (levels := mixer.read_from_score(root)) is not None:
         save_mixer(folder, levels, root)  # A file's instruments keep the volume and pan it gave them.
     write_status(folder, "ready")
     return {"id": score_id}
+
+
+def opened_from_file(folder: Path) -> bool:
+    """Say whether a score was opened from a file, rather than begun here or read from a photo.
+
+    Opening one leaves a note of it beside the score. One opened before that was kept is known by
+    its first version, which names the program that wrote it, as a score begun here never does.
+    """
+    if (folder / OPENED_FILE).exists():
+        return True
+    if (folder / "recognized").exists() or not (found := versions(folder)):
+        return False
+    with open(found[0], encoding="utf-8") as file:
+        return "<encoding>" in file.read(FIRST_VERSION_HEAD)
 
 
 def read_chord_file(folder: Path) -> list[dict]:
@@ -820,6 +837,7 @@ def list_scores() -> list[dict]:
                 "chords": len(read_chord_file(folder)),
                 "checked": (folder / "checked.json").exists(),
                 "blank": not (folder / "recognized").exists(),
+                "opened": opened_from_file(folder),
                 "title": structure.title_of(current_root(folder))["title"],
             })
         except (OSError, ValueError, TypeError, KeyError, IndexError, ET.ParseError) as error:

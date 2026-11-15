@@ -84,7 +84,7 @@ function tileFor(sheet) {
   name.textContent = sheet.title || "Untitled score";
   const state = document.createElement("span");
   state.className = "state";
-  const made = sheet.blank ? "written here" : `read from ${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.checked ? "checked" : "not checked"}`;
+  const made = sheet.opened ? "opened from a file" : sheet.blank ? "written here" : `read from ${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.checked ? "checked" : "not checked"}`;
   state.textContent = `${when} · ${made}`;
   link.title = `${name.textContent}, ${state.textContent}`;
   link.append(picture, name, state);
@@ -468,8 +468,13 @@ function clickPages(event) {
     // go, and Shift adds the note to the chord there.
     const head = event.shiftKey ? null : noteheadAt(event.clientX, event.clientY);
     if (head) { pickWhileWriting(head); return; }
-    const spot = placeUnder(event.clientX, event.clientY);
-    if (spot) placeNote(spot, event.shiftKey);
+    // A click writes the note the ghost shows, and where it shows none, such as far from any
+    // staff, nothing. A click that came without a move, as a tap can, draws the ghost there first.
+    if (pointer?.x !== event.clientX || pointer?.y !== event.clientY || pointer?.shift !== event.shiftKey) {
+      pointer = { x: event.clientX, y: event.clientY, shift: event.shiftKey };
+      drawGhost(pointer.x, pointer.y, pointer.shift);
+    }
+    if (ghostSpot) placeNote(ghostSpot, event.shiftKey);
     return;
   }
   const mark = markAt(event);

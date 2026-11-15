@@ -76,7 +76,8 @@ input[type="range"] { accent-color: var(--accent); }
 /* The top bar. */
 #topBar { display: flex; flex: none; align-items: center; gap: 6px; min-height: 54px; padding: 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
 #brand { flex: none; border-radius: 7px; }
-#scoreName { min-width: 0; max-width: 260px; padding: 4px 8px; font-size: 15px; font-weight: 700; justify-content: flex-start; overflow: hidden; text-overflow: ellipsis; }
+/* A block, as a flex box's text can't end in an ellipsis. */
+#scoreName { display: block; min-width: 0; max-width: 260px; padding: 4px 8px; font-size: 15px; font-weight: 700; text-align: left; overflow: hidden; text-overflow: ellipsis; }
 #modeSwitch { margin-left: auto; }
 #modeSwitch > button[aria-checked="true"] { color: var(--accent); }
 #partSwitch { gap: 6px; min-width: 0; max-width: 200px; padding: 3px 10px 3px 6px; border-radius: 999px; }
@@ -84,6 +85,7 @@ input[type="range"] { accent-color: var(--accent); }
 #partSwitch #partKind svg.icon { width: 15px; height: 15px; }
 #partSwitch #partName { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 #partSwitch .caret { color: var(--muted); font-size: 11px; }
+#partSwitch.iconOnly #partName { display: none; }
 #transport { display: flex; align-items: center; gap: 1px; padding: 2px 4px; border-radius: 999px; background: var(--sunken); border: 1px solid var(--line); margin-left: auto; }
 #transport button.flat { min-width: 30px; min-height: 30px; border-radius: 999px; }
 #play { color: var(--accent); }
@@ -213,6 +215,10 @@ body[data-view="vertical"] #pages, body[data-view="horizontal"] #pages { justify
 /* Fitted to the width: the pages one below the other, the music filling the desk's width. */
 body.fitWidth #pages { flex-direction: column; align-items: center; }
 body.fitWidth #desk { overflow-x: hidden; }
+/* Whole page: a row of pages at a time, one or two side by side, the rows one below the other. The
+   scroll bar's room is kept, so whether two pages fit doesn't change with it. */
+body.wholePages #pages { display: grid; grid-template-columns: repeat(var(--across, 1), max-content); justify-content: center; }
+body.wholePages #desk { scrollbar-gutter: stable; }
 #pages .page { flex: none; width: calc(210mm * var(--zoom)); background: var(--paper); color: var(--notes); border-radius: 2px; box-shadow: 0 1px 2px var(--shadow), 0 6px 22px color-mix(in srgb, var(--shadow) 60%, transparent); }
 #pages svg { display: block; width: 100%; height: auto; }
 #pages g.note, #pages g.rest, #pages g.mRest, #pages g.harm { cursor: pointer; }

@@ -116,22 +116,25 @@ function joinCell(letter, kind) {
 // inspector can show it pressed.
 function techniquePalettes() {
   const cell = (key, label, html, run, pressed = null) => ({ key, label, html, needs: "note", run, pressed });
+  // The words and lines over a passage can start on a rest too, as the server takes them there, so
+  // a rest's box keeps them; the rest of a player's marks are the note's own.
+  const passage = (...made) => ({ ...cell(...made), rest: true });
   const join = (name, label, letter) => cell(`join:${name}`, label, joinCell(letter, name), () => markAction("join", { name }));
   const bend = (name, label) => cell(`bend:${name}`, label, bendCell(BEND_LABELS[name]), () => markAction("bend", { name }), played => played.bend === name);
   const pluck = letter => cell(`pluck:${letter}`, `Pluck with ${letter} (${PLUCK_NAMES[letter]})`, wordsCell(letter), () => markAction("pluck", { text: letter }), played => played.pluck === letter);
   const finger = number => cell(`finger:${number}`, `Finger ${number}${number === 0 ? " (open string)" : ""}`, wordsCell(String(number), "bold"), () => markAction("fingering", { text: String(number) }), played => played.finger === String(number));
   const string = number => cell(`string:${number}`, `String number ${number} (circled)`, circled(number), () => markAction("stringNumber", { number }), played => played.mark === number);
   const bowedString = number => cell(`bowedString:${number}`, `String ${ROMAN[number]}`, wordsCell(ROMAN[number], "plain"), () => markAction("stringNumber", { number }), played => played.mark === number);
-  const sul = where => cell(`sul:${where}`, where === "pont." ? "Sul ponticello (near the bridge)" : where === "tasto" ? "Sul tasto (over the fingerboard)" : `Sul ${where} (play on the ${where} string)`, wordsCell(`sul ${where}`), () => markAction("sul", { text: where }), played => played.sul === where);
-  const position = number => cell(`position:${number}`, `${number ? `Position ${ROMAN[number]}` : "Half position"} (${ROMAN[number]} pos.)`, wordsCell(ROMAN[number], "plain"), () => markAction("position", { number }), played => played.position === number);
+  const sul = where => passage(`sul:${where}`, where === "pont." ? "Sul ponticello (near the bridge)" : where === "tasto" ? "Sul tasto (over the fingerboard)" : `Sul ${where} (play on the ${where} string)`, wordsCell(`sul ${where}`), () => markAction("sul", { text: where }), played => played.sul === where);
+  const position = number => passage(`position:${number}`, `${number ? `Position ${ROMAN[number]}` : "Half position"} (${ROMAN[number]} pos.)`, wordsCell(ROMAN[number], "plain"), () => markAction("position", { number }), played => played.position === number);
   return [
     { id: "guitar", name: "Guitar techniques", contexts: [], cells: [
       join("hammerOn", "Hammer-on (H) to the next note", "H"), join("pullOff", "Pull-off (P) to the next note", "P"),
       join("slide", "Slide to the next note"), join("glissando", "Glissando to the next note"),
       bend("half", "Bend a half tone (½)"), bend("full", "Bend a full tone"), bend("oneAndHalf", "Bend one and a half tones (1½)"),
       cell("vibrato", "Vibrato", drawnCell(`<path d="M6 22c2.5-5 4.5-5 7 0s4.5 5 7 0 4.5-5 7 0 4.5 5 7 0 4.5-5 5-2" stroke-width="1.6"/>`), () => markAction("vibrato")),
-      cell("line:palmMute", "Palm mute (P.M.)", wordsCell("P.M.", "plain"), () => markAction("line", { name: "palmMute" })),
-      cell("line:letRing", "Let ring", wordsCell("let ring"), () => markAction("line", { name: "letRing" })),
+      passage("line:palmMute", "Palm mute (P.M.)", wordsCell("P.M.", "plain"), () => markAction("line", { name: "palmMute" })),
+      passage("line:letRing", "Let ring", wordsCell("let ring"), () => markAction("line", { name: "letRing" })),
       cell("harmonic:natural", "Natural harmonic", `<span class="words plain">${glyphIcon("E614", 6)} harm.</span>`, () => markAction("harmonic", { name: "natural" }), played => played.harmonic === "natural"),
       cell("harmonic:artificial", "Artificial harmonic (A.H.)", wordsCell("A.H.", "plain"), () => markAction("harmonic", { name: "artificial" }), played => played.harmonic === "artificial"),
       cell("deadNote", "Dead note (x)", glyphCell("E0A9", 6), () => markAction("deadNote"), played => Boolean(played.dead)),
@@ -145,8 +148,8 @@ function techniquePalettes() {
     ] },
     { id: "bowed", name: "Bowed strings", contexts: [], textual: true, cells: [
       ...SUL_STRINGS.map(sul), sul("pont."), sul("tasto"),
-      cell("pizzicato:on", "Pizzicato (pizz.)", wordsCell("pizz."), () => markAction("pizzicato", { on: true })),
-      cell("pizzicato:off", "Arco (with the bow)", wordsCell("arco"), () => markAction("pizzicato", { on: false })),
+      passage("pizzicato:on", "Pizzicato (pizz.)", wordsCell("pizz."), () => markAction("pizzicato", { on: true })),
+      passage("pizzicato:off", "Arco (with the bow)", wordsCell("arco"), () => markAction("pizzicato", { on: false })),
       ...ROMAN.map((_, number) => position(number)),
       cell("mark:open", "Open string (o)", wordsCell("o", "plain"), () => markAction("toggle", { name: "open" })),
       cell("mark:stopped", "Stopped (+)", wordsCell("+", "plain"), () => markAction("toggle", { name: "stopped" })),
@@ -220,6 +223,17 @@ function drawTechnique(element, kind, part) {
     if (found?.pressed) button.setAttribute("aria-pressed", String(!range && Boolean(found.pressed(played))));
   });
   if (kind === "guitar") drawStringChoice(element, part, played);
+  forRests(holder, "data-cell");
+}
+
+// A rest, or a stretch of rests alone, keeps only what can go on a rest: a pedal or an octave line,
+// and the words and lines over a passage. Fingers, hands, strings, bowings and techniques are a
+// note's, and the server refuses them on a rest, so their cells, and rows left with none, go.
+function forRests(holder, attribute) {
+  const rests = toolState().rest;
+  holder.querySelectorAll(`[${attribute}]`).forEach(button => { button.hidden = rests && !findCell(button.getAttribute(attribute))?.rest; });
+  holder.querySelectorAll(".slot[data-row]").forEach(row => { row.hidden = rests && ![...row.querySelectorAll(`[${attribute}]`)].some(button => !button.hidden); });
+  if ($("stringChoice")) $("stringChoice").hidden = rests; // The string a note is played on.
 }
 
 // A guitar's strings, to play the selected note on another. One that can't play it says so when

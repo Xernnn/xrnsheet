@@ -662,6 +662,85 @@ def test_a_new_title_prints_above_an_imported_subtitle():
     assert head.index("New Song") < head.index("from the musical") < head.index("(c) 2024 Publisher")
 
 
+def printed_only(*credits, work_title=None, movement_title=None):
+    """A score as MuseScore 2 wrote one: its title and composer only as words on the page, which don't say what they are.
+
+    Each credit is (words, font size, how it's justified, how high on the page), in tenths from the
+    bottom of a page 1683 tenths tall, or with a credit-type before them all.
+    """
+    root = blank()
+    position = 0
+    if work_title is not None:
+        work = ET.Element("work")
+        ET.SubElement(work, "work-title").text = work_title
+        root.insert(position, work)
+        position += 1
+    if movement_title is not None:
+        root.insert(position, element_with_text("movement-title", movement_title))
+        position += 1
+    defaults = ET.Element("defaults")
+    ET.SubElement(ET.SubElement(defaults, "page-layout"), "page-height").text = "1683.78"
+    root.insert(position, defaults)
+    position += 1
+    for words, size, justify, high, *kind in credits:
+        credit = ET.Element("credit", page="1")
+        if kind:
+            ET.SubElement(credit, "credit-type").text = kind[0]
+        ET.SubElement(credit, "credit-words", {"default-y": str(high), "font-size": str(size), "justify": justify}).text = words
+        root.insert(position, credit)
+        position += 1
+    return root
+
+
+def element_with_text(tag, text):
+    element = ET.Element(tag)
+    element.text = text
+    return element
+
+
+RAG_CREDITS = [
+    ("Leipzig: A. Publisher, 1899.", 9, "left", 1553),
+    ("Maple Leaf Rag", 24, "center", 1627),
+    ("Scott Joplin", 12, "right", 1527),
+    ("Typeset for a public library, free to share", 30, "center", 113),
+]
+
+
+def test_a_title_and_composer_printed_only_on_the_page_are_read_from_it():
+    """The title is the largest words at the top of the first page, and the composer the words on its right."""
+    assert structure.title_of(printed_only(*RAG_CREDITS)) == {"title": "Maple Leaf Rag", "composer": "Scott Joplin"}
+
+
+def test_words_on_the_right_alone_are_the_composer_not_the_title():
+    assert structure.title_of(printed_only(("Scott Joplin", 12, "right", 1527))) == {"title": "", "composer": "Scott Joplin"}
+
+
+def test_credits_that_say_they_are_the_title_and_composer_are_read_first():
+    root = printed_only(("A Subtitle", 30, "center", 1650), ("The Title", 20, "center", 1600, "title"), ("A. Writer", 12, "left", 1500, "composer"))
+    assert structure.title_of(root) == {"title": "The Title", "composer": "A. Writer"}
+
+
+def test_a_movement_title_names_a_score_whose_work_title_is_empty():
+    """As music21's lead sheets have it: an empty work title, then the movement title."""
+    root = printed_only(("Old Rag", 24, "center", 1627), work_title="", movement_title="Alexander's Rag")
+    assert structure.title_of(root)["title"] == "Alexander's Rag"
+
+
+def test_a_title_read_from_the_page_is_replaced_there_not_printed_twice():
+    root = printed_only(*RAG_CREDITS)
+    structure.set_title(root, "Maple Leaf Rag", "S. Joplin")
+    assert structure.title_of(root) == {"title": "Maple Leaf Rag", "composer": "S. Joplin"}
+    assert sorted(credit_words(root)) == sorted(["Maple Leaf Rag", "S. Joplin", "Leipzig: A. Publisher, 1899.", "Typeset for a public library, free to share"])
+
+
+@pytest.mark.parametrize("settings", [{}, {"work_title": "", "movement_title": "Maple Leaf Rag"}])
+def test_a_title_cleared_stays_cleared_whatever_else_the_page_prints(settings):
+    """Clearing it mustn't make the publisher's line the title, or bring back the movement title."""
+    root = printed_only(*RAG_CREDITS, ("Arranged by A. Friend", 10, "right", 1500), **settings)
+    structure.set_title(root, "", "")
+    assert structure.title_of(root) == {"title": "", "composer": ""}
+
+
 # Drawing triplets.
 
 def test_a_dotted_length_cannot_become_a_triplet():

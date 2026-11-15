@@ -179,6 +179,8 @@ function drawInstrumentMarks(element) {
       return button;
     }));
   }
+  forRests($("instrumentCells"), "data-instrument-cell");
+  $("instrumentCells").hidden = ![...$("instrumentCells").children].some(button => !button.hidden);
   drawTechnique(element, kind, part);
   drawSwitches();
 }

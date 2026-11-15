@@ -373,6 +373,92 @@ def test_clicking_notes(page, base: str, shots: Path | None, created: list[str])
     check("the ghost goes when entering stops", page.is_hidden("#ghost"))
 
 
+def ghost_and_click(page) -> tuple[str | None, str | None]:
+    """What the ghost says a click will write, and what a click there writes, the mouse not moved."""
+    shown = " · ".join(page.inner_text("#ghost .tag").split(" · ")[:2]) if page.is_visible("#ghost") else None
+    # Watched as it's sent, as a note written over the same note changes nothing to be seen.
+    writes = []
+    listener = lambda request: writes.append(request.url) if request.method == "POST" and "/notes/" in request.url else None
+    page.on("request", listener)
+    page.mouse.down()
+    page.mouse.up()
+    settle(page)
+    page.remove_listener("request", listener)
+    if not writes:
+        return shown, None
+    return shown, page.evaluate("() => { const note = document.getElementById(editor.last); return `${spelledName(note)} · ${whenOf(note)}`; }")
+
+
+def test_the_ghost_keeps_up_with_the_page(page, base: str, created: list[str]) -> None:
+    """The page moving under a pointer that stays put changes what a click there writes, and the ghost says so."""
+    page.goto(base)
+    page.click("#blankOpen")
+    page.click('#quickStart [data-quick="piano"] .start')
+    page.wait_for_selector("#pages svg")
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    x, y = staff_point(page, page.evaluate("() => editor.cursor"), 6)
+    page.mouse.move(x, y)
+    check("the ghost shows where the pointer is", page.is_visible("#ghost") and page.inner_text("#ghost .tag") == "G4 · bar 1, beat 1", page.inner_text("#ghost .tag"))
+    # Scrolled down by the room between the two staves, the pointer is over the left hand's.
+    apart = page.evaluate("() => { const staves = document.querySelectorAll('#pages g.staff'); return staffLines(staves[1]).top - staffLines(staves[0]).top; }")
+    page.mouse.wheel(0, apart)
+    page.wait_for_function("apart => Math.abs($('desk').scrollTop - apart) < 2", arg=apart)
+    page.wait_for_timeout(100)
+    shown, written = ghost_and_click(page)
+    check("after the wheel scrolls the page, a click writes what the ghost shows", shown is not None and shown == written, (shown, written))
+    page.keyboard.press("Control+=")
+    shown, written = ghost_and_click(page)
+    check("and after a zoom", shown == written, (shown, written))
+    # Fitted to the width, a narrower window draws the music smaller.
+    page.select_option("#zoomChoice", "width")
+    cursor = page.evaluate("() => { document.getElementById(editor.cursor).scrollIntoView({ block: 'center' }); return editor.cursor; }")
+    x, y = staff_point(page, cursor, 6)
+    page.mouse.move(x, y)
+    size = page.viewport_size
+    page.set_viewport_size({"width": 940, "height": size["height"]})
+    page.wait_for_timeout(200)
+    shown, written = ghost_and_click(page)
+    check("and after the window is resized", shown == written, (shown, written))
+    page.set_viewport_size(size)
+    page.keyboard.press("Escape")
+    settle(page)
+
+
+def ghost_is_current(page) -> bool:
+    """Say whether the ghost shows what it would if drawn afresh where the pointer is."""
+    return page.evaluate("() => { const shown = [$('ghost').hidden, $('ghost').dataset.voice, $('ghost').innerHTML]; drawGhost(pointer.x, pointer.y, pointer.shift); return JSON.stringify(shown) === JSON.stringify([$('ghost').hidden, $('ghost').dataset.voice, $('ghost').innerHTML]); }")
+
+
+def test_a_click_writes_what_the_ghost_shows(page, base: str, created: list[str]) -> None:
+    """One rule: a click writes exactly the note the ghost shows, and where it shows none, nothing."""
+    score_id = open_blank(page, base, created, staff="piano")
+    page.keyboard.press("Escape")
+    settle(page)
+    x, y = staff_point(page, page.evaluate("() => document.querySelector('#pages g.staff g.mRest, #pages g.staff g.rest').id"), 6)
+    page.mouse.move(x, y)
+    page.keyboard.press("n")
+    settle(page)
+    check("starting note input with the pointer on the staff shows the ghost there at once", page.is_visible("#ghost") and page.inner_text("#ghost .tag").startswith("G4 · bar 1, beat 1"), page.is_visible("#ghost"))
+    page.keyboard.press("6")
+    settle(page)
+    check("a new length shows on the ghost before the pointer moves", ghost_is_current(page))
+    page.keyboard.press("Control+Alt+2")
+    settle(page)
+    check("and a new voice in its colour", page.get_attribute("#ghost", "data-voice") == "2" and ghost_is_current(page), page.get_attribute("#ghost", "data-voice"))
+    shown, written = ghost_and_click(page)
+    detail = page.evaluate("() => { const note = document.getElementById(editor.last); return [score.notes[note.id][3], layerNumber(note) + 1]; }") if written else None
+    check("and a click writes that note, in that length and voice", shown is not None and shown == written and detail == ["half", 2], (shown, written, detail))
+    # Well beyond five ledger lines above the top staff, where only the title is.
+    lines = page.evaluate("() => { const lines = staffLines(document.querySelector('#pages g.staff')); return [lines.left + 40, lines.top, lines.step]; }")
+    page.mouse.move(lines[0], lines[1] - lines[2] * 13)
+    before = read_notes(base, score_id)
+    shown, written = ghost_and_click(page)
+    check("far from any staff no ghost shows, and a click writes nothing", shown is None and written is None and read_notes(base, score_id) == before, (shown, written))
+    page.keyboard.press("Escape")
+    settle(page)
+
+
 def test_end_of_score(page, base: str, created: list[str]) -> None:
     score_id = open_blank(page, base, created, bars=1)
     page.keyboard.press("5")
@@ -2304,6 +2390,27 @@ def test_opening_a_file(page, base: str, shots: Path | None, created: list[str])
     check("a broken file says so", "MusicXML" in page.inner_text("#message"), page.inner_text("#message"))
 
 
+def test_a_file_titled_only_on_its_page(page, base: str, created: list[str]) -> None:
+    """MuseScore 2 wrote the Maple Leaf Rag's title and composer only as words on its first page."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    check("a file that prints its title only on the page is called by it in the top bar", page.inner_text("#scoreName") == "Maple Leaf Rag", page.inner_text("#scoreName"))
+    score_pane(page)
+    check("and in the inspector, with its composer", (page.input_value("#scoreTitle"), page.input_value("#scoreComposer")) == ("Maple Leaf Rag", "Scott Joplin"), (page.input_value("#scoreTitle"), page.input_value("#scoreComposer")))
+    page.click("#libraryToggle")
+    tile = page.locator(f'#historyList a[data-score="{score_id}"]')
+    tile.wait_for()
+    check("the library lists it by its title, as opened from a file", tile.locator(".name").inner_text() == "Maple Leaf Rag" and "opened from a file" in tile.locator(".state").inner_text(), tile.inner_text())
+    page.fill("#homeSearch", "maple leaf")
+    check("and its search finds it", page.locator(f'#historyList a[data-score="{score_id}"]').count() == 1)
+    page.fill("#homeSearch", "")
+    page.click("#libraryClose")
+
+
 def test_sound_of_marks(page, base: str, created: list[str]) -> None:
     written_melody(page, base, created, tune="cdefcdef")
     select_notes(page, 0)
@@ -2503,7 +2610,7 @@ def test_modes(page, base: str, shots: Path | None, created: list[str]) -> None:
     show_instrument(page)
     page.click('#modeSwitch [data-mode="read"]')
     check("Read puts away the note input, the inspector, the library and the instrument", all(page.is_hidden(name) for name in ("#noteBar", "#inspector", "#library", "#dock", "#practiceBar")))
-    check("and fits the music to the window's width, larger than in Write", page.input_value("#zoomChoice") == "width" and page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step * 2") > 11, page.evaluate("() => staffLines(document.querySelector('#pages g.staff')).step * 2"))
+    check("and fits the music to the window's width, up to one and a half times its printed size", page.input_value("#zoomChoice") == "width" and abs(zoom_factor(page) - 1.5) < 0.01, zoom_factor(page))
     top = page.evaluate("() => $('desk').scrollTop")
     page.keyboard.press(" ")
     check("where Space reads down the page", page.evaluate("() => $('desk').scrollTop") > top)
@@ -2555,6 +2662,160 @@ def test_modes(page, base: str, shots: Path | None, created: list[str]) -> None:
     page.keyboard.press("Escape")
     page.keyboard.press("Alt+w")
     check("and Alt+W keeps to Write", page.get_attribute("body", "data-mode") == "write" and page.input_value("#zoomChoice") != "page")
+
+
+def test_writing_starts_in_write(page, base: str, created: list[str]) -> None:
+    """Note input belongs to Write: whatever turns it on from Read or Practice goes there too."""
+    first = open_blank(page, base, created)
+    page.keyboard.press("Escape")
+    page.keyboard.press("Alt+r")
+    menu(page, "File", "New…")
+    page.click('#quickStart [data-quick="piano"] .start')
+    page.wait_for_function("id => scoreId !== id && score !== null && editor.on", arg=first)
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    check("a new score opens in Write with note input on, though Read was the last mode", page.get_attribute("body", "data-mode") == "write" and page.get_attribute("#inputToggle", "aria-pressed") == "true" and page.is_visible("#noteBar"), page.get_attribute("body", "data-mode"))
+    page.keyboard.press("c")
+    settle(page)
+    written = pitched(read_notes(base, score_id))
+    check("and a letter typed straight away is written", len(written) == 1 and written[0].startswith("C"), written)
+    page.keyboard.press("Escape")
+    page.keyboard.press("Alt+p")
+    menu(page, "Add", "Notes", "Note input")
+    settle(page)
+    check("Add ▸ Note input in Practice goes to Write", page.get_attribute("body", "data-mode") == "write" and page.evaluate("() => editor.on"), page.get_attribute("body", "data-mode"))
+    page.keyboard.press("Escape")
+    page.keyboard.press("Alt+r")
+    command(page, "note input")
+    settle(page)
+    check("and so does Note input from the command palette in Read", page.get_attribute("body", "data-mode") == "write" and page.evaluate("() => editor.on"), page.get_attribute("body", "data-mode"))
+    page.keyboard.press("Escape")
+
+
+def zoom_factor(page) -> float:
+    return float(page.evaluate("() => getComputedStyle(document.documentElement).getPropertyValue('--zoom')"))
+
+
+def page_boxes(page) -> list[dict]:
+    """Where each page is on the desk, and the desk itself, as the window shows them."""
+    return page.evaluate("() => [...document.querySelectorAll('#pages .page')].map(page => { const box = page.getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top }; })")
+
+
+def test_reading_on_a_laptop(page, base: str, created: list[str]) -> None:
+    """At a laptop's whole window, Read and Practice show more of the music than one system at a time."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    size = page.viewport_size
+    page.set_viewport_size({"width": 1886, "height": 1080})
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    pages = page.locator("#pages .page").count()
+    page.keyboard.press("Alt+w")
+    page.select_option("#zoomChoice", "width")
+    writing = zoom_factor(page)
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "width")
+    desk = page.locator("#desk").bounding_box()
+    first = page_boxes(page)[0]
+    check("Read fitted to a wide window draws the music no larger than one and a half times its printed size", abs(zoom_factor(page) - 1.5) < 0.01, zoom_factor(page))
+    check("with the pages in the middle of the window", abs((first["left"] - desk["x"]) - (desk["x"] + desk["width"] - first["right"])) < 20, (first, desk))
+    page.keyboard.press("Alt+p")
+    page.select_option("#zoomChoice", "width")
+    check("and so does Practice", abs(zoom_factor(page) - 1.5) < 0.01, zoom_factor(page))
+    check("while Write keeps the music as wide as it has room for, to aim at", writing > 1.6, writing)
+
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "page")
+    boxes = page_boxes(page)
+    check("Whole page shows two pages side by side, as an open book, when the window has room", pages >= 4 and boxes[0]["top"] == boxes[1]["top"] and boxes[1]["right"] <= desk["x"] + desk["width"] and boxes[2]["top"] > boxes[0]["top"], boxes[:3])
+    page.wait_for_timeout(100)
+    check("and says so", page.inner_text("#pageCount") == f"Pages 1–2 of {pages}", page.inner_text("#pageCount"))
+    page.keyboard.press(" ")
+    check("Space turns both pages at once", shown_pages(page) == [2, 3], shown_pages(page))
+    page.keyboard.press("Shift+ ")
+    check("and Shift+Space turns both back", shown_pages(page) == [0, 1], shown_pages(page))
+    page.mouse.click(desk["x"] + desk["width"] * 0.8, desk["y"] + desk["height"] / 2)
+    check("a click on the right turns a spread on too", shown_pages(page) == [2, 3], shown_pages(page))
+    page.keyboard.press("Home")
+    check("Home goes back to the first spread", shown_pages(page) == [0, 1], shown_pages(page))
+    page.keyboard.press("End")
+    check("and End to the last", shown_pages(page)[-1] == pages - 1 and page.locator("#pages .page").nth(pages - 1).bounding_box()["y"] >= desk["y"] - 1, shown_pages(page))
+    page.keyboard.press("Home")
+    page.evaluate("() => followNote([...document.querySelectorAll('#pages .page')][2].querySelector('g.note'))")
+    check("playback following a note turns to its spread", shown_pages(page) == [2, 3], shown_pages(page))
+
+    page.set_viewport_size({"width": 940, "height": 1080})
+    page.wait_for_timeout(200)
+    boxes = page_boxes(page)
+    check("on a window with room for one page, Whole page shows one to a row", boxes[1]["top"] > boxes[0]["top"] and boxes[0]["left"] == boxes[1]["left"], boxes[:2])
+    page.keyboard.press("Home")
+    page.keyboard.press(" ")
+    check("and Space turns one page", shown_pages(page) == [1], shown_pages(page))
+    page.select_option("#zoomChoice", "width")
+    page.keyboard.press("Alt+w")
+    page.set_viewport_size(size)
+
+
+def systems_cut_at_the_top(page) -> list[int]:
+    """The systems the top of the window cuts through, counted from 0, their notes and marks above the staff and all."""
+    return page.evaluate("""() => {
+        const top = $("desk").getBoundingClientRect().top;
+        return [...document.querySelectorAll("#pages g.system")].map((system, index) => [system.getBoundingClientRect(), index])
+            .filter(([box]) => box.top < top - 0.5 && box.bottom > top + 0.5).map(([, index]) => index);
+    }""")
+
+
+def test_reading_on_a_system_at_a_time(page, base: str, created: list[str]) -> None:
+    """Space in Read brings up the next system whole, high notes and all, and never cuts one under the top bar."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "width")
+    page.keyboard.press("Home")
+    systems = page.locator("#pages g.system").count()
+    cut, tops = [], []
+    for _ in range(systems):
+        page.keyboard.press(" ")
+        cut += systems_cut_at_the_top(page)
+        tops.append(page.evaluate("() => { const top = $('desk').getBoundingClientRect().top; return Math.min(...[...document.querySelectorAll('#pages g.system')].map(system => system.getBoundingClientRect().top).filter(at => at >= top - 0.5)) - top; }"))
+    check("reading on with Space never cuts a system under the top bar", not cut, cut)
+    check("and brings the next one up to the top, a little below it", all(0 <= gap < 30 for gap in tops[:-1]), tops)
+    check("down to the last page", shown_pages(page)[-1] == page.locator("#pages .page").count() - 1, shown_pages(page))
+    cut = []
+    for _ in range(systems):
+        page.keyboard.press("Shift+ ")
+        cut += systems_cut_at_the_top(page)
+    check("and back with Shift+Space neither", not cut and page.evaluate("() => $('desk').scrollTop") == 0, cut)
+    page.keyboard.press("Alt+w")
+
+
+def test_top_bar_at_half_a_screen(page, base: str, created: list[str]) -> None:
+    """A window tiled to half a laptop's screen keeps the title and the instrument readable."""
+    open_blank(page, base, created, staff="piano")
+    page.keyboard.press("Escape")
+    menu(page, "File", "Title and composer…")
+    page.fill("#titleInput", "Autumn Leaves in the Evening Rain")
+    page.click("#projectDialog button[type=submit]")
+    settle(page)
+    switcher = "() => ({ shown: getComputedStyle($('partName')).display !== 'none', cut: $('partName').scrollWidth > $('partName').clientWidth + 1 || $('partSwitch').scrollWidth > $('partSwitch').clientWidth + 1, label: $('partSwitch').getAttribute('aria-label'), tip: $('partSwitch').title })"
+    title = "() => { const style = getComputedStyle($('scoreName')); return { cut: $('scoreName').scrollWidth > $('scoreName').clientWidth + 1, ellipsis: style.textOverflow === 'ellipsis' && style.display === 'block', tip: $('scoreName').title }; }"
+    size = page.viewport_size
+    page.set_viewport_size({"width": 1886, "height": size["height"]})
+    page.wait_for_timeout(100)
+    wide = page.evaluate(switcher)
+    check("on a wide window the instrument switcher names the part", wide["shown"] and not wide["cut"], wide)
+    page.set_viewport_size({"width": 940, "height": size["height"]})
+    page.wait_for_timeout(100)
+    narrow = page.evaluate(switcher)
+    check("at half a laptop's screen it shows only the instrument's icon, not a cut name", not narrow["shown"] and not narrow["cut"], narrow)
+    check("naming the part in its tooltip and to a screen reader", "Piano" in (narrow["label"] or "") and "Piano" in narrow["tip"], narrow)
+    named = page.evaluate(title)
+    check("and a title too long for the room ends in an ellipsis, with the whole title in its tooltip", named["cut"] and named["ellipsis"] and "Autumn Leaves in the Evening Rain" in named["tip"], named)
+    page.set_viewport_size(size)
 
 
 def test_library(page, base: str, created: list[str]) -> None:
@@ -2649,6 +2910,55 @@ def test_inspector(page, base: str, shots: Path | None, created: list[str]) -> N
     check("and again puts the inspector away", page.is_hidden("#inspector"))
     page.keyboard.press("F8")
     check("and back", page.is_visible("#propNote"))
+    page.keyboard.press("Escape")
+
+
+def instrument_box(page) -> dict:
+    """What the inspector's box for the instrument shows: its rows and the cells in them, by name."""
+    return page.evaluate("""() => {
+        const shown = element => element && !element.hidden && element.closest('[hidden]') === null && getComputedStyle(element).display !== 'none';
+        const cells = holder => [...holder.querySelectorAll('button[data-cell], button[data-instrument-cell]')].filter(shown).map(button => button.dataset.cell ?? button.dataset.instrumentCell);
+        return {
+            top: cells($('instrumentCells')),
+            rows: Object.fromEntries([...document.querySelectorAll('#instrumentSlots .slot')].filter(shown).map(row => [row.dataset.row || row.id || row.querySelector('.label').textContent, cells(row)])),
+        };
+    }""")
+
+
+def test_a_rest_in_the_instrument_box(page, base: str, created: list[str]) -> None:
+    """A rest's box for the instrument has only what goes on a rest, as the server takes it."""
+    open_blank(page, base, created, staff="piano")
+    page.keyboard.press("Escape")
+    settle(page)
+    click_on(page, page.locator("#pages g.mRest").first)
+    if not page.is_visible("#inspector"):
+        page.click("#inspectorToggle")
+    box = instrument_box(page)
+    check("a pianist's rest keeps the pedal and octave lines, without the arpeggio, fingers or hands", box["top"] == ["line:pedal-pedstar", "line:pedal-line", "line:8va", "line:8vb"] and box["rows"] == {}, box)
+    page.keyboard.press("Escape")
+    page.keyboard.press("n")
+    page.keyboard.press("c")
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    box = instrument_box(page)
+    check("while a note has them all", "mark:arpeggio" in box["top"] and set(box["rows"]) == {"Fingers", "Hand"}, box)
+    page.keyboard.press("Escape")
+
+    open_blank(page, base, created, staff="violin")
+    page.keyboard.press("Escape")
+    settle(page)
+    click_on(page, page.locator("#pages g.mRest").first)
+    box = instrument_box(page)
+    check("a violinist's rest has sul, positions, pizz. and arco, but no bowings, fingers or strings", box["top"] == [] and set(box["rows"]) == {"Sul", "Position", "Bow"} and box["rows"]["Bow"] == ["pizzicato:on", "pizzicato:off"], box)
+    page.keyboard.press("Escape")
+
+    open_blank(page, base, created, staff="guitar-tab")
+    page.keyboard.press("Escape")
+    settle(page)
+    click_on(page, page.locator("#pages g.staff").first.locator("g.mRest").first)
+    box = instrument_box(page)
+    check("and a guitarist's the lines and what's shown, without the techniques or strings", box["top"] == [] and set(box["rows"]) == {"Lines", "Show"}, box)
     page.keyboard.press("Escape")
 
 
@@ -4330,6 +4640,8 @@ def main() -> None:
             test_writing(page, base, arguments.shots, created)
             test_clicking_notes(page, base, arguments.shots, created)
             test_writing_with_the_mouse(page, base, arguments.shots, created)
+            test_the_ghost_keeps_up_with_the_page(page, base, created)
+            test_a_click_writes_what_the_ghost_shows(page, base, created)
             test_end_of_score(page, base, created)
             test_quick_keys(page, base, created)
             test_triplets(page, base, created)
@@ -4366,11 +4678,17 @@ def main() -> None:
             test_timeline(page, base, arguments.shots, created)
             test_midi_keyboard(context, base, created)
             test_opening_a_file(page, base, arguments.shots, created)
+            test_a_file_titled_only_on_its_page(page, base, created)
             test_sound_of_marks(page, base, created)
             test_playback_toolbar(page, base, arguments.shots, created)
             test_modes(page, base, arguments.shots, created)
+            test_writing_starts_in_write(page, base, created)
+            test_reading_on_a_laptop(page, base, created)
+            test_reading_on_a_system_at_a_time(page, base, created)
+            test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
             test_inspector(page, base, arguments.shots, created)
+            test_a_rest_in_the_instrument_box(page, base, created)
             test_command_palette(page, base, created)
             test_fretboard(page, base, arguments.shots, created)
             test_fingerboard_and_switcher(page, base, arguments.shots, created)
