@@ -2362,12 +2362,19 @@ def test_midi_keyboard(context, base: str, created: list[str]) -> None:
     page.evaluate("() => { press(67); }")
     settle(page)
     page.wait_for_timeout(120)
+    # Each write takes longer than a chord's keys are apart, as it can on a busy laptop.
+    with_slow_server(page, True)
     page.evaluate("() => { press(60); press(64); press(67); }")
     settle(page)
+    page.evaluate("() => new Promise(done => { press(62); setTimeout(() => { press(65); done(); }, 80); })")
+    settle(page)
+    with_slow_server(page, False)
     notes = [note for note in saved_score(base, score_id).iter("note") if note.find("pitch") is not None]
     steps = [(note.findtext("pitch/step"), note.findtext("pitch/alter"), note.findtext("pitch/octave")) for note in notes]
+    chords = [note.find("chord") is not None for note in notes]
     check("MIDI keys write exact notes", steps[:2] == [("C", "1", "4"), ("G", None, "4")], steps)
-    check("keys pressed together make a chord", len(notes) == 5 and sum(note.find("chord") is not None for note in notes) == 2, steps)
+    check("keys pressed together make a chord, however long the server takes to write each", chords[:5] == [False, False, False, True, True], steps)
+    check("and keys pressed one after the other, while a write is waiting, stay apart", len(notes) == 7 and chords[5:] == [False, False], steps)
     page.close()
 
 

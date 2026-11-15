@@ -1355,13 +1355,15 @@ function endDrag() {
   });
 }
 
-// Keys pressed together stack into a chord, the way they would on paper.
+// Keys pressed together stack into a chord, the way they would on paper. Together is when the keys
+// arrived, not when their turn in the queue came: that waits for the write before, which can take
+// longer than a chord's keys are apart, and then each key of a chord was written as a note of its own.
 function midiKey(number) {
+  const arrived = performance.now();
   return enqueue(async () => {
     if (!editor.on || !editor.cursor) return;
-    const now = performance.now();
-    const together = now - lastMidiKey < CHORD_WINDOW_MS && editor.last;
-    lastMidiKey = now;
+    const together = arrived - lastMidiKey < CHORD_WINDOW_MS && editor.last;
+    lastMidiKey = arrived;
     if (together) await send(`notes/${editor.last}`, { action: "stack", midi: number });
     else await send(`notes/${editor.cursor}`, { action: "write", type: editor.type, dots: editor.dots, midi: number, voice: editor.voice });
   });
