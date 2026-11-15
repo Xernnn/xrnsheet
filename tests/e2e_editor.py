@@ -3804,6 +3804,16 @@ def test_fingerboard_and_switcher(page, base: str, shots: Path | None, created: 
     page.keyboard.press("Escape")
 
 
+def test_letters_for_a_bowed_string_stay_in_its_range(page, base: str, created: list[str]) -> None:
+    """A letter typed for a violin takes the octave it plays, not the nearest one below its G string."""
+    score_id = open_blank(page, base, created, bars=2, staff="violin")
+    page.keyboard.type("gdae", delay=0)
+    settle(page)
+    written = pitched(read_notes(base, score_id))
+    check("G, D, A, E typed down from G4 for a violin end on E4, as E3 is below its lowest string", written == ["G4", "D4", "A3", "E4"], written)
+    page.keyboard.press("Escape")
+
+
 def test_cello_and_double_bass_fingerboards(page, base: str, shots: Path | None, created: list[str]) -> None:
     """A cello and a double bass get fingerboards of their own, with their strings, positions and fingers."""
     for instrument, strings, stop, finger, player, positions in [
@@ -5512,6 +5522,7 @@ def main() -> None:
             test_dynamics_found_by_name(page, base, created)
             test_fretboard(page, base, arguments.shots, created)
             test_fingerboard_and_switcher(page, base, arguments.shots, created)
+            test_letters_for_a_bowed_string_stay_in_its_range(page, base, created)
             test_cello_and_double_bass_fingerboards(page, base, arguments.shots, created)
             test_new_scores_for_players(page, base, arguments.shots, created)
             test_guitar_notation(page, base, arguments.shots, created)

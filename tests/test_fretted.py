@@ -682,6 +682,16 @@ def test_a_letter_typed_into_a_bass_guitar_lands_on_its_staff():
     assert typed(guitar(name="bass-guitar-tab"), "E", "A") == ["E3", "A3"]
 
 
+def test_letters_typed_into_a_bowed_string_stay_in_its_range():
+    # Down from A3, the nearest E is below a violin's G string, so it's the E above.
+    assert typed(guitar(name="violin"), "G", "D", "A", "E") == ["G4", "D4", "A3", "E4"]
+    # A cello goes down to C2 and up to A5, the top of its range as Adler gives it.
+    assert typed(guitar(name="cello"), "D", "A", "E", "B") == ["D3", "A2", "E2", "B2"]
+    assert typed(guitar(name="cello", measures=3), "F", "A", "D", "F", "A", "D", "F", "A", "C") == ["F3", "A3", "D4", "F4", "A4", "D5", "F5", "A5", "C5"]
+    # A double bass is written an octave above its sound: its low E string, E1, is written E2.
+    assert typed(guitar(name="double-bass"), "A", "E", "B") == ["A2", "E2", "B2"]
+
+
 def test_a_note_written_from_the_fretboard_keeps_the_string_it_was_played_on(client):
     url = new_score(client)
     cursor = first_note(client.get(f"{url}/score.musicxml").text.encode())

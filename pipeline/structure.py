@@ -64,7 +64,8 @@ class Instrument:
 
     A string instrument has its strings' tuning, as they sound, from the bottom line of a TAB staff
     up, which is the lowest string first except on a ukulele. A fretted one has its frets too, and a
-    "tab" clef is a tablature staff linked under its standard staff (see fretted.py).
+    "tab" clef is a tablature staff linked under its standard staff (see fretted.py). A bowed one has
+    the top of its range too, as it sounds (see edit.bowed_range).
     """
 
     label: str
@@ -79,6 +80,7 @@ class Instrument:
     concert_clefs: tuple[str, ...] = ()
     strings: tuple[str, ...] = ()
     frets: int = 0
+    highest: str = ""
 
 
 GRAND_STAFF = ("treble", "bass")
@@ -149,10 +151,12 @@ INSTRUMENTS = {
     "ukulele": Instrument("Ukulele", program=25, family="Strings - Plucked", sound="pluck.ukulele", strings=("G4", "C4", "E4", "A4"), frets=15),
     "mandolin": Instrument("Mandolin", program=26, family="Strings - Plucked", sound="pluck.mandolin", strings=("G3", "D4", "A4", "E5"), frets=17),
     "banjo": Instrument("Banjo", ("treble8",), program=106, family="Strings - Plucked", sound="pluck.banjo", strings=("G4", "D3", "G3", "B3", "D4"), frets=22),
-    "violin": Instrument("Violin", program=41, family="Strings - Bowed", sound="strings.violin", strings=("G3", "D4", "A4", "E5")),
-    "viola": Instrument("Viola", ("alto",), program=42, family="Strings - Bowed", sound="strings.viola", strings=("C3", "G3", "D4", "A4")),
-    "cello": Instrument("Cello", ("bass",), program=43, family="Strings - Bowed", sound="strings.cello", strings=("C2", "G2", "D3", "A3")),
-    "double-bass": Instrument("Double Bass", ("bass",), octaves=-1, program=44, family="Strings - Bowed", sound="strings.contrabass", strings=("E1", "A1", "D2", "G2")),
+    # The bowed strings' highest notes are the tops of their ranges as Adler's The Study of Orchestration
+    # gives them, as they sound: a double bass's G4 is written G5.
+    "violin": Instrument("Violin", program=41, family="Strings - Bowed", sound="strings.violin", strings=("G3", "D4", "A4", "E5"), highest="A7"),
+    "viola": Instrument("Viola", ("alto",), program=42, family="Strings - Bowed", sound="strings.viola", strings=("C3", "G3", "D4", "A4"), highest="E6"),
+    "cello": Instrument("Cello", ("bass",), program=43, family="Strings - Bowed", sound="strings.cello", strings=("C2", "G2", "D3", "A3"), highest="A5"),
+    "double-bass": Instrument("Double Bass", ("bass",), octaves=-1, program=44, family="Strings - Bowed", sound="strings.contrabass", strings=("E1", "A1", "D2", "G2"), highest="G4"),
 }
 # The names a plain staff goes by where instruments are chosen, as "Music" says nothing there.
 STAFF_NAMES = {
