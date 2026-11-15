@@ -124,11 +124,21 @@
           <button id="zoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+=)"><span data-icon="zoomIn"></span></button>
         </div>
         <aside id="original" aria-label="Your original sheet">
+          <div id="originalGrip" role="separator" tabindex="0" aria-label="Room for the original sheet" title="Drag to give the original sheet more or less room"></div>
           <header><span>Original sheet</span>
+            <button id="originalLarger" class="flat" aria-pressed="false" aria-label="More room" title="Give the original sheet more room, or its usual room back"><span data-icon="enlarge"></span></button>
             <button id="checked" title="Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.">Mark as checked</button>
             <button id="originalClose" class="flat" aria-label="Hide the original sheet" title="Hide"><span data-icon="close"></span></button>
           </header>
-          <div id="images"></div>
+          <div id="sheetFrame">
+            <div id="images" title="Click a chord's box to change it, or the place where a chord was missed to add it. Ctrl+wheel, a pinch or a double-click zooms; drag to move about"></div>
+            <div id="sheetGhost" hidden><span class="tag"></span></div>
+            <div id="originalTools" role="toolbar" aria-label="Zoom the original sheet">
+              <button id="originalZoomOut" class="flat" aria-label="Zoom out" title="Zoom out (Ctrl+wheel)"><span data-icon="zoomOut"></span></button>
+              <button id="originalFit" class="flat" title="How far the sheet is zoomed. Click to fit it in again, as a double-click does">Fit</button>
+              <button id="originalZoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+wheel, or double-click a place)"><span data-icon="zoomIn"></span></button>
+            </div>
+          </div>
           <div id="checks" hidden><span class="label">Please check:</span></div>
         </aside>
       </div>

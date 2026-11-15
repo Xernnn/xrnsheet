@@ -139,6 +139,65 @@ def fake_recognizer(failing=()):
     return recognize
 
 
+def page_with_its_places(image, out_dir):
+    """Stand in for reading a page of four bars of four quarter notes, two bars a line, keeping where they are.
+
+    Each line runs from x 50 to 850 with a barline at 450 and a note every 100 from x 100, the first
+    line's staff from y 100 to 140, the second's from 300 to 340. A C chord is found on the first beat.
+    """
+    out_dir.mkdir(parents=True)
+    bar = "".join(note(step) for step in "CDEF")
+    root = parsed(harmony("C", "", "major") + bar, bar, '<print new-system="yes"/>' + bar, bar)
+    (out_dir / "page.musicxml").write_text(to_text(root), encoding="utf-8")
+    item = {"text": "C", "chord": "C", "confidence": 0.9, "box": [90, 70, 130, 90], "measure": 0, "onset": 0.0}
+    (out_dir / "chords.json").write_text(json.dumps([item]), encoding="utf-8")
+    lines = [{"left": 50, "right": 850, "top": top, "bottom": top + 40, "unit": 10, "bars": [450], "notes": [100, 200, 300, 400, 500, 600, 700, 800]} for top in (100, 300)]
+    (out_dir / "layout.json").write_text(json.dumps(lines), encoding="utf-8")
+    Image.new("RGB", (900, 400), "white").save(out_dir / "page.jpg")
+
+
+def chords_of(client, score_id):
+    return [(chord["text"], chord["measure"], chord["onset"]) for chord in client.get(f"/api/scores/{score_id}").json()["chords"]]
+
+
+def test_a_chord_missed_is_added_where_it_was_clicked_on_the_original(client, monkeypatch):
+    """A chord the reader missed had no box and couldn't be added from the original, only from a note in the score."""
+    monkeypatch.setattr(server, "recognize_page", page_with_its_places)
+    folder, upload = job_for_pdf(2)
+    server.recognize_job(folder, upload)
+    url = f"/api/scores/{folder.name}"
+    lines = client.get(f"{url}/source/2/layout").json()["lines"]
+    assert [[bar["measure"] for bar in line["bars"]] for line in lines] == [[4, 5], [6, 7]]  # Page 2 starts at the score's fifth bar.
+    assert [(beat["onset"], beat["x"]) for beat in lines[0]["bars"][1]["beats"]] == [(0.0, 500), (1.0, 600), (2.0, 700), (3.0, 800)]
+    assert (lines[1]["top"], lines[1]["bottom"], lines[0]["bars"][1]["left"], lines[0]["bars"][1]["right"]) == (300, 340, 450, 850)
+
+    box = [690, 75, 730, 95]
+    added = client.post(f"{url}/chords/at", json={"measure": 5, "onset": 2.0, "text": "G7", "page": 2, "box": box}).json()
+    found = next(chord for chord in added["chords"] if chord["text"] == "G7")
+    assert (found["measure"], found["onset"], found["box"], found["page"], found["added"]) == (5, 2.0, box, 2, True)
+    assert client.post(f"{url}/chords/at", json={"measure": 5, "onset": 2.0, "text": "A7"}).status_code == 422  # One's there already.
+    assert "G7" not in (folder / "recognized" / "chords.json").read_text()  # What the reader found is what it learns from.
+    client.post(f"{url}/undo")
+    assert ("G7", 5, 2.0) not in chords_of(client, folder.name)
+
+    first = server.current_root(folder).find("part/measure/note").get("id")
+    client.post(f"{url}/bars", json={"action": "insert", "note": first})
+    client.post(f"{url}/chords/at", json={"measure": 5, "onset": 1.0, "text": "Dm7"})
+    assert ("Dm7", 6, 1.0) in chords_of(client, folder.name)  # In the bar read as the sixth, wherever it is now.
+    sixth = next(measure for measure in server.current_root(folder).find("part").findall("measure") if measure.get("id") == "m5")
+    client.post(f"{url}/bars", json={"action": "delete", "note": sixth.find("note").get("id")})
+    refused = client.post(f"{url}/chords/at", json={"measure": 5, "onset": 0.0, "text": "C"})
+    assert refused.status_code == 422 and "deleted" in refused.json()["detail"]
+
+
+def test_a_page_read_before_its_places_were_kept_says_so(client, monkeypatch):
+    monkeypatch.setattr(server, "recognize_page", fake_recognizer())
+    folder, upload = job_for_pdf(1)
+    server.recognize_job(folder, upload)
+    assert client.get(f"/api/scores/{folder.name}/source/1/layout").json() == {"lines": []}
+    assert client.get(f"/api/scores/{folder.name}/source/3/layout").status_code == 404
+
+
 def job_for_pdf(count):
     folder = server.JOB_DIR / ("e" * 32)
     folder.mkdir()

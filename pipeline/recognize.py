@@ -190,6 +190,9 @@ def recognize(image_path: Path, out_dir: Path, reader: str = "model", device: st
     out_path.write_text(to_text(root), encoding="utf-8")
     (out_dir / "homr.musicxml").unlink(missing_ok=True)
     (out_dir / "chords.json").write_text(json.dumps([asdict(item) for item in chords], ensure_ascii=False, indent=1), encoding="utf-8")
+    # Where each line of music is, as chords were placed by it, so a chord missed here can be added
+    # by clicking where it is on the page, and placed the same way.
+    (out_dir / "layout.json").write_text(json.dumps([asdict(layout) for layout in layouts]), encoding="utf-8")
     cv2.imwrite(str(out_dir / "page.jpg"), image, [cv2.IMWRITE_JPEG_QUALITY, 88])
     return out_path, chords
 

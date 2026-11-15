@@ -38,11 +38,11 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
-from pipeline import concert, diagrams, edit, fretted, layout, marks, mixer, structure, technique, transpose
+from pipeline import align, concert, diagrams, edit, fretted, layout, marks, mixer, structure, technique, transpose
 from pipeline.engrave import VIEWS, export_pdf, glyph_script, keep_lines, page_size, render_pages, system_starts
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
-from pipeline.musicxml import UnreadableScore, read_score_file, to_text
+from pipeline.musicxml import UnreadableScore, read_measures, read_score_file, to_text
 from pipeline.playback import playback
 from pipeline.rhythm import fit_divisions, indexed
 from pipeline.timeline import places, timeline
@@ -69,6 +69,8 @@ CANCEL_WAIT_SECONDS = 10  # How long a cancel waits for the page being read to s
 OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
 ONLY_READS = {"GET", "HEAD", "OPTIONS"}
 OPENED_FILE = "opened.json"  # Beside a score opened from a MusicXML file.
+LAYOUT_FILE = "layout.json"  # Beside each page read: where its lines of music, barlines and notes are.
+ADDED_FILE = "added.json"  # Chords added from the original sheet, with where they were clicked, for their boxes.
 FIRST_VERSION_HEAD = 8192  # Where a file names the program that wrote it, near its start.
 
 
@@ -172,6 +174,17 @@ class ChordEdit(BaseModel):
 class ChordAdd(BaseModel):
     note: str
     text: str
+
+
+class ChordAt(BaseModel):
+    """A chord the reader missed, at a bar numbered as the score was read and a place in it in quarter notes,
+    with where on which page of the original it was clicked."""
+
+    measure: int
+    onset: float
+    text: str
+    page: int | None = None
+    box: list[float] | None = None
 
 
 class ChordFrame(BaseModel):
@@ -667,6 +680,16 @@ def read_chord_file(folder: Path) -> list[dict]:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
+def added_chords(folder: Path) -> list[dict]:
+    """The chords added from the original sheet, kept apart from those the reader found, which are what
+    its corrections are learnt from."""
+    try:
+        found = json.loads((folder / "recognized" / ADDED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return found if isinstance(found, list) else []
+
+
 def source_pages(folder: Path) -> list[int]:
     path = folder / "recognized" / "pages.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
@@ -808,7 +831,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
     marks.ensure_mark_ids(root)
     shown = concert.shown(root)  # The same score at concert pitch, if it's shown that way.
     read_info: dict[tuple[int, float], dict] = {}
-    for item in read_chord_file(folder):
+    for item in [*read_chord_file(folder), *added_chords(folder)]:
         read_info.setdefault((item["measure"], round(float(item["onset"]), 3)), item)  # Only the first was placed.
     chords = []
     shapes = diagrams.chord_diagrams(shown)
@@ -819,6 +842,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
             "confidence": found["confidence"] if unchanged else None,
             "box": found["box"] if found else None,
             "page": found["page"] if found else None,
+            "added": bool(found and found.get("added")),
             "diagram": shapes[chord["index"]] if chord["index"] < len(shapes) else None,
         })
     view = view_of(folder)
@@ -984,6 +1008,60 @@ def get_source_page(score_id: str, number: int) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "No such page")
     return FileResponse(path)
+
+
+def page_score(folder: Path, number: int) -> Path:
+    return next((folder / "recognized" / f"page_{number:03d}").glob("*.musicxml"))
+
+
+@app.get("/api/scores/{score_id}/source/{number}/layout")
+def get_source_layout(score_id: str, number: int) -> dict:
+    """Say where each bar and beat is on a page of the original sheet, as the reader found them.
+
+    A chord the reader missed is added by clicking where it is on the page. Its bar and beat are found
+    as the reader placed the chords it found (align.place_chord): the line of music, the bar between
+    its barlines, and the nearest note or rest in that bar. So the page is told where those are. Bars
+    are numbered as the score was read, as chords.json numbers them, which bars added or deleted since
+    don't change. A page read before they were kept has none.
+    """
+    folder = job_folder(score_id)
+    pages = source_pages(folder)
+    kept = folder / "recognized" / f"page_{number:03d}" / LAYOUT_FILE
+    if number not in pages:
+        raise HTTPException(404, "No such page")
+    if not kept.exists():
+        return {"lines": []}
+    roots = [ET.parse(page_score(folder, page)).getroot() for page in pages]
+    _, offsets = merge_pages(roots)
+    first = offsets[pages.index(number)]
+    lines = []
+    found = json.loads(kept.read_text(encoding="utf-8"))
+    for layout_found, measures in zip([align.SystemLayout(**item) for item in found], align.split_into_systems(read_measures(roots[pages.index(number)].find("part")))):
+        edges = align.measure_edges(layout_found, measures)
+        columns = align.note_columns(layout_found.notes, layout_found.unit)
+        bars = []
+        for index, measure in enumerate(measures):
+            places = align.event_positions(measure, edges[index], edges[index + 1], columns)
+            beats = [{"onset": event.onset, "x": float(x)} for event, x in zip(measure.events, places)] or [{"onset": 0.0, "x": float(edges[index])}]
+            bars.append({"measure": first + index, "left": float(edges[index]), "right": float(edges[index + 1]), "beats": beats})
+        first += len(measures)
+        lines.append({"top": layout_found.top, "bottom": layout_found.bottom, "unit": layout_found.unit, "bars": bars})
+    return {"lines": lines}
+
+
+@app.post("/api/scores/{score_id}/chords/at")
+def add_chord_at(score_id: str, body: ChordAt) -> dict:
+    """Add a chord the reader missed at the bar and beat found from where it was clicked on the original.
+
+    Where it was clicked is kept, apart from what the reader found, so the original draws its box.
+    """
+    folder = job_folder(score_id)
+    with edit_lock:
+        if body.page is not None and body.box is not None and len(body.box) == 4 and (folder / "recognized").exists():
+            kept = [item for item in added_chords(folder) if (item.get("measure"), item.get("onset")) != (body.measure, body.onset)]
+            kept.append({"measure": body.measure, "onset": body.onset, "page": body.page, "box": body.box, "chord": body.text.strip(), "confidence": None, "added": True})
+            write_whole(folder / "recognized" / ADDED_FILE, json.dumps(kept))
+        return apply_edit(score_id, lambda root: edit.add_chord_at(root, body.measure, Fraction(body.onset).limit_denominator(64), body.text))
 
 
 @app.post("/api/scores/{score_id}/checked")

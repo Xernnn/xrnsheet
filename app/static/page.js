@@ -490,18 +490,255 @@ function draw() {
 }
 
 function drawOriginals() {
+  setSheetZoom(1);
+  sheetPlaces = {};
   $("images").replaceChildren(...score.sourcePages.map(number => {
     const frame = document.createElement("div");
     frame.className = "imageBox";
     frame.dataset.page = number;
     const image = new Image();
     image.alt = `Page ${number} of your sheet`;
+    image.draggable = false;
     image.addEventListener("load", drawBoxes);
     image.addEventListener("load", () => { if (number === score?.sourcePages?.[0]) layOutOriginal(image); });
     image.src = `/api/scores/${scoreId}/source/${number}.jpg`;
     frame.append(image);
+    loadPlaces(scoreId, number);
     return frame;
   }));
+}
+
+// Where each bar and beat is on each page of the original, as the reader found them, to add a chord
+// it missed where it's clicked. A page read before they were kept has none.
+let sheetPlaces = {};
+
+async function loadPlaces(id, number) {
+  const response = await fetch(`/api/scores/${id}/source/${number}/layout`);
+  const found = response.ok ? await response.json() : null;
+  if (id === scoreId) sheetPlaces[number] = found?.lines ?? [];
+}
+
+// The original is zoomed by the wheel with Ctrl, as the pages are, by a pinch, or by a double-click
+// on a place and again to fit; dragged to move about; and given more room by dragging its edge.
+let sheetZoom = 1;
+const SHEET_ZOOMS = [1, 1.5, 2, 3, 4, 6];
+
+function setSheetZoom(value, at = null) {
+  const holder = $("images");
+  const next = Math.min(SHEET_ZOOMS.at(-1), Math.max(1, value));
+  const area = holder.getBoundingClientRect();
+  const x = at ? at.x - area.left : holder.clientWidth / 2, y = at ? at.y - area.top : holder.clientHeight / 2;
+  // The place under the pointer stays under it.
+  const left = holder.scrollLeft + x, top = holder.scrollTop + y, ratio = next / sheetZoom;
+  sheetZoom = next;
+  holder.style.setProperty("--sheetZoom", next);
+  holder.scrollLeft = left * ratio - x;
+  holder.scrollTop = top * ratio - y;
+  $("originalFit").textContent = next === 1 ? "Fit" : `${Math.round(next * 100)}%`;
+  $("originalFit").disabled = next === 1;
+  $("originalZoomOut").disabled = next === 1;
+  $("originalZoomIn").disabled = next === SHEET_ZOOMS.at(-1);
+  $("sheetGhost").hidden = true;
+}
+
+function stepSheetZoom(by) {
+  const next = by > 0 ? SHEET_ZOOMS.find(level => level > sheetZoom + 0.01) : SHEET_ZOOMS.findLast(level => level < sheetZoom - 0.01);
+  if (next) setSheetZoom(next);
+}
+
+// A chord's box is brought into sight when the chord is chosen, however far the original is zoomed.
+function showBox(box) {
+  const holder = $("images"), area = holder.getBoundingClientRect(), place = box.getBoundingClientRect();
+  if (place.left < area.left || place.right > area.right) holder.scrollLeft += place.left - area.left - (area.width - place.width) / 2;
+  if (place.top < area.top || place.bottom > area.bottom) holder.scrollTop += place.top - area.top - (area.height - place.height) / 2;
+}
+
+// A box clicked on the original chooses its chord in the score, and opens it to change, as a chip does.
+function openChordFromSheet(index) {
+  const element = document.querySelector(`#pages g.harm[data-index="${index}"]`);
+  if (!element || !score?.chords?.[index]) return;
+  element.scrollIntoView({ block: "center", inline: "nearest" }); // With room below it for the box to change it.
+  select(null);
+  chooseChord(index);
+  openEditor(element.getBoundingClientRect(), index, score.chords[index].text);
+}
+
+// The page under a point of the original, and the point on it in the page's own pixels.
+function sheetPointAt(clientX, clientY) {
+  const frame = document.elementsFromPoint(clientX, clientY).find(element => element.classList?.contains("imageBox"));
+  const image = frame?.querySelector("img");
+  if (!image?.naturalWidth) return null;
+  const box = image.getBoundingClientRect();
+  return { page: Number(frame.dataset.page), image, x: (clientX - box.left) / box.width * image.naturalWidth, y: (clientY - box.top) / box.height * image.naturalHeight };
+}
+
+// Where a chord clicked at this point of the page goes, as the reader places one: the line of music
+// it's over, the first whose staff ends below it, or the last; the bar between its barlines, the first
+// or last bar beyond the line's ends; and the nearest note or rest in that bar.
+function missedChordAt(point) {
+  const lines = sheetPlaces[point.page];
+  if (!lines?.length) return null;
+  const line = lines.find(item => point.y <= item.bottom + item.unit * 2) ?? lines.at(-1);
+  if (!line.bars.length) return null;
+  const bar = line.bars.find(item => point.x < item.right) ?? line.bars.at(-1);
+  const beat = bar.beats.reduce((best, item) => Math.abs(item.x - point.x) < Math.abs(best.x - point.x) ? item : best);
+  return { line, bar, beat, name: placeName(bar.measure, beat.onset) };
+}
+
+// How a player counts a moment in a bar, the bar found by its number as the score was read, wherever
+// it is now: "bar 5, beat 3". Null for a bar deleted since.
+function placeName(origin, onset) {
+  const bar = document.getElementById(`m${origin}`);
+  const ids = bar ? [...bar.querySelectorAll("g.note, g.rest, g.mRest")].map(element => ownId(element.id)).filter(id => score?.places?.[id]) : [];
+  if (!ids.length) return null;
+  const at = ids.find(id => Math.abs(score.places[id][1] - onset) < 0.001);
+  return at ? whenOf(document.getElementById(at)) : `bar ${measureFacts(score.places[ids[0]][0]).number}`;
+}
+
+function drawSheetGhost(event) {
+  const ghost = $("sheetGhost");
+  if (editing?.at) return; // It stays where the chord being typed goes.
+  const point = !sheetDrag && !event.target.closest?.(".box") ? sheetPointAt(event.clientX, event.clientY) : null;
+  const spot = point && missedChordAt(point);
+  if (!spot?.name) { ghost.hidden = true; return; }
+  const image = point.image.getBoundingClientRect(), frame = $("sheetFrame").getBoundingClientRect();
+  const scale = image.width / point.image.naturalWidth;
+  const top = spot.line.top - spot.line.unit * 3.5;
+  ghost.style.left = `${image.left - frame.left + spot.beat.x * scale}px`;
+  ghost.style.top = `${image.top - frame.top + top * scale}px`;
+  ghost.style.height = `${(spot.line.bottom - top) * scale}px`;
+  ghost.querySelector(".tag").textContent = `Add a chord: ${spot.name}`;
+  ghost.hidden = false;
+}
+
+// A click where the reader missed a chord asks for it, and writes it at that bar and beat. The place
+// clicked is kept as its box, a little to the right of the beat and above the staff, as chords sit.
+function askForMissedChord(event) {
+  const point = sheetPointAt(event.clientX, event.clientY);
+  const spot = point && missedChordAt(point);
+  if (!point) return;
+  if (!spot) {
+    message(sheetPlaces[point.page] ? "This page was read before chords could be added from it. Choose a note in the score, then Add chord." : "");
+    return;
+  }
+  if (!spot.name) { message("That bar has been deleted from the score."); return; }
+  const unit = spot.line.unit;
+  openEditor({ left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY + 8 }, null, "");
+  editing.at = { measure: spot.bar.measure, onset: spot.beat.onset, page: point.page, box: [spot.beat.x - unit * 0.5, point.y - unit * 1.2, spot.beat.x + unit * 3.5, point.y + unit * 0.8] };
+  $("sheetGhost").querySelector(".tag").textContent = `Chord at ${spot.name}`;
+}
+
+let sheetDrag = null, sheetDragged = false, sheetClick = 0;
+const sheetPointers = new Map();
+
+function setUpOriginal() {
+  const holder = $("images");
+  holder.addEventListener("wheel", event => {
+    if (!event.ctrlKey && !event.metaKey) return; // The wheel alone scrolls, as anywhere else.
+    event.preventDefault();
+    setSheetZoom(sheetZoom * Math.exp(-event.deltaY / 400), { x: event.clientX, y: event.clientY });
+  }, { passive: false });
+  holder.addEventListener("dblclick", event => {
+    if (event.target.closest(".box")) return;
+    event.preventDefault();
+    clearTimeout(sheetClick);
+    closeEditor();
+    if (sheetZoom > 1) setSheetZoom(1);
+    else setSheetZoom(3, { x: event.clientX, y: event.clientY });
+  });
+  holder.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    sheetPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (sheetPointers.size === 2) {
+      const [a, b] = [...sheetPointers.values()];
+      sheetDrag = { pinch: Math.hypot(a.x - b.x, a.y - b.y), zoom: sheetZoom, moved: true };
+      return;
+    }
+    sheetDrag = { x: event.clientX, y: event.clientY, left: holder.scrollLeft, top: holder.scrollTop, moved: false };
+  });
+  holder.addEventListener("pointermove", event => {
+    if (sheetPointers.has(event.pointerId)) sheetPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (!sheetDrag) { drawSheetGhost(event); return; }
+    if (sheetDrag.pinch && sheetPointers.size === 2) {
+      const [a, b] = [...sheetPointers.values()];
+      setSheetZoom(sheetDrag.zoom * Math.hypot(a.x - b.x, a.y - b.y) / sheetDrag.pinch, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      return;
+    }
+    if (sheetDrag.pinch) return;
+    const dx = event.clientX - sheetDrag.x, dy = event.clientY - sheetDrag.y;
+    if (!sheetDrag.moved && Math.hypot(dx, dy) < 5) return; // A click wobbles a little.
+    if (!sheetDrag.moved) { holder.setPointerCapture(event.pointerId); holder.classList.add("panning"); $("sheetGhost").hidden = true; }
+    sheetDrag.moved = true;
+    holder.scrollLeft = sheetDrag.left - dx;
+    holder.scrollTop = sheetDrag.top - dy;
+  });
+  const letGo = event => {
+    sheetPointers.delete(event.pointerId);
+    if (sheetDrag?.moved) sheetDragged = true;
+    if (!sheetPointers.size) { sheetDrag = null; holder.classList.remove("panning"); }
+  };
+  holder.addEventListener("pointerup", letGo);
+  holder.addEventListener("pointercancel", letGo);
+  holder.addEventListener("pointerleave", () => { if (!editing?.at) $("sheetGhost").hidden = true; });
+  holder.addEventListener("scroll", () => { $("sheetGhost").hidden = true; }, { passive: true });
+  holder.addEventListener("click", event => {
+    if (sheetDragged) { sheetDragged = false; return; } // That was a drag to move about, not a click.
+    const box = event.target.closest(".box");
+    if (box) { openChordFromSheet(Number(box.dataset.index)); return; }
+    // A second click is a double-click, which zooms, so the first waits a moment to see.
+    clearTimeout(sheetClick);
+    if (event.detail > 1) return;
+    const { clientX, clientY } = event;
+    sheetClick = setTimeout(() => askForMissedChord({ clientX, clientY }), 260);
+  });
+  $("originalZoomIn").addEventListener("click", () => stepSheetZoom(1));
+  $("originalZoomOut").addEventListener("click", () => stepSheetZoom(-1));
+  $("originalFit").addEventListener("click", () => setSheetZoom(1));
+  setUpOriginalRoom();
+}
+
+// The original's room: its width beside the score, or its height across the top, dragged at its edge
+// or given more at once by its button, and kept for next time.
+const LARGE_ORIGINAL = "60%";
+
+function originalRoom(size) {
+  const across = $("original").classList.contains("across");
+  $("scoreArea").style.setProperty(across ? "--originalHeight" : "--originalWidth", size || null);
+  $("originalLarger").setAttribute("aria-pressed", String(size === LARGE_ORIGINAL));
+  if (fittedZoom()) setZoom(zoom);
+  drawCursor();
+}
+
+function setUpOriginalRoom() {
+  const grip = $("originalGrip");
+  const setting = () => $("original").classList.contains("across") ? "originalHeight" : "originalWidth";
+  const resize = (clientX, clientY) => {
+    const area = $("scoreArea").getBoundingClientRect();
+    const across = $("original").classList.contains("across");
+    const size = across ? Math.min(Math.max(clientY - area.top, 120), area.height - 160) : Math.min(Math.max(area.right - clientX, 240), area.width - 320);
+    originalRoom(`${Math.round(size)}px`);
+  };
+  let dragging = false;
+  grip.addEventListener("pointerdown", event => { dragging = true; grip.setPointerCapture(event.pointerId); grip.classList.add("dragging"); event.preventDefault(); });
+  grip.addEventListener("pointermove", event => { if (dragging) resize(event.clientX, event.clientY); });
+  grip.addEventListener("pointerup", () => {
+    dragging = false;
+    grip.classList.remove("dragging");
+    keepSetting(setting(), $("scoreArea").style.getPropertyValue(`--${setting()}`));
+  });
+  grip.addEventListener("keydown", event => {
+    const by = { ArrowLeft: 40, ArrowRight: -40, ArrowUp: -40, ArrowDown: 40 }[event.key];
+    if (!by) return;
+    event.preventDefault();
+    const box = $("original").getBoundingClientRect(), across = $("original").classList.contains("across");
+    resize(box.left - (across ? 0 : by), box.bottom + (across ? by : 0));
+    keepSetting(setting(), $("scoreArea").style.getPropertyValue(`--${setting()}`));
+  });
+  $("originalLarger").addEventListener("click", () => {
+    const large = $("originalLarger").getAttribute("aria-pressed") !== "true";
+    originalRoom(large ? LARGE_ORIGINAL : readSetting(setting(), ""));
+    if (!large && readSetting(setting(), "") === LARGE_ORIGINAL) originalRoom("");
+  });
 }
 
 // A sheet wider than it's tall, such as a lead sheet, is shown across the top of the score, where it
@@ -511,10 +748,8 @@ const ACROSS_ABOVE = 1.25; // How much wider than tall a sheet is to go across t
 
 function layOutOriginal(image) {
   const across = image.naturalWidth / image.naturalHeight > ACROSS_ABOVE;
-  if ($("original").classList.contains("across") === across) return;
-  $("original").classList.toggle("across", across);
-  if (fittedZoom()) setZoom(zoom);
-  drawCursor();
+  if ($("original").classList.contains("across") !== across) $("original").classList.toggle("across", across);
+  originalRoom(readSetting(across ? "originalHeight" : "originalWidth", ""));
 }
 
 function drawBoxes() {
@@ -526,8 +761,9 @@ function drawBoxes() {
     if (!image?.naturalWidth) continue;
     const [left, top, right, bottom] = chord.box;
     const box = document.createElement("div");
-    box.className = "box" + (chord.confidence !== null && chord.confidence < UNSURE_BELOW ? " unsure" : "");
+    box.className = "box" + (chord.confidence !== null && chord.confidence < UNSURE_BELOW ? " unsure" : "") + (chord.added ? " added" : "");
     box.dataset.index = chord.index;
+    box.title = `${chord.text}: click to change it`;
     box.style.left = `${left / image.naturalWidth * 100}%`;
     box.style.top = `${top / image.naturalHeight * 100}%`;
     box.style.width = `${(right - left) / image.naturalWidth * 100}%`;
@@ -607,9 +843,9 @@ function noteAction(action, extra = {}) {
 function openEditor(rect, index, text, noteId = null) {
   editing = { index, noteId };
   document.querySelectorAll(".box.active").forEach(box => box.classList.remove("active"));
-  const active = document.querySelector(`.box[data-index="${index}"]`);
+  const active = index === null ? null : document.querySelector(`.box[data-index="${index}"]`);
   active?.classList.add("active");
-  active?.scrollIntoView({ block: "nearest" });
+  if (active && !$("original").hidden) showBox(active);
   $("editor").hidden = false;
   $("editorError").hidden = true;
   $("chordDelete").hidden = index === null;
@@ -628,6 +864,7 @@ function openEditor(rect, index, text, noteId = null) {
 
 function closeEditor() {
   editing = null;
+  $("sheetGhost").hidden = true;
   // A box that's hidden while it has the focus keeps it for a moment, and would swallow the next key.
   $("chordInput").blur();
   $("editor").hidden = true;
@@ -639,6 +876,7 @@ async function saveChord(text) {
   try {
     if (editing.mark) await send("marks", { action: "label", id: editing.mark, text });
     else if (editing.newMark) await send("marks", { ...editing.newMark, text });
+    else if (editing.at) await send("chords/at", { ...editing.at, text });
     else if (editing.index === null) await send("chords", { note: editing.noteId, text });
     else await send(`chords/${editing.index}`, { text });
     closeEditor();
@@ -741,6 +979,7 @@ function setUpPage() {
     label.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); } });
   });
   $("homeSearch").addEventListener("input", drawTiles);
+  setUpOriginal();
   $("readingCancel").addEventListener("click", () => removeSheet(scoreId));
   $("readingRemove").addEventListener("click", () => removeSheet(scoreId));
   $("readingRetry").addEventListener("click", () => readAgain(scoreId));

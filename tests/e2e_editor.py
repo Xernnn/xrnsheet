@@ -5087,6 +5087,111 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         check("Cancel where it's shown stops it and goes back to the library", third not in listed(base) and page.locator(f'#historyList a[data-score="{third}"]').count() == 0)
 
 
+def on_the_sheet(page, x: float, y: float) -> tuple[float, float]:
+    """Where a point of the original's first page, in its own pixels, is in the window."""
+    spot = page.evaluate("""([x, y]) => {
+        const image = document.querySelector('.imageBox img'), box = image.getBoundingClientRect();
+        return { x: box.left + x / image.naturalWidth * box.width, y: box.top + y / image.naturalHeight * box.height };
+    }""", [x, y])
+    return spot["x"], spot["y"]
+
+
+def box_in_sight(page, index: int) -> bool:
+    return page.evaluate("""index => {
+        const box = document.querySelector(`.box[data-index="${index}"]`).getBoundingClientRect(), area = document.getElementById('images').getBoundingClientRect();
+        return box.left >= area.left && box.right <= area.right && box.top >= area.top && box.bottom <= area.bottom;
+    }""", index)
+
+
+def test_the_original_sheet(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """The original was a fixed picture about 340 pixels across: no zoom, a box on it did nothing, and a
+    chord the reader missed, the biggest loss on a handwritten chart, couldn't be added from it."""
+    page.goto(base)
+    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.wait_for_selector("#pages svg", timeout=120000)
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    page.wait_for_selector(".box")
+    page.wait_for_function("() => sheetPlaces[1]?.length > 0")
+    chords = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]
+    width = lambda: page.evaluate("() => document.querySelector('.imageBox').getBoundingClientRect().width")
+    fitted = width()
+    sheet = page.locator("#images").bounding_box()
+    page.mouse.move(sheet["x"] + sheet["width"] / 2, sheet["y"] + sheet["height"] / 2)
+    page.keyboard.down("Control")
+    page.mouse.wheel(0, -400)
+    page.keyboard.up("Control")
+    check("Ctrl and the wheel zoom the original", width() > fitted * 1.5 and page.inner_text("#originalFit").endswith("%"), (fitted, width(), page.inner_text("#originalFit")))
+    page.mouse.dblclick(sheet["x"] + sheet["width"] / 2, sheet["y"] + sheet["height"] / 2)
+    check("a double-click fits it in again", abs(width() - fitted) < 1 and page.inner_text("#originalFit") == "Fit")
+    x, y = on_the_sheet(page, chords[4]["box"][0], chords[4]["box"][3] + 40)  # On the staff below the chord.
+    page.mouse.dblclick(x, y)
+    page.wait_for_timeout(100)
+    check("and zooms in on the place double-clicked", width() > fitted * 2 and page.evaluate("() => sheetZoom") == 3, width())
+    scrolled = page.evaluate("() => [document.getElementById('images').scrollLeft, document.getElementById('images').scrollTop]")
+    page.mouse.move(sheet["x"] + 200, sheet["y"] + 60)
+    page.mouse.down()
+    page.mouse.move(sheet["x"] + 300, sheet["y"] + 40, steps=5)
+    page.mouse.up()
+    moved = page.evaluate("() => [document.getElementById('images').scrollLeft, document.getElementById('images').scrollTop]")
+    check("dragging moves about it", moved[0] < scrolled[0] - 50 and moved[1] > scrolled[1] + 10 and page.is_hidden("#editor"), (scrolled, moved))
+
+    far = len(chords) - 1
+    page.locator(f'#pages g.harm[data-index="{far}"]').evaluate("element => element.scrollIntoView({ block: 'center' })")
+    click_on(page, page.locator(f'#pages g.harm[data-index="{far}"]'))
+    check("choosing a chord in the score brings its box into sight on the zoomed original", page.locator(f'.box.active[data-index="{far}"]').count() == 1 and box_in_sight(page, far))
+    page.keyboard.press("Escape")
+    page.click("#originalFit")
+    page.click('.box[data-index="1"]')
+    page.wait_for_selector("#editor:not([hidden])")
+    check("a box clicked on the original opens its chord in the score to change", page.input_value("#chordInput") == chords[1]["text"] and page.evaluate("() => selectedChord") == 1 and page.locator('.box.active[data-index="1"]').count() == 1)
+    page.keyboard.press("Escape")
+
+    missed = chords[4]
+    page.click(f'.box[data-index="{missed["index"]}"]')
+    page.click("#chordDelete")
+    settle(page)
+    check("(a chord removed, as if the reader had missed it)", len(json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]) == len(chords) - 1)
+    unit = json.loads(fetch_text(base, f"/api/scores/{score_id}/source/1/layout"))["lines"][0]["unit"]
+    left, top, right, bottom = missed["box"]
+    x, y = on_the_sheet(page, left + unit / 2, (top + bottom) / 2)  # As the reader places a chord: by its box's left edge.
+    page.mouse.move(x, y)
+    tag = page.inner_text("#sheetGhost .tag") if page.is_visible("#sheetGhost") else None
+    check("the original shows where a chord clicked there goes, as a player counts it", tag == f"Add a chord: bar {missed['measure'] + 1}, beat 1", tag)
+    if shots:
+        page.screenshot(path=str(shots / "original-add-chord.png"))
+    page.mouse.click(x, y)
+    page.wait_for_selector("#editor:not([hidden])")
+    page.keyboard.type(missed["text"])
+    page.keyboard.press("Enter")
+    settle(page)
+    after = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]
+    back = [chord for chord in after if (chord["measure"], chord["onset"]) == (missed["measure"], missed["onset"])]
+    # It's where the reader had read it, so it's that box again, and what the reader learns from counts it as read right.
+    check("a click there and the chord typed writes it at that bar and beat, with its box", [chord["text"] for chord in back] == [missed["text"]] and back[0]["box"] == missed["box"] and page.locator(f'.box[data-index="{back[0]["index"]}"]').count() == 1, back)
+    page.click("#undo")
+    settle(page)
+    check("and it's undone like any edit", len(json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]) == len(chords) - 1)
+
+    room = lambda: page.locator("#original").bounding_box()
+    before = room()
+    page.click("#originalLarger")
+    page.wait_for_timeout(100)
+    larger = room()
+    check("the original can be given more room", larger["height"] > before["height"] + 60 and page.get_attribute("#originalLarger", "aria-pressed") == "true", (before, larger))
+    page.click("#originalLarger")
+    grip = page.locator("#originalGrip").bounding_box()
+    page.mouse.move(grip["x"] + grip["width"] / 2, grip["y"] + grip["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(grip["x"] + grip["width"] / 2, grip["y"] + 120, steps=4)
+    page.mouse.up()
+    check("or have its edge dragged", room()["height"] > before["height"] + 80, (before, room()))
+    check("and the score beside it is still fitted to what's left", page.input_value("#zoomChoice") == "width" and page.locator("#pages svg").first.bounding_box()["height"] > 100)
+    page.click("#originalLarger")
+    page.click("#originalLarger")  # Back to the usual room, for the tests after.
+    page.evaluate("() => { keepSetting('originalHeight', ''); originalRoom(''); }")
+
+
 def head_point(page, element_id: str) -> tuple[float, float]:
     """The middle of a note's head, where a mouse aims."""
     box = page.evaluate("""id => {
@@ -5382,6 +5487,7 @@ def main() -> None:
             test_found_by_the_bug_hunt(context, base, created)
             test_phone(context, base, arguments.shots, created)
             test_reading_leaves_the_window_free(page, arguments.shots)
+            test_the_original_sheet(page, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])
             browser.close()

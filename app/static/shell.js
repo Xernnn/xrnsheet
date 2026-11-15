@@ -41,6 +41,7 @@ const ICONS = {
   sound: `<path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9a4 4 0 010 6M18 6.5a7.5 7.5 0 010 11"/>`,
   voice: `<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0012 0M12 17v4M9 21h6"/>`,
   clock: `<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>`,
+  enlarge: `<path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/>`,
   alert: `<path d="M12 4l9 16H3z"/><path d="M12 10v4.5M12 17.2v.3"/>`,
 };
 const ZOOMS = [25, 50, 75, 100, 125, 150, 200, 300, 400];

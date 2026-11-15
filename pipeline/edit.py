@@ -23,6 +23,7 @@ from pipeline.rhythm import (
     Context,
     EditError,
     Event,
+    Mark,
     Timeline,
     Tuplet,
     alteration_in_key,
@@ -1515,6 +1516,28 @@ def set_chord(root: ET.Element, index: int, text: str) -> None:
     measure.remove(harmony)
     if new_element is not None:
         measure.insert(position, new_element)
+
+
+def add_chord_at(root: ET.Element, origin: int, onset: Fraction, text: str) -> None:
+    """Add a chord at a moment in a bar, the bar found by its number in the score as it was read.
+
+    A chord the reader missed is added from where it is on the original sheet, which knows its bars by
+    those numbers. A bar keeps its number in its id, so bars added or deleted since don't move the chord.
+    The moment needn't be where a note starts, as the notes may have been changed since.
+    """
+    chord = require_chord(text)
+    if onset < 0:
+        raise EditError("That's before the bar begins.")
+    for context in contexts(root.find("part")):
+        if origin_of(context.measure, context.index) != origin:
+            continue
+        timeline = read_measure(context.measure, context.divisions)
+        if any(mark.element.tag == "harmony" and mark.onset == onset for mark in timeline.marks):
+            raise EditError("There's a chord there already. Click it to change it.")
+        timeline.marks.append(Mark(onset, harmony_element(chord)))
+        write_measure(context.measure, timeline, context.divisions)
+        return
+    raise EditError("That bar has been deleted from the score.")
 
 
 def add_chord(root: ET.Element, note_id: str, text: str) -> None:
