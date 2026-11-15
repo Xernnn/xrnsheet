@@ -238,7 +238,7 @@ function updateTools() {
   const said = mark?.text ? `: ${mark.text}`.replace(/\.$/, "") : "";
   const chord = selectedChord !== null && score?.chords?.[selectedChord];
   const chosen = mark ? `${markName(mark)}${said}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : chord ? `Chord ${chord.text}. Type another, or change how it's played in the inspector.` : selection;
-  const practising = currentMode() === "practice" ? "Space plays from the selected note. A and B set the loop's ends there, and Hear and Wait for choose a part or a hand." : null;
+  const practising = currentMode() === "practice" ? "Space plays from the selected note, or with a loop set, round it from A. A and B set the loop's ends there, and Hear and Wait for choose a part or a hand." : null;
   const entering = tabInput() ? "Writing on the tablature. Type a fret for the string the cursor is on, ↑ ↓ for another string, Shift and a digit for a length, or click a string. Esc stops." : over ? `Writing over ${over} and what follows it, from the cursor on. Click the staff, type A to G or play below. Click a note to select it. Esc stops.` : "Writing. Click the staff, type A to G, 0 for a rest, or play below. Click a note to select it. Esc stops.";
   $("toolLabel").textContent = hint || (editor.on ? entering : practising ?? chosen);
   hint = "";

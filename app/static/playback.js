@@ -643,7 +643,16 @@ function hidePlayhead() {
 function playFromNote(id) {
   playState.chosen = id;
   const found = id && playState.data && placeOf(playState.data, id);
-  if (found && !player) drawPosition(found.start);
+  if (found && !player) drawStart();
+}
+
+// While nothing plays, the counters show where Play will start: the note chosen last, or the
+// playback position, or in Practice with an A–B loop, A.
+function drawStart() {
+  const data = playState.data;
+  if (!data || player || practice.follower) return;
+  const chosen = playState.chosen && placeOf(data, playState.chosen);
+  drawPosition(loopPlayStart(data) ?? (chosen ? chosen.start : playState.place));
 }
 
 // Play from a place given, or from the playback position. Started again where it was playing, as a
@@ -659,7 +668,7 @@ async function startPlaying(place = null, counted = true) {
   const chosen = place === null && fromNote ? placeOf(data, fromNote) : null;
   if (chosen) playState.place = chosen.start;
   playState.chosen = null;
-  let from = place ?? (playState.place < data.total - EARLY ? playState.place : 0);
+  let from = place ?? loopPlayStart(data) ?? (playState.place < data.total - EARLY ? playState.place : 0);
   const loop = playState.looping ? loopWindow(data) : null;
   if (loop && (from < loop.start - EARLY || from >= loop.end - EARLY)) from = loop.start;
   const audio = new (window.AudioContext || window.webkitAudioContext)();
@@ -687,7 +696,7 @@ function stopPlaying(finished = false) {
   showPlaying(false);
   showWait("");
   speedBack();
-  drawPosition(playState.place);
+  drawStart();
 }
 
 // In Practice, with someone's notes to wait for, playback waits for you to play them.
@@ -707,7 +716,7 @@ function playFrom(place) {
   }
   if (!player) {
     playState.place = place;
-    drawPosition(place);
+    drawStart();
     return;
   }
   stopPlaying();
@@ -734,6 +743,7 @@ function toggleLoop() {
   }
   drawPracticeState();
   drawLoopMarkers();
+  drawStart();
   if (player) playFrom(playingPlace());
 }
 
@@ -745,6 +755,7 @@ function setLoopEnd(side) {
   playState.looping = true;
   drawPracticeState();
   drawLoopMarkers();
+  drawStart();
 }
 
 function toggleMetronome() {
@@ -761,7 +772,7 @@ function setSpeed(percent) {
   $("speed").value = value;
   $("speedValue").value = value;
   drawPracticeState();
-  drawPosition(player ? playingPlace() : playState.place);
+  if (player) drawPosition(playingPlace()); else drawStart();
   if (player) playFrom(playingPlace());
 }
 
@@ -818,8 +829,7 @@ function refreshPosition() {
     if (data && !player && !practice.follower) {
       playState.place = Math.min(playState.place, data.total);
       // A note selected since the last play is where the position is, as it's where Play starts.
-      const chosen = playState.chosen && placeOf(data, playState.chosen);
-      drawPosition(chosen ? chosen.start : playState.place);
+      drawStart();
       refreshKinds();
       lightKeys();
       // A transposing instrument's sound is only known now, and the inspector's strings follow it.
@@ -899,7 +909,7 @@ function setUpPlayback() {
       const data = playState.data;
       const place = data ? read(data, event.target.value) : null;
       if (place !== null && Number.isFinite(place)) playFrom(Math.min(Math.max(place, 0), data.total));
-      else drawPosition(player ? playingPlace() : playState.place);
+      else if (player) drawPosition(playingPlace()); else drawStart();
     });
   };
   typed("timeCounter", (data, text) => {

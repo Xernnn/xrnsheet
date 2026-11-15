@@ -23,6 +23,14 @@ function practising() {
   return currentMode() === "practice";
 }
 
+// In Practice an A–B loop is played from A: Play starts it there whichever note was chosen last, B
+// as often as not, and wherever it was stopped, as each time round starts there. Without the loop's
+// two ends, and in Read and Write, Play starts from the selected note.
+function loopPlayStart(data) {
+  if (!practising() || !playState.looping || !playState.loop?.first || !playState.loop?.last) return null;
+  return loopWindow(data).start;
+}
+
 // The notes a choice covers: every note, a part's, or one staff of a part, counted from 1.
 function notesOf(choice) {
   if (!choice || choice === "all" || choice === "off") return () => true;
@@ -164,7 +172,7 @@ async function startFollowing(place = null, counted = true) {
   if (chosen) playState.place = chosen.start;
   playState.chosen = null;
   const loop = playState.looping ? loopWindow(data) : null;
-  let from = place ?? (playState.place < data.total - EARLY ? playState.place : 0);
+  let from = place ?? loopPlayStart(data) ?? (playState.place < data.total - EARLY ? playState.place : 0);
   if (loop && (from < loop.start - EARLY || from >= loop.end - EARLY)) from = loop.start;
   const until = loop ? loop.end : data.total;
   const yours = notesOf(practice.waitFor);
@@ -356,7 +364,7 @@ function stopFollowing(finished = false) {
   showWait("");
   showPlaying(false);
   speedBack();
-  drawPosition(playState.place);
+  drawStart();
   drawDock();
 }
 
