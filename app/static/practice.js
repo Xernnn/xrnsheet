@@ -360,13 +360,17 @@ function stopFollowing(finished = false) {
   drawDock();
 }
 
-// A MIDI keyboard's key: what you played while playback waits for you, or else a note to write.
-function midiNoteOn(number) {
-  if (practiseHeard(number)) { hearKey(soundingPitch(number, activePart())); return; }
+// A MIDI keyboard's key: what you played while playback waits for you, or else a note to write. It's
+// heard at once, whatever it does, until it's let go: while entering notes too, and with nothing being
+// written, so the keyboard can simply be played.
+function midiNoteOn(number, velocity = 100) {
+  holdKey(`midi:${number}`, soundingPitch(number, activePart()), activePart(), midiVolume(velocity));
+  if (practiseHeard(number)) return;
   midiKey(number);
 }
 
 function midiNoteOff(number) {
+  letGo(`midi:${number}`);
   practiseReleased(number);
 }
 

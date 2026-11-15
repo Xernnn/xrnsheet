@@ -119,6 +119,50 @@ function sampled(audio, set, midi, at, length, volume, destination) {
   return true;
 }
 
+// A key held down, whose end isn't known yet: it sounds from now, as play() would, until the function
+// returned lets it go, and then the damper quiets it, as a piano's does when its key comes up. A
+// recording dies away by itself as a struck string does; a wave holds, so one whose let-go never comes
+// (a MIDI keyboard's note-off lost) is let go after LONGEST_HOLD_SECONDS rather than left droning.
+const LONGEST_HOLD_SECONDS = 20;
+
+function heldVoice(audio, sound, midi, volume, destination = audio.destination) {
+  const at = audio.currentTime + 0.005;
+  const recording = sound.samples ? recordingOf(sound.samples, midi) : null;
+  const buffer = recording ? recordings.buffers.get(recording.url) : null;
+  const gain = audio.createGain();
+  let voice;
+  if (buffer) {
+    voice = audio.createBufferSource();
+    voice.buffer = buffer;
+    voice.playbackRate.value = 2 ** ((midi - recording.midi) / 12);
+    gain.gain.setValueAtTime(Math.max(volume * sound.samples.level / (buffer.numberOfChannels > 1 ? PAN_LAW : 1), 1e-6), at);
+  } else {
+    voice = audio.createOscillator();
+    voice.type = sound.wave;
+    voice.frequency.value = 440 * 2 ** ((midi - 69) / 12);
+    const level = Math.max(volume * sound.level, 1e-6);
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(level, at + 0.012);
+    gain.gain.linearRampToValueAtTime(level * 0.7, at + 0.3);
+  }
+  voice.connect(gain).connect(destination);
+  voice.start(at);
+  let gone = false;
+  const letGo = () => {
+    if (gone) return;
+    gone = true;
+    clearTimeout(longest);
+    const now = Math.max(audio.currentTime, at);
+    const level = Math.max(gain.gain.value, 1e-6);
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setValueAtTime(level, now);
+    gain.gain.exponentialRampToValueAtTime(level / 1000, now + DAMPER_SECONDS);
+    voice.stop(now + DAMPER_SECONDS);
+  };
+  const longest = setTimeout(letGo, LONGEST_HOLD_SECONDS * 1000);
+  return letGo;
+}
+
 // A note in a part's sound: its recording, where it has one that's ready, or else its wave.
 function play(audio, sound, midi, at, length, volume, destination = audio.destination) {
   if (sound.samples && sampled(audio, sound.samples, midi, at, length, volume, destination)) return;

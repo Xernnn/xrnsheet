@@ -2200,6 +2200,69 @@ def held_piano_note(page, base: str, created: list[str]) -> str:
     return score_id
 
 
+# Each sound started from a recording or a wave, and how far ahead of the moment it was asked for
+# each one's stop was set, in seconds: a held key's is set only when it's let go.
+TRACK_HOLDS = """() => {
+    window.holds = { started: 0, stops: [], levels: [] };
+    if (window.trackingHolds) return;
+    window.trackingHolds = true;
+    for (const kind of [AudioBufferSourceNode, OscillatorNode]) {
+        const start = kind.prototype.start, stop = kind.prototype.stop;
+        kind.prototype.start = function (...args) { holds.started += 1; return start.apply(this, args); };
+        kind.prototype.stop = function (when = 0, ...rest) { holds.stops.push(when - this.context.currentTime); return stop.call(this, when, ...rest); };
+    }
+    const set = AudioParam.prototype.setValueAtTime;
+    AudioParam.prototype.setValueAtTime = function (value, when) { holds.levels.push(value); return set.call(this, value, when); };
+}"""
+
+
+def test_held_keys(context, base: str, created: list[str]) -> None:
+    page = context.new_page()
+    held_piano_note(page, base, created)
+    page.evaluate(TRACK_HOLDS)
+    box = page.locator('#pianoKeys [data-midi="67"]').bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] * 0.85)
+    page.mouse.down()
+    page.wait_for_function("() => holds.started > 0")
+    page.wait_for_timeout(900)
+    holds = page.evaluate("() => holds")
+    check("a key held down below sounds on: 0.9 s later nothing has stopped it", holds["started"] == 1 and holds["stops"] == [], holds)
+    page.mouse.up()
+    page.wait_for_function("() => holds.stops.length > 0")
+    holds = page.evaluate("() => holds")
+    check("let go, the damper quiets it then, rather than cutting it off", 0.15 < holds["stops"][0] < 0.6, holds)
+
+    # A MIDI keyboard, played while nothing is being written: heard all the same, for as long as held.
+    page.evaluate(TRACK_HOLDS)
+    page.evaluate("() => midiMessage([0x90, 62, 100])")
+    page.wait_for_function("() => holds.started > 0", timeout=5000)
+    page.wait_for_timeout(600)
+    check("a MIDI key held sounds on, though nothing is being written", page.evaluate("() => holds.stops.length") == 0, page.evaluate("() => holds"))
+    page.evaluate("() => midiMessage([0x80, 62, 0])")
+    page.wait_for_function("() => holds.stops.length > 0")
+    check("and its note-off lets it go", page.evaluate("() => holds.stops.length") == 1)
+
+    page.evaluate(TRACK_HOLDS)
+    page.evaluate("() => { midiMessage([0xb0, 64, 127]); midiMessage([0x90, 64, 90]); }")
+    page.wait_for_function("() => holds.started > 0")
+    page.evaluate("() => midiMessage([0x80, 64, 0])")
+    page.wait_for_timeout(500)
+    check("with the sustain pedal down, a key let go keeps sounding", page.evaluate("() => holds.stops.length") == 0, page.evaluate("() => holds"))
+    page.evaluate("() => midiMessage([0xb0, 64, 0])")
+    page.wait_for_function("() => holds.stops.length > 0")
+    check("and the pedal let up damps it", page.evaluate("() => holds.stops.length") == 1)
+
+    levels = []
+    for velocity in (30, 120):
+        page.evaluate(TRACK_HOLDS)
+        page.evaluate(f"() => midiMessage([0x90, 60, {velocity}])")
+        page.wait_for_function("() => holds.started > 0 && holds.levels.length > 0")
+        levels.append(max(page.evaluate("() => holds.levels")))
+        page.evaluate("() => midiMessage([0x80, 60, 0])")
+    check("a key struck hard sounds louder than one played softly", levels[1] > 2 * levels[0], levels)
+    page.close()
+
+
 def test_piano_sound(context, base: str, created: list[str]) -> None:
     page = context.new_page()
     score_id = held_piano_note(page, base, created)
@@ -4911,6 +4974,7 @@ def main() -> None:
             test_pickup(page, base, created)
             test_audio_file(page, base, created)
             test_piano_sound(context, base, created)
+            test_held_keys(context, base, created)
             test_mixer(page, base, arguments.shots, created)
             test_piano_keyboard(page, base, arguments.shots, created)
             test_timeline(page, base, arguments.shots, created)
