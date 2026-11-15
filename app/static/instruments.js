@@ -11,7 +11,14 @@ const KINDS = {
 const LOWEST_KEY = 21, HIGHEST_KEY = 108; // A piano's 88 keys, A0 to C8.
 const BLACK_KEYS = new Set([1, 3, 6, 8, 10]);
 const NARROWEST_KEY = 10, WIDEST_KEY = 44; // A white key's width in pixels, which Ctrl and the wheel change.
-const PREVIEW_SECONDS = 0.4;
+const PREVIEW_SECONDS = 0.4; // A note selected is heard this long, as MuseScore plays one.
+// Keys held: a key below, a fret or a MIDI keyboard's key sounds from when it's pressed until it's let
+// go, as an instrument's does, not for a set time. A MIDI keyboard's sustain pedal (controller 64)
+// keeps the keys let go sounding until it comes up; "all notes off" (123) lets everything go.
+const POINTER_KEY = "pointer"; // The mouse or a finger holds one key at a time.
+const HELD_VOLUME = 0.3; // A key below, as loud as a note selected; a MIDI key by how hard it's struck.
+const SUSTAIN_PEDAL = 64, ALL_NOTES_OFF = 123;
+const held = { voices: new Map(), pedal: false, pedalled: new Set() };
 // Strings from the highest, as tablature draws them: a guitar in standard tuning, a violin in fifths.
 const GUITAR = { strings: [64, 59, 55, 50, 45, 40], names: ["E", "B", "G", "D", "A", "E"], stops: 19, inlays: [3, 5, 7, 9, 15, 17, 19], double: [12] };
 // A bowed instrument's hand: the stop its first finger is at in each position, from half position to
@@ -206,7 +213,8 @@ function drawKeyboard() {
       else key.style.setProperty("--at", String(whites++));
       if (midi % 12 === 0) key.innerHTML = `<span>C${midi / 12 - 1}</span>`;
       key.addEventListener("pointerdown", event => { event.preventDefault(); pressKey(midi, event.shiftKey); });
-      key.addEventListener("pointerup", () => practiseReleased(midi));
+      key.addEventListener("pointerup", () => { letGo(POINTER_KEY); practiseReleased(midi); });
+      for (const away of ["pointercancel", "pointerleave"]) key.addEventListener(away, () => letGo(POINTER_KEY));
       keys.append(key);
     }
     keys.style.setProperty("--whites", String(whites));
@@ -270,7 +278,8 @@ function drawNeck(holder, neck, kind) {
       spot.setAttribute("aria-label", spot.title);
       if (stop < capo) spot.disabled = true;
       spot.addEventListener("pointerdown", event => { event.preventDefault(); pressKey(shownPitch(midi, activePart()), event.shiftKey, { string: index + 1, stop }); });
-      spot.addEventListener("pointerup", () => practiseReleased(shownPitch(midi, activePart())));
+      spot.addEventListener("pointerup", () => { letGo(POINTER_KEY); practiseReleased(shownPitch(midi, activePart())); });
+      for (const away of ["pointercancel", "pointerleave"]) spot.addEventListener(away, () => letGo(POINTER_KEY));
     }
   });
   for (let stop = 0; stop <= neck.stops; stop++) {
@@ -487,7 +496,7 @@ function quietKeys() {
 // only heard. A note written from a neck keeps the string it was played on, where the score can
 // say so.
 function pressKey(midi, addToChord, where = null) {
-  hearKey(soundingPitch(midi, activePart()));
+  holdKey(POINTER_KEY, soundingPitch(midi, activePart())); // Let go by the key's pointerup.
   if (practiseHeard(midi)) return where;
   const string = stringToKeep(activePart(), soundingPitch(midi, activePart()), where);
   if (!editor.on) {
@@ -518,9 +527,72 @@ function stringToKeep(part, sounding, where) {
   return {};
 }
 
-// A key, a MIDI keyboard's note or a note selected is heard as its part plays: a piano from its
-// recording, fetched the first time that key needs it, and any other part on the plain triangle
-// every key had before.
+// The sound a part's keys make: a piano's recordings, or for any other part the plain triangle every
+// key had before.
+function keySound(part) {
+  const samples = samplesOf(playState.data ?? {}, part);
+  return samples ? { ...USUAL_SOUND, samples } : USUAL_SOUND;
+}
+
+// A key pressed, by [key] ("pointer", or "midi:60" for a MIDI keyboard's): it sounds until letGo. A
+// key pressed again is damped first, as a piano's hammer stops the string it strikes again. A piano's
+// recording is fetched the first time a key needs it; one let go before it came is heard briefly.
+function holdKey(key, midi, part = activePart(), volume = HELD_VOLUME) {
+  letGo(key, true);
+  const voice = { letGo: null, released: false };
+  held.voices.set(key, voice);
+  try {
+    keyPreview ??= new (window.AudioContext || window.webkitAudioContext)();
+    const sound = keySound(part);
+    const begin = () => {
+      if (held.voices.get(key) !== voice && !voice.released) return; // Pressed again meanwhile.
+      voice.letGo = heldVoice(keyPreview, sound, midi, volume);
+      if (voice.released) voice.letGo();
+    };
+    if (sound.samples) loadRecording(recordingOf(sound.samples, midi).url).then(begin);
+    else begin();
+  } catch {
+    // Without sound the key still writes its note.
+  }
+}
+
+// A key let go is damped, unless the sustain pedal is down, which keeps it sounding until it comes up.
+function letGo(key, now = false) {
+  const voice = held.voices.get(key);
+  if (!voice) return;
+  if (held.pedal && !now) { held.pedalled.add(key); return; }
+  held.voices.delete(key);
+  held.pedalled.delete(key);
+  voice.released = true;
+  voice.letGo?.();
+}
+
+function setPedal(down) {
+  held.pedal = down;
+  if (!down) for (const key of [...held.pedalled]) letGo(key, true);
+}
+
+function letAllGo() {
+  held.pedal = false;
+  for (const key of [...held.voices.keys()]) letGo(key, true);
+}
+
+// How loud a MIDI key is, by how hard it was struck: a velocity of 100, a firm touch, is as loud as a
+// key below, and the scale is steeper than straight, as the ear hears loudness.
+function midiVolume(velocity) {
+  return HELD_VOLUME * Math.max(0.05, (velocity / 100) ** 1.6);
+}
+
+// A MIDI keyboard's message: a key down or up, or a pedal.
+function midiMessage(data) {
+  const kind = data[0] & 0xf0;
+  if (kind === 0x90 && data[2] > 0) midiNoteOn(data[1], data[2]);
+  else if (kind === 0x80 || kind === 0x90) midiNoteOff(data[1]);
+  else if (kind === 0xb0 && data[1] === SUSTAIN_PEDAL) setPedal(data[2] >= 64);
+  else if (kind === 0xb0 && data[1] === ALL_NOTES_OFF) letAllGo();
+}
+
+// A note selected is heard as its part plays, briefly, as MuseScore plays one.
 function hearKey(midi, part = activePart()) {
   const sounded = sound => {
     try {
@@ -531,9 +603,9 @@ function hearKey(midi, part = activePart()) {
   };
   try {
     keyPreview ??= new (window.AudioContext || window.webkitAudioContext)();
-    const samples = samplesOf(playState.data ?? {}, part);
-    if (samples) loadRecording(recordingOf(samples, midi).url).then(() => sounded({ ...USUAL_SOUND, samples }));
-    else sounded(USUAL_SOUND);
+    const sound = keySound(part);
+    if (sound.samples) loadRecording(recordingOf(sound.samples, midi).url).then(() => sounded(sound));
+    else sounded(sound);
   } catch {
     // Without sound the key still writes its note.
   }
