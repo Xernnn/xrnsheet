@@ -14,13 +14,16 @@ It works well on clean, computer-rendered sheets. It's weak on real handwriting,
 
 ## Setup
 
-Requires Python 3.11+ and `rsvg-convert`. Install [PyTorch](https://pytorch.org/get-started/locally/) for your machine first if you want GPU training.
+Requires Python 3.11+ and `rsvg-convert`.
 
 ```sh
 python3 -m venv .venv
+.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu   # PyTorch without the GPU parts
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m chords.fonts          # download the fonts
 ```
+
+The app reads every page on the CPU, so `.venv` takes PyTorch's CPU build, under 2 GB in all. The default build carries 5 GB of GPU libraries that only [training](#train-on-a-gpu) uses.
 
 The trained models are in `models/`. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
 
@@ -63,7 +66,7 @@ npm run app:install
 This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it to the launcher. Run it again to update. The app starts its own copy of the server when it opens and stops it when it closes, so nothing needs to be running first.
 
 - **Your scores** are kept in `~/.local/share/xrnsheet/jobs`, not in the checkout, so they stay through updates and branch changes.
-- **Python:** the app runs on this checkout's `.venv`, where the 6 GB of PyTorch already is, rather than carrying a copy. Set `XRNSHEET_PYTHON` before installing to use another one.
+- **Python:** the app runs on this checkout's `.venv`, where PyTorch and the readers' models already are, rather than carrying a copy. Set `XRNSHEET_PYTHON` before installing to use another one.
 - **Opening files:** `.musicxml` and `.mxl` files offer xrnsheet under "Open with", and `xrnsheet.AppImage song.mxl` opens one from a terminal. If the app is already open, the file opens there.
 - **Keys:** Ctrl+T, Ctrl+Shift+P, F6 and the other keys a browser tab keeps for itself all reach the score. Ctrl+Q quits.
 - **If it won't start**, the window says why, and the server's log is `~/.local/state/xrnsheet/server.log`.
@@ -213,7 +216,9 @@ Measures that don't add up to the time signature are listed above the score in W
 
 Play sounds the notes and the chord symbols. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, articulations and ornaments, and the sustain pedal, and a player's techniques: hammer-ons and pull-offs legato, slides and glissandos through the notes between, bends reaching their pitch, palm mute short and let ring ringing, dead notes as a click, harmonics where they ring, and pizzicato plucked until arco. A tablature staff isn't heard twice: only the staff above it plays. Tablature on its own is the music, and plays.
 
-A piano is played on a recorded grand piano (the Salamander Grand Piano): each note rings as long as it's held, by its length, a tie or the pedal, and is damped when it's let go. So are its keys below, its notes played on a MIDI keyboard and a note of it selected, and the chord symbols, softly, under any instrument. A part counts as a piano when its sound is one of General MIDI's pianos, or with no sound named, when it's a keyboard by its name or its two staves. The other instruments have simple synthesized sounds to tell them apart, and a melody on a plain staff keeps the plain one it had. Exported audio sounds the same. Play fetches the recordings the first time it needs them and waits for them, so no note is missed.
+A piano is played on a recorded grand piano (the Salamander Grand Piano): each note rings as long as it's held, by its length, a tie or the pedal, and is damped when it's let go. So are its keys below, its notes played on a MIDI keyboard and a note of it selected, and the chord symbols, softly, under any instrument. A part counts as a piano when its sound is one of General MIDI's pianos, or with no sound named, when it's a keyboard by its name or its two staves.
+
+Guitars, basses and the bowed strings are recorded instruments too. A guitar (and a ukulele or mandolin) plays a classical guitar and a bass guitar a Jazz Bass, plucked, so a note dies away by itself and is damped when it ends. A violin, viola, cello or double bass is bowed: a note sounds for as long as it lasts, however long that is, and the bow leaves the string when it ends. A note marked pizz. is played plucked on the same instrument until an arco. The tremolo strings and string ensembles play each note on the violin, viola, cello or double bass whose range it's in. A part counts as one of these by its General MIDI sound, or with none named, by its name, as a string quartet's Violin I, Viola and Violoncello often come; a part named for one bowed instrument but given a string section's sound is that instrument. Their frets and fingerboards below sound the same, held for as long as they're pressed. The other instruments have simple synthesized sounds to tell them apart, and a melody on a plain staff keeps the plain one it had. Exported audio sounds the same. Play fetches the recordings the first time it needs them and waits for them, so no note is missed, and without them an instrument plays its synthesized sound.
 
 A key below, a fret, or a key on a MIDI keyboard sounds from when it's pressed until it's let go, as the instrument's own does, and a MIDI key as loud as it was struck. A MIDI keyboard's sustain pedal keeps the keys let go sounding until it comes up. It's heard whatever it's doing: writing a note, playing along in Practice, or just being played with nothing being written. A note selected is heard briefly.
 
@@ -245,13 +250,25 @@ To recognize a sheet without the app:
 .venv/bin/python -m pipeline.recognize photo.jpg --out results/photo
 ```
 
+## Train on a GPU
+
+Training runs on the GPU when there is one, and that needs PyTorch's default build with its GPU libraries. Keep it in a second environment, `.venv-train`, so the app's stays small:
+
+```sh
+python3 -m venv .venv-train
+.venv-train/bin/pip install torch          # the default build, with CUDA (about 6 GB in all)
+.venv-train/bin/pip install -r requirements.txt
+```
+
+The commands below that train use `.venv-train`; the rest work in either. Without a GPU, training falls back to the CPU and takes many times longer. `.venv-train` can be deleted between training runs and made again.
+
 ## Train the chord reader
 
 ```sh
 .venv/bin/python -m chords.testset                                                  # build the test crops
 .venv/bin/python -m chords.baselines                                                # score Tesseract and RapidOCR
-.venv/bin/python -m chords.train --name chord_reader --hand-layout 0.35 --negatives 0.2
-.venv/bin/python -m chords.evaluate --name chord_reader                             # score the model
+.venv-train/bin/python -m chords.train --name chord_reader --hand-layout 0.35 --negatives 0.2
+.venv-train/bin/python -m chords.evaluate --name chord_reader                       # score the model
 ```
 
 Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the ablation. Training data is generated as it runs, and 5 fonts are held out for testing.
@@ -260,8 +277,8 @@ Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the a
 
 ```sh
 .venv/bin/python -m notes.render      # generate the strips, about an hour of CPU time
-.venv/bin/python -m notes.train       # about 60 minutes on a 4 GB GPU
-.venv/bin/python -m notes.evaluate    # score it on the two held-out music fonts
+.venv-train/bin/python -m notes.train       # about 60 minutes on a 4 GB GPU
+.venv-train/bin/python -m notes.evaluate    # score it on the two held-out music fonts
 ```
 
 The best checkpoint is saved as training runs, so a stopped run still leaves a usable model.
@@ -274,8 +291,8 @@ After you've pressed "Mark as checked" on some sheets:
 .venv/bin/python -m chords.corrections       # gather checked sheets into data/corrections/
                                              # (add --jobs ~/.local/share/xrnsheet/jobs for the desktop app's)
 .venv/bin/python bench/real_report.py        # how the app did on the held-out sheets
-.venv/bin/python -m chords.retrain           # train a candidate and report on it
-.venv/bin/python -m chords.retrain --promote # also replace the live model if it passes
+.venv-train/bin/python -m chords.retrain           # train a candidate and report on it
+.venv-train/bin/python -m chords.retrain --promote # also replace the live model if it passes
 ```
 
 About one sheet in five is held out, chosen by a hash. A candidate replaces the live model only if there are at least 30 held-out chords, it gains more chords than it loses with p below 0.05, and it stays at 0.99 or above on the synthetic test. So far, a few dozen real corrections haven't been shown to help. See [the project report](docs/PROJECT_REPORT.md).
@@ -362,4 +379,9 @@ Check these before shipping a commercial product.
 | RapidOCR | Apache-2.0 | |
 | Fonts in `data/fonts/` | SIL Open Font License | Used to generate training images |
 | Piano samples in `app/static/sounds/piano/` | CC BY 3.0 | Salamander Grand Piano by Alexander Holm, the 30-note set from [Tone.js's audio](https://tonejs.github.io/audio/salamander/). Its credit has to go with the app, as [its README](app/static/sounds/piano/README.md) says |
+| Guitar samples in `app/static/sounds/guitar/` | CC0 1.0 | FreePats' Spanish classical guitar, recorded by Roberto of zenvoid.org for [FreePats](https://freepats.zenvoid.org/Guitar/acoustic-guitar.html) ([its README](app/static/sounds/guitar/README.md)) |
+| Bass guitar samples in `app/static/sounds/bass-guitar/` | CC0 1.0 | Growlybass by Karoryfer Samples ([its README](app/static/sounds/bass-guitar/README.md)) |
+| Violin, viola and bowed double bass samples in `app/static/sounds/violin/`, `viola/` and `double-bass/` | CC0 1.0 | Versilian Studios Chamber Orchestra 2 Community Edition, recorded by Sam Gossner and Simon Dalzell, cut by Elan Hickler ([violin](app/static/sounds/violin/README.md), [viola](app/static/sounds/viola/README.md), [double bass](app/static/sounds/double-bass/README.md)) |
+| Cello samples in `app/static/sounds/cello/` | CC0 1.0 | Karoryfer x bigcat cello by Karoryfer Samples and bigcat instruments, played by Kamila Borowiak ([its README](app/static/sounds/cello/README.md)) |
+| Double bass pizzicato in `app/static/sounds/double-bass/pizzicato/` | CC0 1.0 | Meatbass by Karoryfer Samples, played by Drogomir Smolken ([its README](app/static/sounds/double-bass/README.md)) |
 | JAZZMUS dataset | CC BY-NC 4.0 | Not used here. It's non-commercial, and access must be requested |

@@ -714,6 +714,32 @@ def test_the_piano_samples_are_served_as_audio(client):
         assert response.content.startswith(b"ID3"), name
 
 
+# The notes recorded of each string instrument, bowed and plucked, by the note each sounds.
+STRING_SAMPLES = {
+    "guitar": ["E2", "G2", "B2", "D3", "F3", "Gs3", "B3", "D4", "F4", "A4", "C5", "Ds5", "Fs5", "A5", "C6"],
+    "bass-guitar": ["E1", "Fs1", "A1", "C2", "Ds2", "Fs2", "A2", "Ds3", "A3", "Ds4"],
+    "violin": ["G3", "C4", "E4", "G4", "C5", "E5", "G5", "C6", "E6", "A6"],
+    "violin/pizzicato": ["G3", "C4", "E4", "G4", "C5", "E5", "A5", "A6"],
+    "viola": ["C3", "E3", "G3", "B3", "F4", "A4", "E5", "B5"],
+    "viola/pizzicato": ["C3", "E3", "G3", "D4", "A4", "G5"],
+    "cello": ["C2", "Ds2", "Fs2", "A2", "C3", "Ds3", "Fs3", "C4", "Fs4", "C5", "Fs5", "C6"],
+    "cello/pizzicato": ["C2", "Fs2", "C3", "Fs3", "C4", "Fs4", "C5"],
+    "double-bass": ["Fs1", "As1", "D2", "Fs2", "A2", "Cs3", "E3", "Gs3", "B3"],
+    "double-bass/pizzicato": ["Ds1", "Fs1", "A1", "Ds2", "A2", "Fs3", "C4"],
+}
+
+
+def test_the_string_samples_are_served_as_audio(client):
+    """Guitar, bass and bowed-string parts play recordings, as FLAC, which the page fetches by name."""
+    for folder, names in STRING_SAMPLES.items():
+        for name in names:
+            response = client.get(f"/sounds/{folder}/{name}.flac")
+            assert response.status_code == 200, (folder, name)
+            assert response.headers["content-type"].startswith("audio/"), (folder, name, response.headers["content-type"])
+            assert response.content.startswith(b"fLaC"), (folder, name)
+    assert sum(len(names) for names in STRING_SAMPLES.values()) == 92
+
+
 def test_marks_carry_through_copy_and_paste_over_the_server(client, ready_score):
     url = f"/api/scores/{ready_score}"
     client.post(f"{url}/marks", json={"action": "toggle", "name": "accent", "notes": ["note0"]})

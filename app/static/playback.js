@@ -14,19 +14,53 @@ const FAMILY_SOUNDS = {
 };
 const USUAL_SOUND = { wave: "triangle", level: 1 };
 // Instruments recorded from the real thing: a note every few semitones, each played a little faster
-// or slower for the notes between, as a sampler does. The level makes a middle C's first fifth of a
-// second as loud as the triangle it replaces, so the mix and the metronome keep their balance.
-// Another instrument is one more set, and one more family below, with a folder of its own notes.
+// or slower for the notes between, as a sampler does. The level makes a note's first fifth of a
+// second as loud as the stand-in it replaces, or a bowed note as loud while the bow is drawn, so
+// the mix and the metronome keep their balance. Another instrument is one more set, and one more
+// family or sound below, with a folder of its own notes. A set that isn't a note every so many
+// semitones lists its notes: each one's pitch, how many cents sharp it was recorded, and how many
+// decibels it's turned up or down to match the rest, as a sampler's mapping evens out a recording
+// session. A bowed set's `sustain` is where in its recordings the bow is drawn steadily, after the
+// note's start, which a held note goes round (see shapeRecording).
 const SAMPLE_SETS = {
   piano: { name: "piano", folder: "sounds/piano", lowest: 21, highest: 108, every: 3, level: 4.7 }, // The Salamander Grand Piano, A0 to C8 (see its README).
+  // FreePats' classical guitar, E2 to C6, and Karoryfer's Growlybass, E1 to D♯4 (see their READMEs).
+  guitar: { name: "guitar", folder: "sounds/guitar", type: "flac", level: 1.8, notes: [[40, 0, -1], [43, 11], [47, 8, 1], [50, 5], [53, 5, -1], [56, 8, -4], [59, 15, -2], [62, 8], [65], [69, 0, -4], [72, 11, 4], [75, 0, 3], [78, 0, 2], [81, 9, -1], [84, 7, 5]] },
+  bassGuitar: { name: "bass guitar", folder: "sounds/bass-guitar", type: "flac", level: 4.4, notes: [[28, 28], [30, 6, 4], [33, 0, 2], [36, -6, 2], [39, 0, -1], [42, 0, 3], [45, 0, -1], [51, 6], [57, 0, -3], [63, 8, -6]] },
+  // VSCO 2's solo violin, G3 to A6, and viola section, C3 to B5, Karoryfer's solo cello, C2 to C6,
+  // and VSCO 2's solo double bass, F♯1 to B3 (see their READMEs).
+  violin: { name: "violin", folder: "sounds/violin", type: "flac", level: 7.2, sustain: 0.5, notes: [[55], [60, -9, -6], [64, 0, -2], [67, 0, 1], [72, 0, -4], [76, 17], [79, 6, -1], [84, 0, -5], [88, 15, 2], [93, 11, 1]] },
+  viola: { name: "viola", folder: "sounds/viola", type: "flac", level: 4.2, sustain: 0.5, notes: [[48, 0, -1], [52, 0, 1], [55], [59, 0, -2], [65], [69, 0, -5], [76], [83, 0, 2]] },
+  cello: { name: "cello", folder: "sounds/cello", type: "flac", level: 4.6, sustain: 0.5, notes: [[36, 7, -1], [39, 0, -3], [42, -6, -1], [45, 0, -2], [48, 0, -3], [51, 0, -3], [54, 0, 1], [60, 0, 1], [66, 0, 5], [72, 0, 1], [78, 0, 5], [84, 7, 3]] },
+  doubleBass: { name: "double bass", folder: "sounds/double-bass", type: "flac", level: 9.6, sustain: 0.5, notes: [[30, 0, 2], [34, 15, -4], [38], [42, 0, 1], [45, 0, -9], [49, 0, 3], [52, 0, 2], [56, 0, -3], [59, 0, -8]] },
+  // The same instruments plucked, for pizz. until arco: VSCO 2's violin and violas, Karoryfer's
+  // cello, and its Meatbass for the double bass (see their READMEs).
+  violinPizzicato: { name: "violin", folder: "sounds/violin/pizzicato", type: "flac", level: 6.4, notes: [[55, -10, 12], [60, -20, -5], [64, -15, 7], [67, -12, 1], [72, 0, -6], [76, 6, -1], [81, 0, -5], [93, 0, 6]] },
+  violaPizzicato: { name: "viola", folder: "sounds/viola/pizzicato", type: "flac", level: 4.9, notes: [[48, -7, 1], [52, 0, 2], [55], [62, 0, -4], [69], [79, -5, -6]] },
+  celloPizzicato: { name: "cello", folder: "sounds/cello/pizzicato", type: "flac", level: 4.2, notes: [[36], [42, -10, -1], [48, -11], [54, 11], [60, 0, 3], [66, 0, -5], [72, 0, -2]] },
+  doubleBassPizzicato: { name: "double bass", folder: "sounds/double-bass/pizzicato", type: "flac", level: 1.8, notes: [[27, -17, -2], [30, 0, 2], [33, 0, -1], [39, 8, -1], [45, -6], [54, 0, 3], [60, -11, 2]] },
 };
-const SAMPLED_FAMILIES = { 0: SAMPLE_SETS.piano }; // The piano family, General MIDI's first eight sounds.
+for (const name of ["violin", "viola", "cello", "doubleBass"]) SAMPLE_SETS[name].pizzicato = SAMPLE_SETS[`${name}Pizzicato`];
+// General MIDI's families by their first sound: the pianos (1 to 8), the guitars (25 to 32) and the
+// basses (33 to 40).
+const SAMPLED_FAMILIES = { 0: SAMPLE_SETS.piano, 3: SAMPLE_SETS.guitar, 4: SAMPLE_SETS.bassGuitar };
+// And its bowed strings, sound by sound: a violin, a viola, a cello and a double bass (41 to 44)
+// each their own, and the tremolo strings (45), the pizzicato strings (46) and the two string
+// ensembles (49 and 50) each note on the instrument whose range it's in, as a section shares its
+// music out. A harp (47), the timpani (48) and the synthesizers' strings keep their stand-ins.
+const BOWED_SOUNDS = { 41: SAMPLE_SETS.violin, 42: SAMPLE_SETS.viola, 43: SAMPLE_SETS.cello, 44: SAMPLE_SETS.doubleBass };
+const SECTION_SOUNDS = new Set([45, 46, 49, 50]);
+// A bowed part's note marked pizz., until arco, comes as General MIDI's pizzicato strings.
+const PIZZICATO_SOUND = 46;
+// A bowed note going round its recording again crosses from its end back to its steady part this long.
+const BOW_CROSSFADE_SECONDS = 0.2;
 // Chord symbols are played softly under the music on the piano, the usual accompaniment, or on the
 // sine wave they had if its recordings can't be had.
 const CHORD_SOUND = { wave: "sine", level: 1, samples: SAMPLE_SETS.piano };
 const CHORD_VOLUME = 0.045;
 const FILE_NAMES = ["C", "Cs", "D", "Ds", "E", "F", "Fs", "G", "Gs", "A", "As", "B"]; // A recording's name, as in "Fs3.mp3".
-// A key let go: the damper comes down on the string and quiets it over this long, rather than cutting it off.
+// A key let go: the damper comes down on the string and quiets it over this long, rather than cutting it
+// off. A bow lifted from the string leaves it as quickly.
 const DAMPER_SECONDS = 0.3;
 const SLOW_LOADING_MS = 1000; // Getting the recordings ready is mentioned only if it takes longer than this.
 // Each recording is fetched and decoded once, when something first needs it, and kept for every
@@ -69,22 +103,62 @@ function tone(audio, midi, at, length, volume, wave, destination = audio.destina
   oscillator.stop(end + 0.02);
 }
 
-// The recording nearest a pitch: the note it was recorded at, and where its file is.
+// The recording nearest a pitch: the note it was recorded at, where its file is, how much faster or
+// slower it's played to sound the pitch, its tuning allowed for, and how much louder or softer.
 function recordingOf(set, midi) {
   const count = Math.floor((set.highest - set.lowest) / set.every);
-  const recorded = set.lowest + Math.min(count, Math.max(0, Math.round((midi - set.lowest) / set.every))) * set.every;
-  return { midi: recorded, url: `${set.folder}/${FILE_NAMES[recorded % 12]}${Math.floor(recorded / 12) - 1}.mp3` };
+  const [recorded, cents = 0, decibels = 0] = set.notes
+    ? set.notes.reduce((nearest, note) => (Math.abs(note[0] - midi) < Math.abs(nearest[0] - midi) ? note : nearest))
+    : [set.lowest + Math.min(count, Math.max(0, Math.round((midi - set.lowest) / set.every))) * set.every];
+  return {
+    midi: recorded,
+    url: `${set.folder}/${FILE_NAMES[recorded % 12]}${Math.floor(recorded / 12) - 1}.${set.type ?? "mp3"}`,
+    rate: 2 ** ((midi - recorded - cents / 100) / 12),
+    gain: 10 ** (decibels / 20),
+  };
 }
 
-// Fetched and decoded the first time it's asked for. One that can't be had is null, and the
-// instrument plays its stand-in instead, which is said once.
-function loadRecording(url) {
+// A recording is made ready to play as it's decoded. A bowed one goes round its steady part for as
+// long as the bow is drawn, from its set's `sustain` to its end and back, so the stretch before its
+// end is faded into what comes just before that point (with equal power, as the two are unlike
+// moments of a bow stroke) and going back makes no click. Any other is damped over its last
+// moments, so one cut short of its natural end, as the bass's are, dies away instead of stopping
+// with a click. One that ends in silence, as the piano's do, is the same with it.
+function shapeRecording(buffer, set) {
+  const length = buffer.length;
+  const from = Math.round((set?.sustain ?? 0) * buffer.sampleRate);
+  const fade = set?.sustain
+    ? Math.min(Math.round(BOW_CROSSFADE_SECONDS * buffer.sampleRate), from, length - from)
+    : Math.min(length, Math.round(DAMPER_SECONDS * buffer.sampleRate));
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const samples = buffer.getChannelData(channel);
+    for (let index = 0; index < fade; index++) {
+      const at = length - fade + index;
+      if (!set?.sustain) { samples[at] *= 1000 ** (-index / fade); continue; }
+      const share = (index + 1) / fade * Math.PI / 2;
+      samples[at] = samples[at] * Math.cos(share) + samples[from - fade + index] * Math.sin(share);
+    }
+  }
+}
+
+// A bowed note is held for as long as it's played: its recording goes round its steady part.
+function bowed(source, set) {
+  if (!set.sustain) return;
+  source.loop = true;
+  source.loopStart = set.sustain;
+  source.loopEnd = source.buffer.duration;
+}
+
+// Fetched and decoded the first time it's asked for, as its set's recordings are. One that can't be
+// had is null, and the instrument plays its stand-in instead, which is said once.
+function loadRecording(url, set) {
   if (!recordings.loading.has(url)) {
     recordings.loading.set(url, (async () => {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`${url} answered ${response.status}`);
       recordings.decoder ??= new OfflineAudioContext(2, 1, AUDIO_RATE);
       const buffer = await recordings.decoder.decodeAudioData(await response.arrayBuffer());
+      shapeRecording(buffer, set);
       recordings.buffers.set(url, buffer);
       return buffer;
     })().catch(error => {
@@ -96,8 +170,15 @@ function loadRecording(url) {
   return recordings.loading.get(url);
 }
 
-// A recorded note: the string is struck, rings for as long as the key is held, and is damped when
-// it's let go. Between two recordings it's the nearer one played faster or slower.
+// How loud a recording is played. A stereo recording goes through the mixer's pan whole, so it
+// isn't given back what a pan in the middle takes from a sound in one channel.
+function levelOf(set, recording, buffer, volume) {
+  return Math.max(volume * set.level * recording.gain / (buffer.numberOfChannels > 1 ? PAN_LAW : 1), 1e-6);
+}
+
+// A recorded note: the string is struck or plucked and rings for as long as the key is held, or is
+// bowed for as long as the note lasts, and is damped when it's let go. Between two recordings it's
+// the nearer one played faster or slower.
 function sampled(audio, set, midi, at, length, volume, destination) {
   const recording = recordingOf(set, midi);
   const buffer = recordings.buffers.get(recording.url);
@@ -105,11 +186,10 @@ function sampled(audio, set, midi, at, length, volume, destination) {
   const source = audio.createBufferSource();
   const gain = audio.createGain();
   const end = at + Math.max(length, 0.05);
-  // A stereo recording goes through the mixer's pan whole, so it isn't given back what a pan in the
-  // middle takes from a sound in one channel.
-  const level = Math.max(volume * set.level / (buffer.numberOfChannels > 1 ? PAN_LAW : 1), 1e-6);
+  const level = levelOf(set, recording, buffer, volume);
   source.buffer = buffer;
-  source.playbackRate.value = 2 ** ((midi - recording.midi) / 12);
+  source.playbackRate.value = recording.rate;
+  bowed(source, set);
   gain.gain.setValueAtTime(level, at);
   gain.gain.setValueAtTime(level, end);
   gain.gain.exponentialRampToValueAtTime(level / 1000, end + DAMPER_SECONDS);
@@ -121,8 +201,9 @@ function sampled(audio, set, midi, at, length, volume, destination) {
 
 // A key held down, whose end isn't known yet: it sounds from now, as play() would, until the function
 // returned lets it go, and then the damper quiets it, as a piano's does when its key comes up. A
-// recording dies away by itself as a struck string does; a wave holds, so one whose let-go never comes
-// (a MIDI keyboard's note-off lost) is let go after LONGEST_HOLD_SECONDS rather than left droning.
+// struck or plucked recording dies away by itself as its string does; a wave holds, and so does a
+// bowed recording, so one whose let-go never comes (a MIDI keyboard's note-off lost) is let go
+// after LONGEST_HOLD_SECONDS rather than left droning.
 const LONGEST_HOLD_SECONDS = 20;
 
 function heldVoice(audio, sound, midi, volume, destination = audio.destination) {
@@ -134,8 +215,9 @@ function heldVoice(audio, sound, midi, volume, destination = audio.destination) 
   if (buffer) {
     voice = audio.createBufferSource();
     voice.buffer = buffer;
-    voice.playbackRate.value = 2 ** ((midi - recording.midi) / 12);
-    gain.gain.setValueAtTime(Math.max(volume * sound.samples.level / (buffer.numberOfChannels > 1 ? PAN_LAW : 1), 1e-6), at);
+    voice.playbackRate.value = recording.rate;
+    bowed(voice, sound.samples);
+    gain.gain.setValueAtTime(levelOf(sound.samples, recording, buffer, volume), at);
   } else {
     voice = audio.createOscillator();
     voice.type = sound.wave;
@@ -173,14 +255,14 @@ function play(audio, sound, midi, at, length, volume, destination = audio.destin
 // missing. They come from this server, so it's short, and only a wait longer than that is mentioned.
 async function readySamples(data) {
   if (!data) return data;
-  const wanted = new Set(), names = new Set();
-  const want = (set, midi) => { if (set) { wanted.add(recordingOf(set, midi).url); names.add(set.name); } };
+  const wanted = new Map(), names = new Set();
+  const want = (set, midi) => { if (set) { wanted.set(recordingOf(set, midi).url, set); names.add(set.name); } };
   for (const note of data.notes) want(soundOf(data, note).samples, note.midi);
   if (playState.chords) for (const chord of data.chords) chord.midi.forEach(midi => want(CHORD_SOUND.samples, midi));
   if (!wanted.size) return data;
   const words = `Getting the ${[...names].join(" and ")} ready…`;
   const slow = setTimeout(() => message(words), SLOW_LOADING_MS);
-  await Promise.all([...wanted].map(loadRecording));
+  await Promise.all([...wanted].map(([url, set]) => loadRecording(url, set)));
   clearTimeout(slow);
   if ($("message").textContent === words) message("");
   return data;
@@ -221,20 +303,54 @@ function clockFor(data, speed) {
   return clock;
 }
 
+// A note's sound. One plucked, pizz. until arco, plays its bowed instrument's pizzicato recordings,
+// or its stand-in's short note without them.
 function soundOf(data, note) {
   const program = data.programs?.[note.part] ?? 1;
-  const samples = samplesOf(data, note.part ?? 0);
-  if (samples) return { ...USUAL_SOUND, samples }; // The triangle is what it plays if its recordings can't be had.
-  return FAMILY_SOUNDS[Math.floor((program - 1) / 8)] ?? USUAL_SOUND;
+  const standIn = FAMILY_SOUNDS[Math.floor((program - 1) / 8)] ?? USUAL_SOUND;
+  const part = samplesOf(data, note.part ?? 0, note.midi);
+  const samples = note.program === PIZZICATO_SOUND ? part?.pizzicato ?? part : part;
+  return samples ? { ...standIn, samples } : standIn; // The stand-in is what it plays if its recordings can't be had.
 }
 
-// The recordings a part is played with, if its family has them. A part that names no sound is given
-// program 1, the grand piano, so that one is a piano only when the part is a keyboard by its name
-// or its staves, as the instrument below decides, and a melody on a plain staff keeps its triangle.
-function samplesOf(data, part) {
+// The recordings a part's note is played with, if its sound has them. A part that names no sound is
+// given program 1, the grand piano, so that one is a piano only when the part is a keyboard by its
+// name or its staves, as the instrument below decides. Otherwise it goes by its name, as a string
+// quartet's parts often come with none: a violin or a cello named so plays its own recordings, as
+// does a guitar or a bass guitar, and a melody on a plain staff keeps its triangle. A part named for
+// one bowed instrument but given a string section's sound, as files often give a quartet, is that
+// instrument too, so a viola's A4 isn't a violin's.
+function samplesOf(data, part, midi) {
   const program = data.programs?.[part] ?? 1;
-  if (program === 1 && kindOfPart(part) !== "piano") return null;
-  return SAMPLED_FAMILIES[Math.floor((program - 1) / 8)] ?? null;
+  if (program === 1) return namedSamples(part);
+  if (SECTION_SOUNDS.has(program)) {
+    const set = bowedByName(part) ?? sectionAt(midi);
+    return program === PIZZICATO_SOUND ? set.pizzicato : set;
+  }
+  return BOWED_SOUNDS[program] ?? SAMPLED_FAMILIES[Math.floor((program - 1) / 8)] ?? null;
+}
+
+function namedSamples(part) {
+  const kind = kindOfPart(part), name = (score?.parts?.[part] ?? "").toLowerCase();
+  if (kind === "piano") return SAMPLE_SETS.piano;
+  if (/bass guitar|electric bass/.test(name) || (kind === "guitar" && /bass/.test(name))) return SAMPLE_SETS.bassGuitar;
+  return kind === "guitar" ? SAMPLE_SETS.guitar : bowedByName(part);
+}
+
+// The bowed instrument a part is named for, if any: "Violoncello" is a cello, "Fiddle" a violin.
+function bowedByName(part) {
+  const name = (score?.parts?.[part] ?? "").toLowerCase();
+  if (/double bass|contrabass/.test(name)) return SAMPLE_SETS.doubleBass;
+  if (/cello/.test(name)) return SAMPLE_SETS.cello;
+  if (/viola/.test(name)) return SAMPLE_SETS.viola;
+  return /violin|fiddle/.test(name) ? SAMPLE_SETS.violin : null;
+}
+
+// A string section's note is played by the highest of its instruments that reaches down to it.
+function sectionAt(midi) {
+  if (midi >= 55) return SAMPLE_SETS.violin;
+  if (midi >= 48) return SAMPLE_SETS.viola;
+  return midi >= 36 ? SAMPLE_SETS.cello : SAMPLE_SETS.doubleBass;
 }
 
 // The beat a bar is counted in: its time signature's lower number, or a dotted beat in 6/8, 9/8 and 12/8.
