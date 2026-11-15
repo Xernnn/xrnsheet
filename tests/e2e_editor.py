@@ -373,6 +373,58 @@ def test_clicking_notes(page, base: str, shots: Path | None, created: list[str])
     check("the ghost goes when entering stops", page.is_hidden("#ghost"))
 
 
+def ghost_and_click(page) -> tuple[str | None, str | None]:
+    """What the ghost says a click will write, and what a click there writes, the mouse not moved."""
+    shown = " · ".join(page.inner_text("#ghost .tag").split(" · ")[:2]) if page.is_visible("#ghost") else None
+    # Watched as it's sent, as a note written over the same note changes nothing to be seen.
+    writes = []
+    listener = lambda request: writes.append(request.url) if request.method == "POST" and "/notes/" in request.url else None
+    page.on("request", listener)
+    page.mouse.down()
+    page.mouse.up()
+    settle(page)
+    page.remove_listener("request", listener)
+    if not writes:
+        return shown, None
+    return shown, page.evaluate("() => { const note = document.getElementById(editor.last); return `${spelledName(note)} · ${whenOf(note)}`; }")
+
+
+def test_the_ghost_keeps_up_with_the_page(page, base: str, created: list[str]) -> None:
+    """The page moving under a pointer that stays put changes what a click there writes, and the ghost says so."""
+    page.goto(base)
+    page.click("#blankOpen")
+    page.click('#quickStart [data-quick="piano"] .start')
+    page.wait_for_selector("#pages svg")
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    x, y = staff_point(page, page.evaluate("() => editor.cursor"), 6)
+    page.mouse.move(x, y)
+    check("the ghost shows where the pointer is", page.is_visible("#ghost") and page.inner_text("#ghost .tag") == "G4 · bar 1, beat 1", page.inner_text("#ghost .tag"))
+    # Scrolled down by the room between the two staves, the pointer is over the left hand's.
+    apart = page.evaluate("() => { const staves = document.querySelectorAll('#pages g.staff'); return staffLines(staves[1]).top - staffLines(staves[0]).top; }")
+    page.mouse.wheel(0, apart)
+    page.wait_for_function("apart => Math.abs($('desk').scrollTop - apart) < 2", arg=apart)
+    page.wait_for_timeout(100)
+    shown, written = ghost_and_click(page)
+    check("after the wheel scrolls the page, a click writes what the ghost shows", shown is not None and shown == written, (shown, written))
+    page.keyboard.press("Control+=")
+    shown, written = ghost_and_click(page)
+    check("and after a zoom", shown == written, (shown, written))
+    # Fitted to the width, a narrower window draws the music smaller.
+    page.select_option("#zoomChoice", "width")
+    cursor = page.evaluate("() => { document.getElementById(editor.cursor).scrollIntoView({ block: 'center' }); return editor.cursor; }")
+    x, y = staff_point(page, cursor, 6)
+    page.mouse.move(x, y)
+    size = page.viewport_size
+    page.set_viewport_size({"width": 940, "height": size["height"]})
+    page.wait_for_timeout(200)
+    shown, written = ghost_and_click(page)
+    check("and after the window is resized", shown == written, (shown, written))
+    page.set_viewport_size(size)
+    page.keyboard.press("Escape")
+    settle(page)
+
+
 def test_end_of_score(page, base: str, created: list[str]) -> None:
     score_id = open_blank(page, base, created, bars=1)
     page.keyboard.press("5")
@@ -4379,6 +4431,7 @@ def main() -> None:
             test_writing(page, base, arguments.shots, created)
             test_clicking_notes(page, base, arguments.shots, created)
             test_writing_with_the_mouse(page, base, arguments.shots, created)
+            test_the_ghost_keeps_up_with_the_page(page, base, created)
             test_end_of_score(page, base, created)
             test_quick_keys(page, base, created)
             test_triplets(page, base, created)

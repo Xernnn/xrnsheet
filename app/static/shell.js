@@ -441,6 +441,7 @@ function setZoom(value) {
   choice.value = zoom;
   centreDesk();
   drawCursor();
+  redrawGhost();
   if (score) drawStickyStart();
 }
 

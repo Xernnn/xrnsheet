@@ -669,6 +669,13 @@ function paintGhost({ lines, line, x, type, dots = 0, voice, label, band = null 
   ghost.hidden = false;
 }
 
+// The page can move under a pointer that stays where it is: scrolled by the wheel or the keys,
+// zoomed, or with the window resized. What a click there writes moves with it, so the ghost is drawn
+// again where the pointer is, or the click would write something other than the ghost shows.
+function redrawGhost() {
+  if (pointer) drawGhost(pointer.x, pointer.y, pointer.shift);
+}
+
 function drawGhost(x, y, shift = false) {
   if (drag) return; // A note being dragged has the ghost.
   hideGhost();
@@ -1460,7 +1467,8 @@ function setUpToolbar() {
   // A clicked button keeps the focus, and Space would press it again instead of playing.
   for (const id of ["noteBar", "viewTools", "pitches", "playPopup", "speedPopup", "library"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
   $("redo").addEventListener("click", redoEdit);
-  window.addEventListener("resize", drawCursor);
+  window.addEventListener("resize", () => { drawCursor(); redrawGhost(); });
+  $("desk").addEventListener("scroll", redrawGhost, { passive: true });
   $("pages").addEventListener("mousemove", event => { pointer = { x: event.clientX, y: event.clientY, shift: event.shiftKey }; drawGhost(pointer.x, pointer.y, pointer.shift); });
   $("pages").addEventListener("mouseleave", () => { pointer = null; hideGhost(); });
   // Shift pressed or let go over the staff changes what a click there does: add to the chord, or write.
