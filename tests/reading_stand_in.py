@@ -5,7 +5,7 @@ shown while a sheet waits, is read, is cancelled or fails can't be tried with it
 writes what the real one writes for a short score: the notes, a chord with its box, the page, and
 where its staff lines are. A page with nothing dark on it fails, as a photo with no staves does.
 
-    .venv/bin/python tests/reading_stand_in.py --seconds 6 --port 8012 --jobs /tmp/jobs
+    .venv/bin/python tests/reading_stand_in.py --seconds 6 --port 8012 --jobs /tmp/jobs --reader /tmp/reader
 
 serves the app with it, as the browser checks in e2e_editor.py do. test_server.py uses write_stand_in.
 """
@@ -62,13 +62,17 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seconds", type=float, default=6.0, help="how long each page takes to read")
+    parser.add_argument("--reader", type=Path, help="the folder to write the stand-in into, for whoever starts this to remove (default: one of its own)")
     arguments, rest = parser.parse_known_args()
-    folder = write_stand_in(Path(tempfile.mkdtemp(prefix="xrnsheet-stand-in-")), arguments.seconds)
+    # Stopped with a signal, as a test stops it, the server ends without coming back here, so a folder
+    # of its own would be left behind; one given is removed by whoever gave it.
+    folder = write_stand_in(arguments.reader or Path(tempfile.mkdtemp(prefix="xrnsheet-stand-in-")), arguments.seconds)
     server.ROOT = folder  # Pages are read by whatever pipeline.recognize is there.
     try:
         server.main(rest)
     finally:
-        shutil.rmtree(folder, ignore_errors=True)
+        if arguments.reader is None:
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -5194,8 +5194,8 @@ def slow_reader(seconds: float):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    jobs = Path(tempfile.mkdtemp(prefix="xrnsheet-e2e-"))
-    command = [str(ROOT / ".venv" / "bin" / "python"), str(ROOT / "tests" / "reading_stand_in.py"), "--seconds", str(seconds), "--port", str(port), "--jobs", str(jobs)]
+    work = Path(tempfile.mkdtemp(prefix="xrnsheet-e2e-"))
+    command = [str(ROOT / ".venv" / "bin" / "python"), str(ROOT / "tests" / "reading_stand_in.py"), "--seconds", str(seconds), "--port", str(port), "--jobs", str(work / "jobs"), "--reader", str(work / "reader")]
     server = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     base = f"http://127.0.0.1:{port}"
     try:
@@ -5212,7 +5212,7 @@ def slow_reader(seconds: float):
             server.wait(20)
         except subprocess.TimeoutExpired:
             server.kill()
-        shutil.rmtree(jobs, ignore_errors=True)
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def listed(base: str) -> dict[str, dict]:
