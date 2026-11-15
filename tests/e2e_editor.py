@@ -2304,6 +2304,27 @@ def test_opening_a_file(page, base: str, shots: Path | None, created: list[str])
     check("a broken file says so", "MusicXML" in page.inner_text("#message"), page.inner_text("#message"))
 
 
+def test_a_file_titled_only_on_its_page(page, base: str, created: list[str]) -> None:
+    """MuseScore 2 wrote the Maple Leaf Rag's title and composer only as words on its first page."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    check("a file that prints its title only on the page is called by it in the top bar", page.inner_text("#scoreName") == "Maple Leaf Rag", page.inner_text("#scoreName"))
+    score_pane(page)
+    check("and in the inspector, with its composer", (page.input_value("#scoreTitle"), page.input_value("#scoreComposer")) == ("Maple Leaf Rag", "Scott Joplin"), (page.input_value("#scoreTitle"), page.input_value("#scoreComposer")))
+    page.click("#libraryToggle")
+    tile = page.locator(f'#historyList a[data-score="{score_id}"]')
+    tile.wait_for()
+    check("the library lists it by its title, as opened from a file", tile.locator(".name").inner_text() == "Maple Leaf Rag" and "opened from a file" in tile.locator(".state").inner_text(), tile.inner_text())
+    page.fill("#homeSearch", "maple leaf")
+    check("and its search finds it", page.locator(f'#historyList a[data-score="{score_id}"]').count() == 1)
+    page.fill("#homeSearch", "")
+    page.click("#libraryClose")
+
+
 def test_sound_of_marks(page, base: str, created: list[str]) -> None:
     written_melody(page, base, created, tune="cdefcdef")
     select_notes(page, 0)
@@ -4394,6 +4415,7 @@ def main() -> None:
             test_timeline(page, base, arguments.shots, created)
             test_midi_keyboard(context, base, created)
             test_opening_a_file(page, base, arguments.shots, created)
+            test_a_file_titled_only_on_its_page(page, base, created)
             test_sound_of_marks(page, base, created)
             test_playback_toolbar(page, base, arguments.shots, created)
             test_modes(page, base, arguments.shots, created)

@@ -168,6 +168,7 @@ REPEAT_SIDES = {"forward": ("left", "heavy-light"), "backward": ("right", "light
 BAR_STYLES = {"single": None, "double": "light-light", "dashed": "dashed", "final": "light-heavy", "heavy": "heavy", "heavyDouble": "heavy-heavy", "dotted": "dotted"}
 FINAL_BARLINE = BAR_STYLES["final"]
 MOST_TITLE_LETTERS = 200
+PAGE_TOP_SHARE = 0.75  # A credit in the top quarter of the first page may be its title or composer.
 
 
 def read_setting(root: ET.Element, name: str) -> str | None:
@@ -689,9 +690,61 @@ def set_ending(root: ET.Element, first: int, last: int, number: int) -> None:
             set_barline_child(add_barline(measures[last], "right"), ET.Element("ending", number=str(number), type="stop" if number == 1 else "discontinue"))
 
 
+def credit_text(credit: ET.Element) -> str:
+    """The words a credit prints, on one line."""
+    return " ".join(" ".join((found.text or "").split()) for found in credit.findall("credit-words")).strip()
+
+
+def number_or(text: str | None, otherwise: float | None) -> float | None:
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return otherwise
+
+
+def printed_title(root: ET.Element) -> tuple[str, str]:
+    """Find the title and composer among the words printed on the first page, which don't say what they are.
+
+    MuseScore 2 wrote a score's title and composer only that way. The title is the largest words at
+    the top of the page, the composer's name the highest on its right, as a score is laid out.
+    """
+    height = number_or(root.findtext("defaults/page-layout/page-height"), None)
+    found = []
+    for credit in root.findall("credit"):
+        words, text = credit.findall("credit-words"), credit_text(credit)
+        if credit.get("page", "1") != "1" or credit.find("credit-type") is not None or not text:
+            continue
+        high = max((number_or(item.get("default-y"), -1.0) for item in words), default=-1.0)
+        if height and high >= 0 and high < height * PAGE_TOP_SHARE:
+            continue  # A footer, such as a copyright line, however large.
+        size = max(number_or(item.get("font-size"), 0.0) for item in words)
+        right = any("right" in (item.get("justify"), item.get("halign")) for item in words)
+        found.append((text, size, high, right))
+    title = max((item for item in found if not item[3]), key=lambda item: (item[1], item[2]), default=None)
+    composer = max((item for item in found if item[3]), key=lambda item: item[2], default=None)
+    return (title[0] if title else "", composer[0] if composer else "")
+
+
 def title_of(root: ET.Element) -> dict:
-    composer = next((found for found in root.iter("creator") if found.get("type") == "composer"), None)
-    return {"title": (root.findtext("work/work-title") or "").strip(), "composer": (composer.text or "").strip() if composer is not None else ""}
+    """Say what a score is called and who wrote it, as the top bar, the inspector and the library show it.
+
+    set_title writes them as the work title and the composer, with credits to print them. A file
+    from elsewhere may name its title as the movement's instead, or have only the credits that
+    print them: those that say they're the title and composer, or failing that, the words on the
+    first page that look it. A score titled here always has a work, if only with an empty title
+    when it was cleared, and then the other words on its page are left as they are.
+    """
+    creator = next((found for found in root.iter("creator") if found.get("type") == "composer"), None)
+    credited = {}
+    for credit in root.findall("credit"):
+        for kind in credit.findall("credit-type"):
+            credited.setdefault((kind.text or "").strip(), credit_text(credit))
+    title = (root.findtext("work/work-title") or "").strip() or (root.findtext("movement-title") or "").strip() or credited.get("title", "")
+    composer = ((creator.text or "").strip() if creator is not None else "") or credited.get("composer", "")
+    if root.find("work") is None and not (title and composer):
+        guessed_title, guessed_composer = printed_title(root)
+        title, composer = title or guessed_title, composer or guessed_composer
+    return {"title": title, "composer": composer}
 
 
 def prints_title(credit: ET.Element, old: set[str]) -> bool:
@@ -700,7 +753,7 @@ def prints_title(credit: ET.Element, old: set[str]) -> bool:
     if kinds:
         return bool(kinds & {"title", "composer"})
     # Older files don't say what a credit is, so it's known by its words.
-    return " ".join((found.text or "").strip() for found in credit.findall("credit-words")).strip() in old
+    return credit_text(credit) in old
 
 
 def set_title(root: ET.Element, title: str, composer: str) -> None:
@@ -722,6 +775,10 @@ def set_title(root: ET.Element, title: str, composer: str) -> None:
     if found is None:
         found = ET.SubElement(work, "work-title")
     found.text = title
+    # A movement title is the title title_of finds when the work title is empty, so the one chosen
+    # here takes its place too, or clearing the title would bring it back.
+    for movement in root.findall("movement-title"):
+        root.remove(movement)
     identification = root.find("identification")
     if identification is None:
         identification = ET.Element("identification")

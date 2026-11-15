@@ -84,7 +84,7 @@ function tileFor(sheet) {
   name.textContent = sheet.title || "Untitled score";
   const state = document.createElement("span");
   state.className = "state";
-  const made = sheet.blank ? "written here" : `read from ${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.checked ? "checked" : "not checked"}`;
+  const made = sheet.opened ? "opened from a file" : sheet.blank ? "written here" : `read from ${sheet.pages} ${sheet.pages === 1 ? "page" : "pages"}, ${sheet.checked ? "checked" : "not checked"}`;
   state.textContent = `${when} · ${made}`;
   link.title = `${name.textContent}, ${state.textContent}`;
   link.append(picture, name, state);

@@ -569,6 +569,34 @@ def test_a_musicxml_file_opens_ready_to_edit(client, ready_score):
     assert score["pages"] and "Dm7" in score["chords"][0]["text"]
 
 
+def test_a_file_that_prints_its_title_only_on_the_page_is_listed_by_it_as_opened_from_a_file(client):
+    """MuseScore 2 wrote a score's title and composer only as words on its first page."""
+    root = parsed(note())
+    credits = [("Maple Leaf Rag", "24", "center", "1627"), ("Scott Joplin", "12", "right", "1527")]
+    for place, (words, size, justify, high) in enumerate(credits):
+        credit = ET.Element("credit", page="1")
+        ET.SubElement(credit, "credit-words", {"default-y": high, "font-size": size, "justify": justify}).text = words
+        root.insert(place, credit)
+    opened = client.post("/api/scores", files={"file": ("rag.musicxml", io.BytesIO(to_text(root).encode()))}).json()["id"]
+    score = client.get(f"/api/scores/{opened}").json()
+    assert (score["title"], score["composer"]) == ("Maple Leaf Rag", "Scott Joplin")
+    written = blank(client)
+    listed = {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}
+    assert listed[opened]["title"] == "Maple Leaf Rag" and listed[opened]["opened"] is True
+    assert listed[written]["opened"] is False and listed[written]["blank"] is True
+
+
+def test_a_score_opened_before_files_were_marked_is_still_known_by_who_wrote_it(client):
+    """A file from another program names it, which a score begun here never does."""
+    root = parsed(note())
+    identification = ET.Element("identification")
+    ET.SubElement(ET.SubElement(identification, "encoding"), "software").text = "MuseScore 2.1.0"
+    root.insert(0, identification)
+    opened = client.post("/api/scores", files={"file": ("old.musicxml", io.BytesIO(to_text(root).encode()))}).json()["id"]
+    (server.JOB_DIR / opened / "opened.json").unlink()
+    assert {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}[opened]["opened"] is True
+
+
 @pytest.mark.parametrize(("name", "data"), [("broken.musicxml", b"<nonsense"), ("broken.mxl", b"not a zip"), ("page.xml", b"<html/>")])
 def test_a_broken_score_file_is_refused_at_upload(client, name, data):
     response = client.post("/api/scores", files={"file": (name, io.BytesIO(data))})

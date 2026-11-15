@@ -49,7 +49,7 @@ To read notes with the model in this repository and not homr, which only works f
 .venv/bin/python -m app.server --notes own
 ```
 
-You can also open a `.musicxml`, `.xml` or `.mxl` file from another program the same way as a photo, and it goes straight to the editor.
+You can also open a `.musicxml`, `.xml` or `.mxl` file from another program the same way as a photo, and it goes straight to the editor, with its title and composer, even from a file that only prints them on its first page, as MuseScore 2's do. The library says it was opened from a file.
 
 ### As a desktop app
 
