@@ -4351,6 +4351,29 @@ def test_tablature_editing(page, base: str, shots: Path | None, created: list[st
     settle(page)
 
 
+def test_tablature_clicked_past_its_fret_numbers(page, base: str, created: list[str]) -> None:
+    """A string of the tablature is a string all along its bar, past the fret numbers drawn on it."""
+    score_id = open_blank(page, base, created, bars=2, staff="guitar-tab")
+    page.keyboard.type("eg", delay=0)
+    settle(page)
+    rest = next(note.get("id") for note in saved_score(base, score_id).find("part").findall("measure")[0].iter("note") if note.find("rest") is not None and (note.findtext("staff") or "1") == "1")
+    x, y = tab_point(page, rest, 1)
+    page.mouse.move(x, y)
+    check("past the frets on its first string, the ghost is a box on that string", page.locator("#ghost.onTab:not([hidden])").count() == 1, page.evaluate("() => [document.getElementById('ghost').className, document.getElementById('ghostLabel')?.textContent]"))
+    page.mouse.click(x, y)
+    settle(page)
+    root = saved_score(base, score_id)
+    written = [(note.findtext("pitch/step"), note.findtext("pitch/octave"), string_and_fret(root, note.get("id"))) for note in own_notes(root)]
+    check("and a click there writes that string open, not a note far below the staff above", written[-1] == ("E", "4", ("1", "0")) and len(written) == 3, written)
+    x, y = tab_point(page, page.evaluate("() => plainId(editor.cursor)"), 3)
+    page.mouse.click(x, y)
+    settle(page)
+    root = saved_score(base, score_id)
+    written = [(note.findtext("pitch/step"), note.findtext("pitch/octave"), string_and_fret(root, note.get("id"))) for note in own_notes(root)]
+    check("and so does a click on another string in the same bar", written[-1] == ("G", "3", ("3", "0")) and len(written) == 4, written)
+    page.keyboard.press("Escape")
+
+
 def fretted_place(note: ET.Element) -> tuple | None:
     for technical in note.iterfind("notations/technical"):
         if technical.find("fret") is not None:
@@ -5061,6 +5084,7 @@ def main() -> None:
             test_techniques_at_concert_pitch(page, base, arguments.shots, created)
             test_techniques_copied_and_the_capo(page, base, arguments.shots, created)
             test_tablature_editing(page, base, arguments.shots, created)
+            test_tablature_clicked_past_its_fret_numbers(page, base, created)
             test_marks_drawn_on_notes(page, base, arguments.shots, created)
             test_words_copied_with_a_passage(page, base, created)
             test_chord_diagram_editing(page, base, arguments.shots, created)

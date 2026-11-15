@@ -251,11 +251,13 @@ function updateTools() {
   redrawGhost();
 }
 
+// A tablature staff's lines are drawn in pieces, broken round each fret number on them, so how far
+// the staff reaches across is taken from every piece: the first alone stopped at the first fret
+// number, and a click or the ghost past it found no staff there.
 function staffLines(staff) {
-  const lines = [...staff.children].filter(child => child.tagName === "path");
-  const top = lines[0].getBoundingClientRect();
-  const bottom = lines.at(-1).getBoundingClientRect();
-  return { left: top.left, right: top.right, top: top.top, bottom: bottom.top, step: (bottom.top - top.top) / 8 };
+  const lines = [...staff.children].filter(child => child.tagName === "path").map(line => line.getBoundingClientRect());
+  const top = Math.min(...lines.map(line => line.top)), bottom = Math.max(...lines.map(line => line.top));
+  return { left: Math.min(...lines.map(line => line.left)), right: Math.max(...lines.map(line => line.right)), top, bottom, step: (bottom - top) / 8 };
 }
 
 // A box around a selected stretch on each staff it crosses, as MuseScore draws one. Where every
