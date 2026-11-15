@@ -75,7 +75,8 @@ input[type="range"] { accent-color: var(--accent); }
 
 /* The top bar. */
 #topBar { display: flex; flex: none; align-items: center; gap: 6px; min-height: 54px; padding: 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
-#brand { flex: none; padding: 2px; min-height: 30px; border-radius: 7px; }
+/* The logo, which goes back to the library, takes no more room than the picture did. */
+#brand { flex: none; padding: 0; min-width: 0; min-height: 0; border: 0; border-radius: 7px; background: none; }
 #brand img { display: block; border-radius: 7px; }
 /* A block, as a flex box's text can't end in an ellipsis. */
 #scoreName { display: block; min-width: 0; max-width: 260px; padding: 4px 8px; font-size: 15px; font-weight: 700; text-align: left; overflow: hidden; text-overflow: ellipsis; }
