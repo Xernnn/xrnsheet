@@ -1,8 +1,8 @@
 """Train the chord reader on images generated on the fly.
 
-    .venv/bin/python -m chords.train
-    .venv/bin/python -m chords.train --steps 300 --name smoke   quick check
-    .venv/bin/python -m chords.train --no-damage --name no_damage   see what augmentation adds
+    .venv-train/bin/python -m chords.train
+    .venv-train/bin/python -m chords.train --steps 300 --name smoke   quick check
+    .venv-train/bin/python -m chords.train --no-damage --name no_damage   see what augmentation adds
 """
 
 import argparse
