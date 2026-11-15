@@ -164,6 +164,15 @@ class ChordAdd(BaseModel):
     text: str
 
 
+class ChordFrame(BaseModel):
+    """A chord diagram of its own: each string's fret from the lowest string up, counted from the capo,
+    0 for open and null for not played, and a barre as its fret and the strings it lies across,
+    counted from the lowest from 0. No frets gives the chord its usual shape again."""
+
+    frets: list[int | None] | None = None
+    barre: list[int] | None = None
+
+
 class NoteEdit(BaseModel):
     action: str
     type: str = "quarter"
@@ -176,6 +185,7 @@ class NoteEdit(BaseModel):
     actual: int = 3  # How many notes a tuplet holds.
     interval: int = 0  # A third is 3. Below the note if it's negative.
     string: int | None = None  # Which string plays it, numbered from 1 for the highest.
+    fret: int | None = None  # A fret typed for it on the tablature, counted from the capo.
 
 
 class GroupEdit(BaseModel):
@@ -237,6 +247,8 @@ class CopiedEvent(BaseModel):
     techniques: list[dict] = []  # Each note's fingering, pluck, string number, bend, harmonic and dead note.
     strings: list[int | None] = []  # Each note's string on a guitar's tablature.
     joins: list[tuple[int, str]] = []  # Hammer-ons and the like to a later copied note: its place and the join.
+    words: list[dict] = []  # "pizz." or "arco", a position or a hand at the note: {"kind": "position", "number": 3}.
+    lines: list[tuple[int, str]] = []  # A P.M., let ring or sul line from the note: the copied note it ends on, and its words.
 
 
 class Paste(BaseModel):
@@ -652,6 +664,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
     for item in read_chord_file(folder):
         read_info.setdefault((item["measure"], round(float(item["onset"]), 3)), item)  # Only the first was placed.
     chords = []
+    shapes = diagrams.chord_diagrams(shown)
     for chord in edit.list_chords(shown):
         found = read_info.get((chord["origin"], chord["onset"])) if chord["part"] == 0 else None
         unchanged = found is not None and found["chord"] == chord["text"]
@@ -659,6 +672,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
             "confidence": found["confidence"] if unchanged else None,
             "box": found["box"] if found else None,
             "page": found["page"] if found else None,
+            "diagram": shapes[chord["index"]] if chord["index"] < len(shapes) else None,
         })
     view = view_of(folder)
     pages = list(drawn_pages(text if text is not None and shown is root else to_text(shown), view))
@@ -807,7 +821,10 @@ def apply_edit(score_id: str, change: Callable[[ET.Element], dict | str | None],
         fretted.sync(root)  # Every TAB staff shows its standard staff's notes as they now are.
         extra = extra if isinstance(extra, dict) else {}
         if then is not None:
-            then(root, extra)
+            try:
+                then(root, extra)
+            except edit.EditError as error:
+                raise HTTPException(422, str(error)) from error
             marks.ensure_mark_ids(root)
             fretted.sync(root)
         text = save_version(folder, root)
@@ -849,11 +866,15 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "close": lambda root: {"cursor": edit.close_gap(root, note_id)},
         "insert": lambda root: {"cursor": edit.insert_rest(root, note_id, body.type, body.dots)},
         "string": lambda root: fretted.choose_string(root, note_id, body.string or 0),
+        "fret": lambda root: {"onString": fretted.play_at_fret(root, note_id, body.fret if body.fret is not None else -1, body.string)},
         "crossUp": lambda root: technique.cross_staff(root, note_id, -1),
         "crossDown": lambda root: technique.cross_staff(root, note_id, 1),
     }
     if body.action not in actions:
         raise HTTPException(422, "Unknown note action")
+    if body.action == "fret":
+        # The note has its new pitch once the tablature has caught up, and is then put on its string.
+        return apply_edit(score_id, actions["fret"], lambda root, extra: fretted.choose_string(root, note_id, extra.pop("onString")))
     on_string = body.string if body.action in ("write", "stack") and body.string else None
     return apply_edit(score_id, actions[body.action], (lambda root, extra: play_on_string(root, extra, on_string)) if on_string else None)
 
@@ -861,9 +882,9 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
 def play_on_string(root: ET.Element, extra: dict, string: int) -> None:
     """Keep the string a note was played on, on the fretboard or the fingerboard below the score.
 
-    A guitar with tablature plays it there, and a bowed instrument gets the string's number over
-    it. A guitar without tablature has nowhere to keep it. Should the string be busy, the note keeps
-    the one chosen for it, and the page is told why.
+    A guitar plays it there, on its tablature or, without one, kept on the note, and a bowed
+    instrument gets the string's number over it. Should the string be busy, the note keeps the
+    one chosen for it, and the page is told why.
     """
     note_id = extra.get("written")
     if not note_id:
@@ -871,7 +892,7 @@ def play_on_string(root: ET.Element, extra: dict, string: int) -> None:
     part, _ = edit.context_of(root, edit.find_note(root, note_id))
     board = fretted.boards(root)[root.findall("part").index(part)]
     try:
-        if board is not None and board.tab:
+        if board is not None:
             fretted.choose_string(root, note_id, string)
         elif board is None and technique.family_of(root, part) == technique.BOWED:
             technique.set_string_number(root, [note_id], string)
@@ -915,6 +936,15 @@ def change_group(score_id: str, body: GroupEdit) -> dict:
             chosen = list(dict.fromkeys(edit.own_ids(root, body.notes)))
             # Respelling a note respells the notes tied to it, so a second one of those would undo it.
             chosen = edit.one_note_per_tie(root, chosen) if body.action == "respell" else chosen
+            if body.action in ("crossUp", "crossDown"):
+                # A chord moves to another staff as one, so a second of its notes would move it again.
+                events = {}
+                for note_id in chosen:
+                    try:
+                        events.setdefault(technique.event_key(edit.locate(root, note_id)), note_id)
+                    except edit.EditError:
+                        events.setdefault(note_id, note_id)
+                chosen = list(events.values())
             for note_id in chosen:
                 try:
                     GROUP_ACTIONS[body.action](root, note_id)
@@ -978,15 +1008,14 @@ def change_strings(score_id: str, body: StringsEdit) -> dict:
 
     def change(root: ET.Element) -> None:
         _, board = fretted.part_and_board(root, body.part)
-        changed = False
+        shown_for = diagrams.board_for(root)  # The chord diagrams' guitar, before it changes.
         if body.tab is not None and body.tab != bool(board.tab):
             fretted.set_tab(root, body.part, body.tab)
-            changed = True
         if body.tuning is not None or body.strings is not None or body.capo is not None:
             fretted.set_strings(root, body.part, body.tuning, body.strings, body.capo)
-            changed = True
-        if not changed:
+        if fretted.boards(root)[body.part].describe() == board.describe():
             raise edit.EditError("That's how this instrument is already set up.")
+        diagrams.refit(root, shown_for)
 
     return apply_edit(score_id, change)
 
@@ -1134,6 +1163,22 @@ def change_bars(score_id: str, body: BarEdit) -> dict:
 @app.post("/api/scores/{score_id}/chords/{index}")
 def change_chord(score_id: str, index: int, body: ChordEdit) -> dict:
     return apply_edit(score_id, lambda root: edit.set_chord(root, index, body.text))
+
+
+@app.post("/api/scores/{score_id}/chords/{index}/frame")
+def change_chord_frame(score_id: str, index: int, body: ChordFrame) -> dict:
+    """Give a chord symbol a diagram of its own, or its usual one again. It's an edit, so it can be undone."""
+    return apply_edit(score_id, lambda root: diagrams.set_frame(root, index, body.frets, body.barre))
+
+
+@app.get("/api/scores/{score_id}/chords/{index}/shapes")
+def chord_shapes(score_id: str, index: int) -> dict:
+    """List the shapes a chord can be played with, for choosing its diagram. Nothing is changed."""
+    root = current_root(job_folder(score_id))
+    try:
+        return diagrams.chord_shapes(concert.shown(root), index)
+    except edit.EditError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 @app.post("/api/scores/{score_id}/chords")

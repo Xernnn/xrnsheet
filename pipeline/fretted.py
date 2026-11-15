@@ -14,6 +14,11 @@ string a player would most likely use: one that's free at that moment, near wher
 is, with an open string while the hand is low on the neck, and every note of a chord on a string
 of its own.
 
+A guitar without tablature keeps a string chosen for a note on the note itself, as a <technical>
+holding its <string> and <fret> (a <string> alone is a circled string number, a mark to read), and
+the string goes onto the tablature when it's turned on and back onto the note when it's taken away.
+A part can also be tablature alone, one TAB staff that is the music itself, drawn with its rhythm.
+
 Frets are counted from the capo, as tablature is read, so with the capo at the second fret an
 open string is a 0 and sounds two semitones above its tuning. Tunings are of the strings as they
 sound, so a bass guitar's lowest string is E1 although its music is written an octave higher.
@@ -62,6 +67,10 @@ TUNINGS = {
     },
 }
 CUSTOM = "custom"
+GRACE_LEAD = Fraction(1, 256)  # How long before its note a grace note is taken to be played, for choosing its string.
+# A string someone chose for a note, which holds where one the program chose may be chosen again.
+# It's the app's own mark on a fret number, and a saved file leaves it out (see technique.drawn_on_other_staves).
+CHOSEN = "xrn-chosen"
 # How a hand on the neck is judged, in frets. It covers four from where the first finger is, an open
 # string is natural while it's this low, and a chord can stretch so far before it can't be played.
 HAND_REACH = 3
@@ -128,11 +137,14 @@ class Fretboard:
         return self.opens[self.count - string]
 
     def fret(self, string: int, midi: int) -> int | None:
-        """Return the fret that plays this sound on this string, counted from the capo, if it has one."""
+        """Return the fret that plays this sound on this string, counted from the capo, if it has one.
+
+        A capo doesn't add frets: above it are the instrument's frets less the ones behind it.
+        """
         if not 1 <= string <= self.count:
             return None
         fret = midi - self.open_of(string) - self.capo
-        return fret if 0 <= fret <= self.frets else None
+        return fret if 0 <= fret <= self.frets - self.capo else None
 
     @property
     def tuning(self) -> str:
@@ -213,13 +225,32 @@ class Placed:
     end: Fraction
     midi: int
     keep: int | None = None  # The string it had, if it may keep it.
+    chosen: bool = False  # Whether that string was chosen for it, rather than by the program.
     string: int | None = None
     fret: int | None = None
 
 
+def place_of(note: ET.Element) -> tuple[int, int] | None:
+    """Return the string and fret a note is played at, where a <technical> of it holds both."""
+    for technical in note.iterfind("notations/technical"):
+        string, fret = (technical.findtext("string") or "").strip(), (technical.findtext("fret") or "").strip()
+        if string.isdigit() and fret.isdigit():
+            return int(string), int(fret)
+    return None
+
+
 def string_of(note: ET.Element) -> int | None:
-    found = (note.findtext("notations/technical/string") or "").strip()
-    return int(found) if found.isdigit() else None
+    found = place_of(note)
+    return found[0] if found else None
+
+
+def string_number(note: ET.Element) -> int | None:
+    """Return a note's circled string number: a <string> with no <fret> beside it, which is a mark to read."""
+    for technical in note.iterfind("notations/technical"):
+        found = (technical.findtext("string") or "").strip()
+        if technical.find("fret") is None and found.isdigit():
+            return int(found)
+    return None
 
 
 def tab_voice(voice: str, staff: str, taken: set[str]) -> str:
@@ -244,6 +275,8 @@ LEFT_ON_STANDARD = {"lyric", "accidental", "beam", "stem", "notations", "staff",
 def tab_copy(note: ET.Element, staff: str, voice: str) -> ET.Element:
     """Copy a note onto a TAB staff, with what tablature shows of it. Its rests aren't drawn."""
     copied = ET.Element("note", {"id": note.get("id") + TAB_COPY} if note.get("id") else {})
+    if note.get("print-object") == "no":
+        copied.set("print-object", "no")  # A note hidden on the staff is hidden on its tablature too.
     for child in note:
         if child.tag not in LEFT_ON_STANDARD:
             copied.append(copy.deepcopy(child))
@@ -270,12 +303,18 @@ def element(tag: str, text: str) -> ET.Element:
 
 
 def write_fret(note: ET.Element, string: int, fret: int) -> None:
-    """Store the string and fret that play a note, in its <technical>."""
+    """Store the string and fret that play a note, in its <technical>.
+
+    They go where its fret is already, or in a <technical> with no string number in it, so a
+    circled number on a guitar's note without tablature stays a mark of its own.
+    """
     notations = note.find("notations")
     if notations is None:
         notations = ET.Element("notations")
         place(note, notations)
-    technical = notations.find("technical")
+    technicals = notations.findall("technical")
+    technical = next((found for found in technicals if found.find("fret") is not None), None)
+    technical = technical if technical is not None else next((found for found in technicals if found.find("string") is None), None)
     if technical is None:
         technical = ET.SubElement(notations, "technical")
     for tag in ("string", "fret"):
@@ -286,16 +325,18 @@ def write_fret(note: ET.Element, string: int, fret: int) -> None:
 
 
 def clear_fret(note: ET.Element) -> None:
-    technical = note.find("notations/technical")
+    """Take away the string and fret a note is played at, leaving its marks."""
+    notations = note.find("notations")
+    technical = next((found for found in note.iterfind("notations/technical") if found.find("fret") is not None), None)
     if technical is None:
         return
     for tag in ("string", "fret"):
         for found in technical.findall(tag):
             technical.remove(found)
     if len(technical) == 0:
-        note.find("notations").remove(technical)
-    if len(note.find("notations")) == 0:
-        note.remove(note.find("notations"))
+        notations.remove(technical)
+    if len(notations) == 0:
+        note.remove(notations)
 
 
 def hidden_rest(note: ET.Element) -> ET.Element:
@@ -309,12 +350,14 @@ def hidden_rest(note: ET.Element) -> ET.Element:
 
 
 def without_unplayable(event: Event, unplayable: set[int]) -> Event:
+    """Leave out of a TAB staff's moment the notes no string can play, its grace notes too."""
+    graces = [note for note in event.grace if id(note) not in unplayable]
     kept = [note for note in event.notes if id(note) not in unplayable]
     if not kept:
-        return Event(event.onset, event.length, [hidden_rest(event.notes[0])])
+        return Event(event.onset, event.length, [hidden_rest(event.notes[0])], graces)
     if kept[0] is not event.notes[0] and kept[0].find("chord") is not None:
         kept[0].remove(kept[0].find("chord"))
-    return Event(event.onset, event.length, kept)
+    return Event(event.onset, event.length, kept, graces)
 
 
 def note_cost(fret: int, hand: int) -> float:
@@ -385,15 +428,18 @@ def assign(placed: list[Placed], board: Fretboard) -> None:
     hand = 1
     for start in sorted(moments):
         ringing = [item for item in ringing if item.end > start]
-        busy = {item.string for item in ringing}
         group = moments[start]
+        # A grace note cuts short whatever was ringing, so it can take any string.
+        busy = set() if all(item.source.find("grace") is not None for item in group) else {item.string for item in ringing}
         fixed: list[Placed] = []
         free: list[Placed] = []
+        tied_on: list[Placed] = []
         for item in group:
             partner = tied.get(item.midi) if is_tied(item.source, "stop") else None
             if partner is not None and partner.end == start and partner.string not in {other.string for other in fixed}:
                 item.string, item.fret = partner.string, partner.fret
                 fixed.append(item)
+                tied_on.append(item)
             elif item.keep is not None and item.keep not in busy and item.keep not in {other.string for other in fixed} and board.fret(item.keep, item.midi) is not None:
                 item.string, item.fret = item.keep, board.fret(item.keep, item.midi)
                 fixed.append(item)
@@ -402,6 +448,14 @@ def assign(placed: list[Placed], board: Fretboard) -> None:
         taken = busy | {item.string for item in fixed}
         for item, choice in zip(free, choose(free, taken, [item.fret for item in fixed], hand, board)):
             item.string, item.fret = choice if choice else (None, None)
+        kept = [item for item in fixed if item not in tied_on and not item.chosen]
+        if kept and span_cost([item.fret for item in group if item.fret is not None]) >= UNPLAYABLE / 10:
+            # The strings these notes had make the moment unplayable, as a chord written a note at a
+            # time would: they're chosen again together, all but the notes carrying on a tie.
+            again = [*kept, *free]
+            held = [item for item in fixed if item not in kept]
+            for item, choice in zip(again, choose(again, busy | {item.string for item in held}, [item.fret for item in held], hand, board)):
+                item.string, item.fret = choice if choice else (None, None)
         hand = moved_hand(hand, [item.fret for item in group if item.fret is not None])
         for item in group:
             if item.string is not None:
@@ -410,20 +464,21 @@ def assign(placed: list[Placed], board: Fretboard) -> None:
                     tied[item.midi] = item
 
 
-def remembered(timeline, staves: set[str], shift: int) -> tuple[dict[str, tuple[int, int]], dict[tuple[Fraction, int], int]]:
-    """Read the strings a bar's TAB staves give their notes, by the note each copies and by where it sounds."""
-    by_note: dict[str, tuple[int, int]] = {}
+def remembered(timeline, staves: set[str], shift: int) -> tuple[dict[str, tuple[int, int, bool]], dict[tuple[Fraction, int], int]]:
+    """Read the strings a bar's TAB staves give their notes, by the note each copies and by where it
+    sounds, with whether each was chosen for it."""
+    by_note: dict[str, tuple[int, int, bool]] = {}
     by_place: dict[tuple[Fraction, int], int] = {}
     for key, line in timeline.lines.items():
         if key[0] not in staves:
             continue
         for event in line:
-            for note in event.notes:
+            for note in [*event.grace, *event.notes]:
                 string = string_of(note)
                 if note.find("pitch") is None or string is None:
                     continue
                 midi = note_midi(note) + shift
-                by_note[(note.get("id") or "").removesuffix(TAB_COPY)] = (string, midi)
+                by_note[(note.get("id") or "").removesuffix(TAB_COPY)] = (string, midi, note.get(CHOSEN) == "yes")
                 by_place.setdefault((event.onset, midi), string)
     return by_note, by_place
 
@@ -454,21 +509,33 @@ def sync_part(part: ET.Element, board: Fretboard) -> None:
                 voice = tab_voice(key[1], linked, taken)
                 for event in sorted(line, key=lambda item: item.onset):
                     made = [tab_copy(note, linked, voice) for note in event.notes]
-                    copies.append(Event(event.onset, event.length, made))
-                    for note, copied in zip(event.notes, made):
+                    graces = [tab_copy(note, linked, voice) for note in event.grace]
+                    copies.append(Event(event.onset, event.length, made, graces))
+                    # Grace notes are played just before their note, one after another, so each is a
+                    # moment of its own, over before the note it leads to.
+                    leads = [(note, copied, start + event.onset - GRACE_LEAD * (len(graces) - number), GRACE_LEAD) for number, (note, copied) in enumerate(zip(event.grace, graces))]
+                    for note, copied, begins, length in [*leads, *((note, copied, start + event.onset, event.length) for note, copied in zip(event.notes, made))]:
                         if copied.find("pitch") is None:
                             continue
                         midi = note_midi(note) + shift
                         kept = by_note.get(note.get("id") or "")
                         keep = kept[0] if kept and kept[1] == midi else by_place.get((event.onset, midi))
-                        placed.append(Placed(copied, note, start + event.onset, start + event.end, midi, keep))
+                        chosen = bool(kept and kept[1] == midi and kept[2])
+                        if keep is None:
+                            # A string kept on the note while there was no tablature, or its circled number.
+                            own = place_of(note)
+                            keep = own[0] if own else string_number(note)
+                            chosen = keep is not None
+                        placed.append(Placed(copied, note, begins, begins + length, midi, keep, chosen))
+                        if place_of(note) is not None:
+                            clear_fret(note)  # The tablature keeps it from now on.
                 timeline.lines[(linked, voice)] = copies
         for key, line in timeline.lines.items():
             if key[0] in board.tab and key[0] != linked:
                 for event in line:
                     for note in event.notes:
                         if note.find("pitch") is not None:
-                            placed.append(Placed(note, note, start + event.onset, start + event.end, note_midi(note) + shift, string_of(note)))
+                            placed.append(Placed(note, note, start + event.onset, start + event.end, note_midi(note) + shift, string_of(note), note.get(CHOSEN) == "yes"))
         bars.append((context, timeline))
         start += max((line_end(line) for line in timeline.lines.values()), default=Fraction(0)) or context.length
     assign(placed, board)
@@ -480,6 +547,10 @@ def sync_part(part: ET.Element, board: Fretboard) -> None:
                 clear_fret(item.note)
         else:
             write_fret(item.note, item.string, item.fret)
+            if item.chosen and item.string == item.keep:
+                item.note.set(CHOSEN, "yes")
+            else:
+                item.note.attrib.pop(CHOSEN, None)
     if linked:
         for context, timeline in bars:
             for key, line in timeline.lines.items():
@@ -488,18 +559,35 @@ def sync_part(part: ET.Element, board: Fretboard) -> None:
             write_measure(context.measure, timeline, context.divisions)
 
 
+def check_places(part: ET.Element, board: Fretboard) -> None:
+    """Forget the string kept on a note of a guitar without tablature once it no longer plays the note there.
+
+    That's when the note's pitch has changed, as a string chosen on the tablature is. A new tuning
+    or capo moves the frets themselves (see set_strings).
+    """
+    shifts = shifts_of(part)
+    for context in contexts(part):
+        shift = shifts[context.index] if context.index < len(shifts) else 0
+        for note in context.measure.iter("note"):
+            found = place_of(note)
+            if found is not None and (note.find("pitch") is None or board.fret(found[0], note_midi(note) + shift) != found[1]):
+                clear_fret(note)
+
+
 def sync(root: ET.Element) -> None:
     """Bring every TAB staff in line with its standard staff, after any edit."""
     for part, board in zip(root.findall("part"), boards(root)):
         if board is not None and board.tab:
             sync_part(part, board)
+        elif board is not None:
+            check_places(part, board)
 
 
 def unplayable_reason(board: Fretboard, midi: int) -> str:
     opens = board.opens
     if midi < min(opens) + board.capo:
         return f"{name_of(midi)} is below this instrument's lowest string."
-    if midi > max(opens) + board.capo + board.frets:
+    if midi > max(opens) + board.frets:
         return f"{name_of(midi)} is above the {board.frets}th fret of the highest string."
     return f"No string is free to play {name_of(midi)} here."
 
@@ -508,15 +596,16 @@ def problems(root: ET.Element) -> list[dict]:
     """List the notes no string can play, which their TAB staff leaves out, and say why."""
     found = []
     for number, (part, board) in enumerate(zip(root.findall("part"), boards(root))):
-        if board is None or not board.linked:
+        if board is None or not board.tab:
             continue
         shifts = shifts_of(part)
         copies = {note.get("id"): note for note in part.iter("note") if (note.findtext("staff") or "1") == board.linked}
         for context in contexts(part):
             for note in context.measure.iter("note"):
-                if (note.findtext("staff") or "1") != board.source or note.find("pitch") is None or note.find("grace") is not None:
+                # A linked TAB staff's notes are its standard staff's, and a TAB staff of its own is the music.
+                if (note.findtext("staff") or "1") != (board.source or board.tab[0]) or note.find("pitch") is None or note.find("grace") is not None:
                     continue
-                copied = copies.get((note.get("id") or "") + TAB_COPY)
+                copied = copies.get((note.get("id") or "") + TAB_COPY) if board.linked else note
                 if copied is None or string_of(copied) is None:
                     midi = note_midi(note) + (shifts[context.index] if context.index < len(shifts) else 0)
                     found.append({"note": note.get("id"), "part": number, "reason": unplayable_reason(board, midi)})
@@ -589,15 +678,61 @@ def set_strings(root: ET.Element, number: int, tuning: str | None = None, string
     if capo is not None and not 0 <= capo <= MOST_CAPO:
         raise EditError(f"A capo goes at a fret from 0 to {MOST_CAPO}.")
     write_board(part, names, board.capo if capo is None else capo, board.standard)
+    if not board.tab:
+        refret(part, board, boards_of_part(root, part))
+
+
+def boards_of_part(root: ET.Element, part: ET.Element) -> Fretboard:
+    return boards(root)[root.findall("part").index(part)]
+
+
+def refret(part: ET.Element, old: Fretboard, new: Fretboard) -> None:
+    """Move the frets kept on a guitar's notes to a new tuning or capo, each on its string while that string can still play it."""
+    shifts = shifts_of(part)
+    for context in contexts(part):
+        shift = shifts[context.index] if context.index < len(shifts) else 0
+        for note in context.measure.iter("note"):
+            found = place_of(note)
+            if found is None or note.find("pitch") is None:
+                continue
+            midi = note_midi(note) + shift
+            fret = new.fret(found[0], midi) if old.fret(found[0], midi) == found[1] else None
+            if fret is None:
+                clear_fret(note)
+            else:
+                write_fret(note, found[0], fret)
 
 
 def set_tab(root: ET.Element, number: int, on: bool) -> None:
-    """Show a fretted instrument's tablature on a staff linked under its own, or take it away."""
+    """Show a fretted instrument's tablature on a staff linked under its own, or take it away.
+
+    Taken away, each note keeps the string the tablature played it on. A part that is tablature
+    alone becomes a standard staff in the instrument's own clef, its notes keeping their strings.
+    """
     part, board = part_and_board(root, number)
     if on == bool(board.tab):
         raise EditError("This instrument already has tablature." if on else "This instrument has no tablature to take away.")
     measure = part.find("measure")
     attributes = first_attributes(part)
+    if not on and not board.linked:
+        if board.staves != 1:
+            raise EditError("Only a tablature staff on its own becomes a standard staff.")
+        entry = next((found for found in root.findall("part-list/score-part") if found.get("id") == part.get("id")), None)
+        instrument = instrument_of(entry)
+        clef_name = next((name for name in (instrument.clefs if instrument is not None else ()) if name != "tab"), "treble8")
+        for found in opening_attributes(measure):
+            for clef in found.findall("clef"):
+                found.remove(clef)
+            for details in found.findall("staff-details"):
+                found.remove(details)
+        clef = ET.Element("clef")
+        write_clef(clef, clef_name)
+        set_attribute(attributes, clef)
+        for found in opening_attributes(measure):
+            if len(found) == 0:
+                measure.remove(found)
+        write_board(part, board.names, board.capo, board.standard)
+        return
     if on:
         if board.staves != 1:
             raise EditError("Only an instrument with one staff can have tablature added.")
@@ -612,6 +747,12 @@ def set_tab(root: ET.Element, number: int, on: bool) -> None:
         write_board(part, board.names, board.capo, board.standard)
         return
     staff = board.tab[0]
+    copies = {note.get("id"): note for note in part.iter("note") if (note.findtext("staff") or "1") == staff}
+    for note in part.iter("note"):
+        carried = copies.get((note.get("id") or "") + TAB_COPY)
+        found = place_of(carried) if carried is not None and carried.find("pitch") is not None else None
+        if found is not None and note.find("pitch") is not None:
+            write_fret(note, *found)  # Kept on the note, for a guitar without tablature.
     for context in contexts(part):
         timeline = read_measure(context.measure, context.divisions)
         for key in [key for key in timeline.lines if key[0] == staff]:
@@ -635,8 +776,9 @@ def set_tab(root: ET.Element, number: int, on: bool) -> None:
 
 
 def copy_of(root: ET.Element, part: ET.Element, board: Fretboard, note: ET.Element) -> ET.Element | None:
-    """Return what carries a note's string and fret: its copy on a linked TAB staff, or itself on a TAB staff."""
-    if (note.findtext("staff") or "1") in board.tab:
+    """Return what carries a note's string and fret: its copy on a linked TAB staff, or itself on a
+    TAB staff, or on a guitar without tablature."""
+    if (note.findtext("staff") or "1") in board.tab or not board.tab:
         return note
     if not board.linked:
         return None
@@ -645,7 +787,8 @@ def copy_of(root: ET.Element, part: ET.Element, board: Fretboard, note: ET.Eleme
 
 
 def sounding_now(part: ET.Element, board: Fretboard, target: ET.Element) -> tuple[Fraction, list[tuple[ET.Element, Fraction, Fraction]]]:
-    """Return when a note starts, and every note on the TAB staves with its start and end."""
+    """Return when a note starts, and every note that carries a string, with its start and end:
+    those on the TAB staves, or a guitar's own notes without tablature."""
     found = []
     start = Fraction(0)
     begins = None
@@ -653,10 +796,14 @@ def sounding_now(part: ET.Element, board: Fretboard, target: ET.Element) -> tupl
         timeline = read_measure(context.measure, context.divisions)
         for key, line in timeline.lines.items():
             for event in line:
-                if any(note is target for note in event.notes):
-                    begins = start + event.onset
-                if key[0] in board.tab:
-                    found.extend((note, start + event.onset, start + event.end) for note in event.notes if note.find("pitch") is not None)
+                # Grace notes are each a moment of their own just before their note (see sync_part).
+                moments = [(note, start + event.onset - GRACE_LEAD * (len(event.grace) - number), GRACE_LEAD) for number, note in enumerate(event.grace)]
+                moments += [(note, start + event.onset, event.length) for note in event.notes]
+                for note, begun, length in moments:
+                    if note is target:
+                        begins = begun
+                    if (key[0] in board.tab or not board.tab) and note.find("pitch") is not None:
+                        found.append((note, begun, begun + length))
         start += max((line_end(line) for line in timeline.lines.values()), default=Fraction(0)) or context.length
     return begins, found
 
@@ -669,11 +816,12 @@ def set_string(root: ET.Element, part: ET.Element, board: Fretboard, note: ET.El
     tuned = name_of(board.open_of(string) + board.capo)
     if fret < 0:
         raise EditError(f"String {string} can't play {name_of(midi)}: the lowest it plays is {tuned}{' with the capo on' if board.capo else ''}.")
-    if fret > board.frets:
-        raise EditError(f"String {string} only goes up to fret {board.frets}, and {name_of(midi)} would be fret {fret}.")
+    if fret > board.frets - board.capo:
+        top = f"fret {board.frets - board.capo} from the capo" if board.capo else f"fret {board.frets}"
+        raise EditError(f"String {string} only goes up to {top}, and {name_of(midi)} would be fret {fret}.")
     carriers = [carrier for member in tied if (carrier := copy_of(root, part, board, member)) is not None]
     if not carriers:
-        raise EditError("Show this instrument's tablature first, to choose its strings.")
+        raise EditError(unplayable_reason(board, midi))
     mine = {id(carrier) for carrier in carriers}
     for member, carrier in zip(tied, carriers):
         begins, others = sounding_now(part, board, carrier)
@@ -682,6 +830,7 @@ def set_string(root: ET.Element, part: ET.Element, board: Fretboard, note: ET.El
                 raise EditError(f"String {string} is already playing {name_of(note_midi(other) + (midi - note_midi(note)))} here.")
     for carrier in carriers:
         write_fret(carrier, string, fret)
+        carrier.set(CHOSEN, "yes")
 
 
 def choose_string(root: ET.Element, note_id: str, string: int) -> None:
@@ -701,3 +850,47 @@ def choose_string(root: ET.Element, note_id: str, string: int) -> None:
         raise EditError(unplayable_reason(board, midi))
     chain = [member for member in tied_notes(root, note) if member.find("pitch") is not None] if note.find("grace") is None else [note]
     set_string(root, part, board, note, string, midi, chain)
+
+
+def play_at_fret(root: ET.Element, note_id: str, fret: int, string: int | None = None) -> int:
+    """Make a note the sound of a fret on a string, as a fret number typed on the tablature does, and say which string.
+
+    It's the string the note is played on now, unless another is given. The notes tied to it change
+    with it, and it's spelled as the key spells that sound. The string itself is chosen once the
+    tablature has the new pitch (see choose_string).
+    """
+    from pipeline.edit import context_of, find_note, spell_sound, tied_notes, write_alter  # The editor needs nothing from here.
+    from pipeline.rhythm import repair_ties, respell
+
+    note = find_note(root, note_id)
+    if note.find("pitch") is None:
+        raise EditError("A rest has no fret. Choose a note, or write one first.")
+    part, context = context_of(root, note)
+    board = boards(root)[root.findall("part").index(part)]
+    if board is None:
+        raise EditError("Only a fretted instrument's notes have frets.")
+    if string is None:
+        carrier = copy_of(root, part, board, note)
+        string = string_of(carrier) if carrier is not None else None
+        if string is None:
+            raise EditError("No string plays this note yet. Choose one for it first.")
+    if not 1 <= string <= board.count:
+        raise EditError(f"This instrument has strings 1 to {board.count}.")
+    if not 0 <= fret <= board.frets:
+        raise EditError(f"This instrument's frets go from 0 to {board.frets}.")
+    shifts = shifts_of(part)
+    written = board.open_of(string) + board.capo + fret - (shifts[context.index] if context.index < len(shifts) else 0)
+    step, alter, octave = spell_sound(written - 12, context.fifths, written > note_midi(note))
+    if not 0 <= octave <= 9:
+        raise EditError("That's too far from the staff.")
+    chain = tied_notes(root, note) if note.find("grace") is None else [note]
+    for member in chain:
+        pitch = member.find("pitch")
+        pitch.find("step").text = step
+        pitch.find("octave").text = str(octave)
+        write_alter(pitch, alter)
+    for member in chain:
+        owner, found = context_of(root, member)
+        respell(found)
+        repair_ties(owner, found.index)
+    return string

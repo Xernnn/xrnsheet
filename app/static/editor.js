@@ -22,11 +22,16 @@ const CURVE_SAMPLE_PX = 4;
 const MARK_NAMES = {
   dynamic: "Dynamic", tempo: "Tempo", text: "Text", jump: "Jump", rehearsal: "Rehearsal mark", "repeat-sign": "Sign", slur: "Slur", hairpin: "Hairpin", ottava: "Ottava", pedal: "Pedal",
   textline: "Line", fingering: "Fingering", pluck: "Right-hand finger", string: "String number", bend: "Bend", hammer: "Hammer-on", pull: "Pull-off",
+  slide: "Slide", glissando: "Glissando", vibrato: "Vibrato", harmonic: "Harmonic", upbow: "Up-bow", downbow: "Down-bow", open: "Open string", stopped: "Stopped",
+  staccato: "Staccato", staccatissimo: "Staccatissimo", tenuto: "Tenuto", accent: "Accent", marcato: "Marcato",
 };
 // Words a mark is known by, where its kind alone doesn't say: a line's, or a position's.
 const MARK_WORDS = [[/^P\.M\.$/, "Palm mute"], [/^let ring$/, "Let ring"], [/^sul (pont\.|tasto)$/, "Sul ponticello or tasto"], [/^sul /, "String to play on"], [/ pos\.$/, "Position"], [/^(pizz\.|arco)$/, "Pizzicato or arco"], [/^[RL]\.H\.$/, "Hand"]];
 const EXPRESSIONS = { staff: "Text, e.g. solo", expression: "Expression, e.g. dolce" };
-const editor = { on: false, type: "quarter", dots: 0, voice: 1, cursor: null, last: null, trail: [], future: [] };
+// While entering notes, `tab` says the cursor is on a tablature staff, at `string`.
+const editor = { on: false, type: "quarter", dots: 0, voice: 1, cursor: null, last: null, trail: [], future: [], tab: false, string: 1 };
+const FRET_PAUSE_MS = 600; // A second digit typed this soon after the first makes a two-digit fret.
+let fretTyping = null; // A first digit waiting to see whether a second one follows.
 let range = null; // A selected stretch: { first, last, ids }.
 let selectedMark = null; // The id of a selected dynamic, text, slur or other mark.
 let pan = null; // The pages being dragged about.
@@ -118,11 +123,14 @@ function updateTools() {
   });
   $("inputToggle").setAttribute("aria-pressed", String(editor.on));
   $("caret").dataset.voice = editor.voice;
-  const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
+  const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : tabSelected() ? "Selected on the tablature. Type a fret, Ctrl+↑ ↓ for another string, or Shift and a digit for a length." : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
   const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
-  const chosen = mark ? `${markName(mark)}${mark.text ? `: ${mark.text}` : ""}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : selection;
+  const said = mark?.text ? `: ${mark.text}`.replace(/\.$/, "") : "";
+  const chord = selectedChord !== null && score?.chords?.[selectedChord];
+  const chosen = mark ? `${markName(mark)}${said}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : chord ? `Chord ${chord.text}. Type another, or change how it's played in the inspector.` : selection;
   const practising = currentMode() === "practice" ? "Space plays from the selected note. A and B set the loop's ends there, and Hear and Wait for choose a part or a hand." : null;
-  $("toolLabel").textContent = hint || (editor.on ? "Note input. Press A to G, 0 for a rest, or click the staff." : practising ?? chosen);
+  const entering = tabInput() ? "Note input on the tablature. Type a fret for the string the cursor is on, ↑ ↓ for another string, Shift and a digit for a length, or click a string." : "Note input. Press A to G, 0 for a rest, or click the staff.";
+  $("toolLabel").textContent = hint || (editor.on ? entering : practising ?? chosen);
   hint = "";
   drawInspector();
   lightKeys();
@@ -189,12 +197,111 @@ function drawCursor() {
   const staff = element.closest("g.staff");
   const lines = staff ? staffLines(staff) : { top: box.top, bottom: box.bottom };
   const past = editor.cursor.startsWith(AFTER);
+  // On tablature the cursor is a box on the string a fret number typed goes on, as in MuseScore.
+  const tab = tabInput() ? tabStaffFor(element) : null;
+  const strings = tab ? stringLines(tab) : null;
+  if (strings) editor.string = Math.min(Math.max(editor.string, 1), strings.count);
+  const top = strings ? strings.top + (editor.string - 1.6) * strings.gap : lines.top - 6;
   caret.hidden = false;
+  caret.classList.toggle("onTab", Boolean(strings));
   caret.style.left = `${(past ? box.right + 6 : box.left - 3) - frame.left + $("pagesFrame").scrollLeft}px`;
-  caret.style.top = `${lines.top - frame.top - 6}px`;
+  caret.style.top = `${top - frame.top}px`;
   caret.style.width = `${past ? 10 : Math.max(box.width, 10) + 6}px`;
-  caret.style.height = `${lines.bottom - lines.top + 12}px`;
+  caret.style.height = `${strings ? strings.gap * 1.2 : lines.bottom - lines.top + 12}px`;
   element.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+// Whether notes are being entered on a tablature staff: one of its own, or one linked under the
+// standard staff that was clicked.
+function tabInput() {
+  if (!editor.on) return false;
+  const element = document.getElementById(plainId(editor.cursor) ?? "");
+  return Boolean(element) && (onTab(element) || (editor.tab && Boolean(tabStaffFor(element))));
+}
+
+function tabSelected() {
+  return !editor.on && !range && onTab(document.getElementById(selected ?? ""));
+}
+
+// A digit typed for a fret. One that could begin a two-digit fret waits a moment for the next;
+// `send` makes the edit with the fret, and `key` says what it's typed for.
+function typeFret(digit, key, most, send) {
+  if (fretTyping?.key === key && Number(fretTyping.digits + digit) <= most) {
+    clearTimeout(fretTyping.timer);
+    const fret = Number(fretTyping.digits + digit);
+    fretTyping = null;
+    send(fret);
+    return;
+  }
+  flushFret();
+  if (digit !== "0" && Number(digit) * 10 <= most) {
+    fretTyping = { key, digits: digit, send, timer: setTimeout(flushFret, FRET_PAUSE_MS) };
+    $("toolLabel").textContent = `Fret ${digit}. Type another digit at once for fret ${digit}0 and up.`;
+    return;
+  }
+  send(Number(digit));
+}
+
+function flushFret() {
+  if (!fretTyping) return;
+  const { digits, send, timer } = fretTyping;
+  clearTimeout(timer);
+  fretTyping = null;
+  send(Number(digits));
+}
+
+// A fret typed while entering notes on tablature writes that note on the cursor's string.
+function writeFret(fret) {
+  return enqueue(async () => {
+    const element = document.getElementById(plainId(editor.cursor) ?? "");
+    const part = element ? partOfStaff(staffNumber(element)) : null;
+    const board = part === null ? null : frettedOf(part);
+    if (!board) return;
+    if (fret > board.frets) { message(`This instrument's frets go from 0 to ${board.frets}.`); return; }
+    await send(`notes/${editor.cursor}`, { action: "write", type: editor.type, dots: editor.dots, midi: pitchAtFret(part, editor.string, fret), voice: editor.voice, string: editor.string });
+  });
+}
+
+// The keys of tablature: digits are frets, Shift and a digit a length, and while entering notes
+// the arrows go from string to string. Say whether the key was one.
+function tabKey(event) {
+  const key = event.key;
+  const input = tabInput();
+  if (!input && !tabSelected()) return false;
+  const length = /^Digit([0-7])$/.exec(event.code);
+  if (event.shiftKey && length) {
+    event.preventDefault();
+    if (length[1] === "0") { if (input) writeAt(null); else noteAction("delete"); } else chooseLength(LENGTHS[Number(length[1]) - 1].type);
+    return true;
+  }
+  if (event.shiftKey || event.altKey) return false;
+  const element = document.getElementById(plainId(input ? editor.cursor : selected) ?? "");
+  const board = frettedOf(partOfStaff(staffNumber(element)));
+  if (/^[0-9]$/.test(key)) {
+    event.preventDefault();
+    if (input) typeFret(key, "input", board?.frets ?? 24, writeFret);
+    else {
+      const target = selected;
+      typeFret(key, target, board?.frets ?? 24, fret => enqueue(() => send(`notes/${target}`, { action: "fret", fret })));
+    }
+    return true;
+  }
+  if (input && (key === "ArrowUp" || key === "ArrowDown")) {
+    event.preventDefault();
+    editor.string = Math.min(Math.max(editor.string + (key === "ArrowUp" ? -1 : 1), 1), board?.strings?.length ?? 6);
+    drawCursor();
+    return true;
+  }
+  return false;
+}
+
+// Ctrl+↑ and ↓ move a fret number to the string above or below, keeping its sound, as in MuseScore.
+function moveToString(by) {
+  return enqueue(async () => {
+    const played = playedAs(selected);
+    if (!played.string) { message("No string plays this note yet."); return; }
+    await applyToNote("string", { string: played.string + by });
+  });
 }
 
 function drawRange() {
@@ -245,7 +352,10 @@ function setInput(on) {
   document.body.classList.toggle("inputting", on);
   if (on) {
     setUpMidi();
-    editor.cursor = selected ?? allEvents()[0]?.id ?? null;
+    // A note selected on the tablature starts note input there, on its string.
+    editor.tab = onTab(document.getElementById(selected ?? ""));
+    editor.string = (editor.tab && playedAs(selected).string) || editor.string;
+    editor.cursor = plainId(selected && editor.tab ? ownId(selected) : selected) ?? allEvents()[0]?.id ?? null;
     editor.voice = editor.cursor ? layerNumber(document.getElementById(editor.cursor)) + 1 : 1;
     editor.last = null;
     editor.trail = [];
@@ -274,28 +384,34 @@ function writeAt(step) {
 }
 
 // The staff and place a click lands on, while entering notes. A tablature staff's lines are strings,
-// not pitches, so a click there finds the staff above it instead.
+// not pitches, so a click there is a string, and its place in time is read from the notes and rests
+// of the staff it's linked under.
 function placeUnder(x, y) {
   let found = null;
   let smallest = Infinity;
   for (const staff of document.querySelectorAll("#pages g.staff")) {
-    if (isTabStaff(staffNumber(staff))) continue;
+    const tab = isTabStaff(staffNumber(staff));
     const lines = staffLines(staff);
     if (x < lines.left || x > lines.right) continue;
     const gap = Math.max(lines.top - y, y - lines.bottom, 0);
-    if (gap <= lines.step * REACH_IN_STEPS && gap < smallest) { found = { staff, lines }; smallest = gap; }
+    if (gap <= lines.step * (tab ? 2 : REACH_IN_STEPS) && gap < smallest) { found = { staff, lines, tab }; smallest = gap; }
   }
   if (!found) return null;
   let target = null;
   let latest = -Infinity;
-  for (const element of found.staff.querySelectorAll(EVENTS)) {
+  const events = found.tab ? eventsBeside(found.staff) : [...found.staff.querySelectorAll(EVENTS)];
+  for (const element of events) {
     const left = headBox(element).left;
     if (left - 8 <= x && left > latest) { target = element; latest = left; }
   }
-  target ??= found.staff.querySelector(EVENTS);
+  target ??= events[0];
   if (!target) return null;
   const box = headBox(target);
-  return { id: target.id, line: Math.round((y - found.lines.top) / found.lines.step), lines: found.lines, x: box.left + box.width / 2, isNote: target.matches("g.note") };
+  const spot = { id: target.id, line: Math.round((y - found.lines.top) / found.lines.step), lines: found.lines, x: box.left + box.width / 2, isNote: target.matches("g.note") };
+  if (!found.tab) return spot;
+  const strings = stringLines(found.staff);
+  const string = Math.min(Math.max(Math.round((y - strings.top) / strings.gap) + 1, 1), strings.count);
+  return { ...spot, tab: true, string, part: strings.part, gap: strings.gap, y: strings.top + (string - 1) * strings.gap };
 }
 
 function drawGhost(x, y) {
@@ -304,17 +420,25 @@ function drawGhost(x, y) {
   ghost.hidden = !spot;
   if (!spot) return;
   const frame = $("pagesFrame").getBoundingClientRect();
-  const width = spot.lines.step * 2.8;
+  ghost.classList.toggle("onTab", Boolean(spot.tab));
+  const width = spot.tab ? spot.gap * 1.3 : spot.lines.step * 2.8;
+  const height = spot.tab ? spot.gap * 1.1 : spot.lines.step * 2;
   ghost.style.width = `${width}px`;
-  ghost.style.height = `${spot.lines.step * 2}px`;
+  ghost.style.height = `${height}px`;
   ghost.style.left = `${spot.x - width / 2 - frame.left + $("pagesFrame").scrollLeft}px`;
-  ghost.style.top = `${spot.lines.top + (spot.line - 1) * spot.lines.step - frame.top}px`;
+  ghost.style.top = `${(spot.tab ? spot.y - height / 2 : spot.lines.top + (spot.line - 1) * spot.lines.step) - frame.top}px`;
 }
 
+// A click on a staff writes the note there. On tablature it's the open string clicked, and the
+// fret is typed next.
 function placeNote(spot, stack) {
+  editor.tab = Boolean(spot.tab);
+  if (spot.tab) editor.string = spot.string;
+  updateTools();
   return enqueue(async () => {
-    if (stack && spot.isNote) await send(`notes/${spot.id}`, { action: "stack", line: spot.line });
-    else await send(`notes/${spot.id}`, { action: "write", type: editor.type, dots: editor.dots, line: spot.line, voice: editor.voice });
+    const pitch = spot.tab ? { midi: pitchAtFret(spot.part, spot.string, 0), string: spot.string } : { line: spot.line };
+    if (stack && spot.isNote) await send(`notes/${spot.id}`, { action: "stack", ...pitch });
+    else await send(`notes/${spot.id}`, { action: "write", type: editor.type, dots: editor.dots, voice: editor.voice, ...pitch });
   });
 }
 
@@ -848,7 +972,11 @@ function slurNear(x, y) {
   return null;
 }
 
+// A mark drawn on a note, such as a staccato or a bowing, or the diamond of a violin's harmonic, is
+// that mark's, not the note's.
 function markAt(event) {
+  const own = event.target.closest("#pages g.artic[data-mark], #pages g.note[data-mark]");
+  if (own) return own;
   if (event.target.closest("g.note, g.rest, g.mRest")) return null;
   return event.target.closest("g[data-mark], g.slur, g.hairpin")
     ?? slurNear(event.clientX, event.clientY)
@@ -900,7 +1028,11 @@ function setUpMidi() {
   midiAsked = true;
   navigator.requestMIDIAccess?.().then(access => {
     const listen = input => {
-      input.onmidimessage = ({ data }) => { if ((data[0] & 0xf0) === 0x90 && data[2] > 0) midiNoteOn(data[1]); };
+      input.onmidimessage = ({ data }) => {
+        const kind = data[0] & 0xf0;
+        if (kind === 0x90 && data[2] > 0) midiNoteOn(data[1]);
+        else if (kind === 0x80 || kind === 0x90) midiNoteOff(data[1]);
+      };
     };
     access.inputs.forEach(listen);
     practice.midi = access.inputs.size ? "ready" : "none";
@@ -1048,8 +1180,8 @@ function handleControlKey(event) {
     5: () => toggleTuplet(5),
     6: () => toggleTuplet(6),
     7: () => toggleTuplet(7),
-    arrowup: () => (event.shiftKey ? crossStaff("crossUp") : noteAction("octaveUp")),
-    arrowdown: () => (event.shiftKey ? crossStaff("crossDown") : noteAction("octaveDown")),
+    arrowup: () => (event.shiftKey ? crossStaff("crossUp") : tabSelected() ? moveToString(-1) : noteAction("octaveUp")),
+    arrowdown: () => (event.shiftKey ? crossStaff("crossDown") : tabSelected() ? moveToString(1) : noteAction("octaveDown")),
     arrowleft: () => moveByMeasure(-1, event.shiftKey),
     arrowright: () => moveByMeasure(1, event.shiftKey),
     home: () => moveToEnd(false, event.shiftKey),
@@ -1079,6 +1211,7 @@ function practiceKey(event) {
 
 document.addEventListener("keydown", event => {
   const key = event.key;
+  if (event.defaultPrevented) return; // Already the key of whatever had it, such as the command palette.
   if (key === "Escape" && openMenus.length) { closeMenus(); return; }
   // A field keeps the focus for a moment after its dialog or box has closed. It isn't being typed in then.
   const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName) && event.target.getClientRects().length > 0;
@@ -1088,6 +1221,8 @@ document.addEventListener("keydown", event => {
   const passed = control && (/^F\d+$/.test(key) || (key === " " && event.target.type === "range"));
   if ((typing && !passed) || document.querySelector("dialog[open]")) return;
   const handled = () => event.preventDefault();
+  // A fret's first digit is sent before whatever the next key does.
+  if (fretTyping && !/^[0-9]$/.test(key)) flushFret();
   // The command palette and the library are there with or without a score.
   if ((event.ctrlKey || event.metaKey) && event.shiftKey && key.toLowerCase() === "p") { handled(); openCommands(); return; }
   if (key === "F6") { handled(); toggleLibrary(); return; }
@@ -1123,6 +1258,7 @@ document.addEventListener("keydown", event => {
     if (key === "F2" || key === "Enter") { handled(); openSelectedMark(); return; }
   }
   if (key === " ") { handled(); togglePlaying(); return; }
+  if (tabKey(event)) return;
   if (MARK_KEYS[key]) { handled(); markAction("toggle", { name: MARK_KEYS[key] }); return; }
   if (BOW_KEYS[key]) { handled(); markAction("toggle", { name: BOW_KEYS[key] }); return; }
   if (key === "s") { handled(); markAction("slur"); return; }

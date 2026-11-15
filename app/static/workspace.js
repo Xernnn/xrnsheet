@@ -44,17 +44,22 @@ function setMode(mode, remember = true) {
   if (score) updateTools();
   drawMidiState();
   drawPageCount();
+  $("libraryToggle").setAttribute("aria-pressed", String(libraryShown()));
+  $("inspectorToggle").setAttribute("aria-pressed", String(inspectorShown()));
 }
 
-// The library sits beside an open score on a wide window, and over it on a narrow one.
+// The library sits beside an open score on a wide window, and over it on a narrow one. Read shows
+// the score alone, so there it's away.
 function libraryShown() {
   if (document.body.classList.contains("atHome")) return true;
+  if (reading()) return false;
   return innerWidth > 1180 ? !document.body.classList.contains("libraryHidden") : document.body.classList.contains("libraryOpen");
 }
 
 function toggleLibrary() {
   if (document.body.classList.contains("atHome")) return;
   const on = !libraryShown();
+  if (on && reading()) setMode("write"); // The library is shown beside the score, as in Write.
   if (innerWidth > 1180) {
     document.body.classList.toggle("libraryHidden", !on);
     keepSetting("library", on ? "shown" : "hidden");
@@ -131,6 +136,7 @@ function turnPage(by) {
   if (by > 0 && desk.scrollTop + desk.clientHeight < bottom - 4) { desk.scrollTop += desk.clientHeight * TURN_SHARE; drawPageCount(); return; }
   if (by < 0 && desk.scrollTop > 4) { desk.scrollTop -= desk.clientHeight * TURN_SHARE; drawPageCount(); return; }
   const target = Math.min(Math.max(shown[0] + by * shown.length, 0), pages.length - 1);
+  if (target === shown[0]) return; // The end of the score, or its start: nowhere further to turn.
   desk.scrollLeft = pages[target].offsetLeft - parseFloat(getComputedStyle($("pagesFrame")).paddingLeft);
   desk.scrollTop = 0;
   drawPageCount();
@@ -254,16 +260,16 @@ function practiceCommands() {
     { label: "End the loop here (B)", where: "Practice", keys: "B", enabled: Boolean(actionTarget()), run: go(() => setLoopEnd("last")) },
     ...[0, 1, 2].map(bars => ({ label: bars ? `Count in ${bars} ${bars === 1 ? "bar" : "bars"}` : "No count-in", where: "Practice", keys: "", checked: practice.countIn === bars, run: go(() => setCountIn(bars)) })),
     ...[50, 75, 100].map(percent => ({ label: `Speed ${percent}%`, where: "Practice", keys: "", run: go(() => setSpeed(percent)) })),
-    ...[["all", "Everything"], ...practiceChoices()].map(([key, label]) => ({ label: `Hear ${label === "Everything" ? "everything" : label}`, where: "Practice", keys: "", checked: practice.hear === key, run: go(() => { practice.hear = key; drawPracticeChoices(); }) })),
-    ...practiceChoices().map(([key, label]) => ({ label: `Wait for me: ${label}`, where: "Practice", keys: "", checked: practice.waitFor === key, run: go(() => { practice.waitFor = key; drawPracticeChoices(); setUpMidi(); drawMidiState(); }) })),
-    { label: "Stop waiting for me", where: "Practice", keys: "", run: go(() => { practice.waitFor = "off"; drawPracticeChoices(); drawMidiState(); }) },
-  ];
+    ...[["all", "Everything"], ...practiceChoices()].map(([key, label]) => ({ label: `Hear ${label === "Everything" ? "everything" : label}`, where: "Practice", keys: "", checked: practice.hear === key, run: go(() => setHear(key)) })),
+    ...practiceChoices().map(([key, label]) => ({ label: `Wait for me: ${label}`, where: "Practice", keys: "", checked: practice.waitFor === key, run: go(() => setWaitFor(key)) })),
+    { label: "Stop waiting for me", where: "Practice", keys: "", run: go(() => setWaitFor("off")) },
+  ].map(item => ({ enabled: true, ...item }));
 }
 
 function allCommands() {
   const modes = Object.entries(MODES).map(([name, mode]) => ({ label: `${mode.label} mode`, where: "Mode", keys: mode.keys, enabled: Boolean(score), checked: currentMode() === name, run: () => setMode(name) }));
-  const parts = score ? (score.parts ?? []).map((_, index) => ({ label: `Work with ${partLabel(index)}`, where: "Instrument", keys: "", checked: index === activePart(), run: () => choosePart(index) })) : [];
-  const scores = sheets.map(sheet => ({ label: `Open ${sheet.title || "Untitled score"}`, where: "Library", keys: "", run: () => openScore(sheet.id) }));
+  const parts = score ? (score.parts ?? []).map((_, index) => ({ label: `Work with ${partLabel(index)}`, where: "Instrument", keys: "", enabled: true, checked: index === activePart(), run: () => choosePart(index) })) : [];
+  const scores = sheets.map(sheet => ({ label: `Open ${sheet.title || "Untitled score"}`, where: "Library", keys: "", enabled: true, run: () => openScore(sheet.id) }));
   const inspectorItems = [
     { label: "Inspector on the score", where: "View", keys: "F7", enabled: Boolean(score), run: () => showInspector(true, "score") },
     { label: "Play or stop", where: "Playback", keys: "Space", enabled: Boolean(score), run: togglePlaying },
@@ -347,6 +353,8 @@ function setUpCommands() {
   $("commandOpen").addEventListener("click", () => openCommands());
   $("commandInput").addEventListener("input", () => { commands.chosen = 0; drawCommands(); });
   $("commandInput").addEventListener("keydown", event => {
+    // The palette's keys are its own, and mustn't go on to the score once it has closed.
+    if (["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) event.stopPropagation();
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const count = commands.shown.length;
@@ -370,6 +378,8 @@ function setUpWorkspace() {
   });
   $("desk").addEventListener("click", clickToTurn);
   $("desk").addEventListener("scroll", drawPageCount, { passive: true });
+  $("desk").addEventListener("scroll", () => { if ((score?.view ?? "page") === "horizontal") drawStickyStart(); }, { passive: true });
+  window.addEventListener("resize", drawStickyStart);
   $("welcomeNew")?.addEventListener("click", openNewScore);
   if (readSetting("library", "shown") === "hidden") document.body.classList.add("libraryHidden");
   $("libraryToggle").setAttribute("aria-pressed", String(libraryShown()));
@@ -377,3 +387,153 @@ function setUpWorkspace() {
   setUpCommands();
   setMode(readSetting("mode", "write"), false);
 }
+
+// The one-line view keeps the instruments' names, brackets, clefs and key signatures in sight as it
+// scrolls, as MuseScore's continuous view does: a copy of the start of the line, drawn over the
+// music at the left of the window, with the clef and key in force where the window begins.
+const STICKY_GAP = 0.6; // Staff spaces after the key signature before the copy ends.
+
+function stickyHost() {
+  let host = $("stickyStart");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "stickyStart";
+    host.setAttribute("aria-hidden", "true");
+    $("pagesFrame").append(host);
+  }
+  return host;
+}
+
+// The first measure's staves, each with its lines, clef and key signature.
+function openingStaves(system) {
+  const first = system.querySelector("g.measure");
+  return first ? [...first.children].filter(child => child.classList.contains("staff")) : [];
+}
+
+function drawStickyStart() {
+  const host = stickyHost();
+  const page = (score?.view ?? "page") === "horizontal" ? document.querySelector("#pages .page") : null;
+  const system = page?.querySelector("g.system");
+  if (!system) { host.hidden = true; host.replaceChildren(); host.dataset.drawn = ""; return; }
+  const outer = page.querySelector("svg");
+  const staves = openingStaves(system);
+  // Made again only when the page is: a scroll only moves it and changes its clefs and keys.
+  const drawn = `${score.pages[0].length}:${outer.getBoundingClientRect().width.toFixed(1)}`;
+  if (host.dataset.drawn !== drawn) {
+    host.dataset.drawn = drawn;
+    const copy = outer.cloneNode(false);
+    let into = copy;
+    // The page's own wrappers, with their scale and margins, down to the system.
+    for (const wrapper of [...ancestorsOf(system, outer)].reverse()) {
+      const shell = wrapper.cloneNode(false);
+      shell.removeAttribute("id");
+      into.append(shell);
+      into = shell;
+    }
+    const start = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    for (const child of system.children) {
+      if (child.tagName === "path" || child.matches("g.grpSym, g.label, g.labelAbbr, g.staffDef")) start.append(child.cloneNode(true));
+    }
+    staves.forEach((staff, number) => {
+      const shell = staff.cloneNode(false);
+      shell.removeAttribute("id");
+      shell.dataset.staff = number;
+      for (const child of staff.children) {
+        if (child.tagName === "path" || child.matches("g.clef, g.keySig")) shell.append(child.cloneNode(true));
+      }
+      start.append(shell);
+    });
+    into.append(start);
+    copy.removeAttribute("width");
+    copy.removeAttribute("height");
+    copy.removeAttribute("id"); // Its style sheet is the page's, found by the class each copy keeps.
+    copy.classList.add("stickyCopy");
+    copy.style.width = `${outer.getBoundingClientRect().width}px`;
+    copy.style.height = `${outer.getBoundingClientRect().height}px`;
+    host.replaceChildren(copy);
+    // As wide as the names, brackets, clefs and keys, and a little more.
+    const pageLeft = outer.getBoundingClientRect().left;
+    const ends = staves.flatMap(staff => [...staff.querySelectorAll(":scope > g.clef, :scope > g.keySig")].map(element => element.getBoundingClientRect().right));
+    const lines = staves[0] ? staffLines(staves[0]) : null;
+    host.style.width = `${Math.max(...ends, pageLeft) - pageLeft + (lines ? lines.step * 2 * STICKY_GAP : 8)}px`;
+  }
+  placeStickyStart(host, page);
+}
+
+function* ancestorsOf(element, top) {
+  for (let found = element.parentElement; found && found !== top; found = found.parentElement) yield found;
+}
+
+// Shown once the start of the line has gone off the left of the window, at the window's left edge,
+// with each staff's clef and key signature as they are where the window now begins.
+function placeStickyStart(host, page) {
+  const desk = $("desk");
+  const frame = $("pagesFrame").getBoundingClientRect();
+  const pageBox = page.getBoundingClientRect();
+  const left = desk.getBoundingClientRect().left;
+  host.hidden = pageBox.left >= left - 1;
+  if (host.hidden) return;
+  host.style.left = `${left - frame.left}px`;
+  host.style.top = `${pageBox.top - frame.top}px`;
+  host.style.height = `${pageBox.height}px`;
+  host.dataset.width ??= host.style.width;
+  const edge = left + parseFloat(host.dataset.width);
+  const system = page.querySelector("g.system");
+  const measures = [...system.querySelectorAll(":scope > g.measure")];
+  openingStaves(system).forEach((staff, number) => {
+    const shell = host.querySelector(`[data-staff="${number}"]`);
+    if (!shell) return;
+    for (const kind of ["clef", "keySig"]) {
+      const first = staff.querySelector(`:scope > g.${kind}`);
+      let latest = first;
+      for (const measure of measures) {
+        if (measure.getBoundingClientRect().left > edge) break;
+        const there = [...measure.children].filter(child => child.classList.contains("staff"))[number];
+        // A clef change is drawn at the end of the measure before, in its voice.
+        for (const element of there?.querySelectorAll(`:scope > g.${kind}, :scope > g.layer > g.${kind}`) ?? []) {
+          if (element.getBoundingClientRect().left < edge) latest = element;
+        }
+      }
+      const shown = shell.querySelector(`:scope > g.${kind}`);
+      const wanted = latest && latest !== first ? latest.id : "first";
+      if ((shown?.dataset.from ?? "first") === wanted && (shown || !first)) continue;
+      shown?.remove();
+      const made = wanted === "first" ? first?.cloneNode(true) : movedTo(latest, first, kind, staff);
+      if (!made) continue;
+      made.dataset.from = wanted;
+      shell.append(made);
+    }
+  });
+  // A key signature with more sharps or flats than the first needs more room.
+  const right = Math.max(...[...host.querySelectorAll("g.clef, g.keySig")].map(element => element.getBoundingClientRect().right));
+  const space = staffLines(openingStaves(system)[0]).step * 2;
+  host.style.width = `${Math.max(parseFloat(host.dataset.width), right - left + space * STICKY_GAP)}px`;
+}
+
+// The full clef a smaller one drawn at a clef change stands for, as SMuFL numbers them.
+const FULL_CLEFS = { E07A: "E050", E07B: "E05C", E07C: "E062" };
+
+// A clef or key signature from later in the line, drawn where the line's first one is: a clef at the
+// size and place of the first, a key signature where the first begins, or just after the clef.
+function movedTo(later, first, kind, staff) {
+  const made = later.cloneNode(true);
+  if (kind === "clef") {
+    const use = made.querySelector("use"), at = first?.querySelector("use");
+    const [, x, , scale] = /translate\(([-\d.]+),\s*([-\d.]+)\)\s*scale\(([-\d.]+)/.exec(at?.getAttribute("transform") ?? "") ?? [];
+    const y = /translate\([-\d.]+,\s*([-\d.]+)\)/.exec(use?.getAttribute("transform") ?? "")?.[1];
+    if (use && x !== undefined && y !== undefined) use.setAttribute("transform", `translate(${x}, ${y}) scale(${scale}, ${scale})`);
+    const [whole, code, rest] = /^#(E[0-9A-F]{3})(-.*)$/.exec(use?.getAttribute("xlink:href") ?? "") ?? [];
+    if (whole && FULL_CLEFS[code] && document.getElementById(`${FULL_CLEFS[code]}${rest}`)) use.setAttribute("xlink:href", `#${FULL_CLEFS[code]}${rest}`);
+    return made;
+  }
+  // Placed by the symbols' own positions, as a group's box can't be trusted with <use> inside it.
+  const xs = element => [...(element?.querySelectorAll("use") ?? [])].map(use => Number(/translate\(([-\d.]+)/.exec(use.getAttribute("transform") ?? "")?.[1])).filter(Number.isFinite);
+  const lines = [...staff.children].filter(child => child.tagName === "path").map(line => Number(/M[-\d.]+ ([-\d.]+)/.exec(line.getAttribute("d") ?? "")?.[1]));
+  const space = lines.length > 1 ? lines[1] - lines[0] : 0;
+  const clef = xs(staff.querySelector(":scope > g.clef"));
+  const from = xs(first).length ? Math.min(...xs(first)) : clef.length ? Math.max(...clef) + CLEF_SPACES * space : Math.min(...xs(later));
+  made.setAttribute("transform", `translate(${from - Math.min(...xs(later))} 0)`);
+  return made;
+}
+
+const CLEF_SPACES = 3.2; // A clef's width and the gap after it, in staff spaces, where a key signature begins.

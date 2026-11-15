@@ -48,6 +48,7 @@ function show(view) {
   document.body.classList.toggle("atHome", view !== "workspace");
   document.body.classList.toggle("busy", view === "busy");
   document.body.classList.toggle("hasScore", open);
+  $("libraryToggle").setAttribute("aria-pressed", String(libraryShown()));
   if (view === "workspace") {
     $("original").hidden = score.blank || originalHidden();
     // A zoom that fits the page depends on how much room the pages have, which is only known now.
@@ -183,10 +184,10 @@ let drawnPages = [];
 
 // Only the pages an edit changed are drawn again. Laying out a page of music takes the browser far
 // longer than anything else a redraw does, and most edits change one page.
-function drawPages() {
+function drawPages(fresh = false) {
   const holder = $("pages");
   const spare = new Map();
-  for (const drawn of drawnPages) spare.set(drawn.key, [...(spare.get(drawn.key) ?? []), drawn.element]);
+  for (const drawn of fresh ? [] : drawnPages) spare.set(drawn.key, [...(spare.get(drawn.key) ?? []), drawn.element]);
   drawnPages = score.pages.map((svg, index) => {
     const key = svg.replace(MADE_UP_NAMES, "");
     // Each page as wide as it prints, which in a continuous view is as wide as its music.
@@ -205,8 +206,15 @@ function drawPages() {
   const kept = new Set(drawnPages.map(drawn => drawn.element));
   for (const child of [...holder.children]) if (!kept.has(child)) child.remove();
   drawnPages.forEach(({ element }, index) => { if (holder.children[index] !== element) holder.insertBefore(element, holder.children[index] ?? null); });
+  // A line carried over a page break names its start by an id the drawing made up, which differs
+  // from drawing to drawing, so if a kept page and a new one no longer agree, every page is new.
+  const orphaned = [...holder.querySelectorAll("g.spanning")].some(piece => {
+    const start = [...piece.classList].find(name => name.startsWith("id-"));
+    return start && !document.getElementById(start.slice(3));
+  });
+  if (orphaned && !fresh) { drawPages(true); return; }
   // A page that stayed still shows what was selected or playing when it was drawn.
-  holder.querySelectorAll(".selected, .playing, .awaited, .unsure, .active").forEach(element => element.classList.remove("selected", "voice2", "voice3", "voice4", "playing", "awaited", "unsure", "active"));
+  holder.querySelectorAll(".selected, .playing, .awaited, .unsure, .active, .early, .late, .onTime, .short").forEach(element => element.classList.remove("selected", "voice2", "voice3", "voice4", "playing", "awaited", "unsure", "active", "early", "late", "onTime", "short"));
 }
 
 function draw() {
@@ -247,8 +255,10 @@ function draw() {
   if (instrumentShown()) drawInstrument(); // A new tuning or capo changes the neck.
   drawPartSwitch();
   drawPracticeChoices();
+  refreshFollower();
   drawPageCount();
   drawCursor();
+  drawStickyStart();
   updateTools();
   refreshPosition();
 }
@@ -315,6 +325,7 @@ function select(id) {
   document.querySelectorAll("#pages g.selected").forEach(element => element.classList.remove("selected"));
   range = null;
   selectedMark = null;
+  selectedChord = null;
   selected = id;
   const element = id && document.getElementById(id);
   if (element) markSelected(element);
@@ -424,6 +435,9 @@ function clickPages(event) {
   const chord = event.target.closest("g.harm") || nearest("#pages g.harm", event.clientX, event.clientY, 6);
   if (chord && chord.dataset.index !== undefined) {
     const index = Number(chord.dataset.index);
+    // The chord is selected too, and the inspector shows its diagram to change.
+    select(null);
+    chooseChord(index);
     openEditor(chord.getBoundingClientRect(), index, score.chords[index].text);
     return;
   }

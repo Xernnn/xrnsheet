@@ -79,12 +79,38 @@ def new_id(root: ET.Element) -> str:
 # draws with no ids of their own, so the drawing is given them (see decorate.py).
 NAMED_TECHNICAL = {"fingering", "pluck", "string", "bend"}
 NAMED_STARTS = {"slur", "hammer-on", "pull-off"}
+# Articulations, bowings and the like, each drawn on its note, and what the page calls them.
+ON_NOTES = {
+    "staccato": "staccato", "staccatissimo": "staccatissimo", "tenuto": "tenuto", "accent": "accent", "strong-accent": "marcato",
+    "up-bow": "upbow", "down-bow": "downbow", "open-string": "open", "stopped": "stopped", "harmonic": "harmonic",
+}
+JOINS = {"slide": "slide", "glissando": "glissando"}  # Lines from one note to another, named at their start.
+VIBRATO = "wiggleVibrato"
 
 
 def named_in(technical: ET.Element) -> list[ET.Element]:
     """Return a note's marks of this kind that are clicked on. A string beside a fret is a tablature note's, not a mark."""
     has_fret = technical.find("fret") is not None
     return [mark for mark in technical if (mark.tag in NAMED_TECHNICAL and not (mark.tag == "string" and has_fret)) or (mark.tag in NAMED_STARTS and mark.get("type") == "start")]
+
+
+def drawn_on(note: ET.Element) -> list[tuple[ET.Element, str]]:
+    """Return the marks drawn on a note or from it that a click can name, with what each is called.
+
+    A violin's touched note is only part of its harmonic, and a trill's wavy line belongs to the trill.
+    """
+    found = []
+    for notations in note.findall("notations"):
+        for holder in notations:
+            if holder.tag in ("articulations", "technical"):
+                for mark in holder:
+                    if mark.tag in ON_NOTES and not (mark.tag == "harmonic" and mark.find("touching-pitch") is not None):
+                        found.append((mark, ON_NOTES[mark.tag]))
+            elif holder.tag in JOINS and holder.get("type") == "start":
+                found.append((holder, JOINS[holder.tag]))
+            elif holder.tag == "ornaments" and holder.find("trill-mark") is None:
+                found.extend((mark, "vibrato") for mark in holder.findall("wavy-line") if mark.get("type") == "start")
+    return found
 
 
 def ensure_mark_ids(root: ET.Element) -> None:
@@ -94,6 +120,7 @@ def ensure_mark_ids(root: ET.Element) -> None:
     """
     used = {element.get("id") for element in root.iter() if element.get("id")}
     named = {id(mark) for technical in root.iter("technical") for mark in named_in(technical)}
+    named |= {id(mark) for note in root.iter("note") for mark, _ in drawn_on(note)}
     number = 0
     for element in root.iter():
         wanted = element.tag == "direction" or (element.tag == "slur" and element.get("type") == "start") or (element.tag == "wedge" and element.get("type") != "stop") or id(element) in named
@@ -200,8 +227,34 @@ def spanner_numbers(part: ET.Element, tag: str, first: int, last: int) -> set[in
     return taken
 
 
-def free_number(part: ET.Element, tag: str, first: int, last: int) -> int:
-    taken = spanner_numbers(part, tag, first, last)
+def overlapping_numbers(part: ET.Element, tag: str, start: ET.Element, stop: ET.Element) -> set[int]:
+    """Return the numbers of this kind of mark open anywhere between two notes, in the file's order.
+
+    That's the order its ends are paired in, so a number free again after its stop can be used
+    again, and a run of hammer-ons in one bar isn't held to six.
+    """
+    order = {id(element): position for position, element in enumerate(part.iter())}
+    low, high = sorted((order.get(id(start), 0), order.get(id(stop), 0)))
+    opened: dict[int, int] = {}
+    taken: set[int] = set()
+    for element in part.iter(tag):
+        number, at = int(element.get("number", "1")), order[id(element)]
+        if element.get("type") == "stop":
+            began = opened.pop(number, None)
+            if began is not None and began <= high and at >= low:
+                taken.add(number)
+        elif element.get("type") == "start":
+            opened[number] = at
+    taken |= {number for number, began in opened.items() if began <= high}
+    return taken
+
+
+def free_number(part: ET.Element, tag: str, first: int, last: int, ends: tuple[ET.Element, ET.Element] | None = None) -> int:
+    """Hand out a number for a new mark of this kind: one no other open over the same stretch has.
+
+    Marks between two notes are judged by the notes they join; the rest by the bars they cross.
+    """
+    taken = overlapping_numbers(part, tag, *ends) if ends else spanner_numbers(part, tag, first, last)
     found = next((number for number in range(1, MOST_SPANNERS + 1) if number not in taken), None)
     if found is None:
         raise EditError("Too many of these overlap here already.")
@@ -578,6 +631,7 @@ def note_mark_entries(measure: ET.Element, bar: str | None) -> list[dict]:
                 if kind:
                     text = BEND_NAMES.get(mark.findtext("bend-alter") or "", mark.findtext("bend-alter") or "") if mark.tag == "bend" else (mark.text or "").strip()
                     found.append({"id": mark.get("id"), "bar": bar, "kind": kind, "drawn": SELF_NAMED, "text": text})
+        found.extend({"id": mark.get("id"), "bar": bar, "kind": kind, "drawn": SELF_NAMED, "text": ""} for mark, kind in drawn_on(note) if mark.get("id"))
     return found
 
 
@@ -655,21 +709,31 @@ def remove_slur(root: ET.Element, mark_id: str) -> bool:
 
 
 def remove_note_mark(root: ET.Element, mark_id: str) -> bool:
-    """Take away a mark inside a note, such as a fingering. A hammer-on goes with its other end."""
+    """Take away a mark on a note, such as a fingering, a staccato or a bowing.
+
+    A hammer-on, a slide, a glissando or a vibrato goes with its other end, and a violin's
+    artificial harmonic with the diamond touched above it.
+    """
     for part in root.findall("part"):
         for note in part.iter("note"):
-            for technical in note.iterfind("notations/technical"):
-                mark = next((found for found in technical if found.get("id") == mark_id), None)
-                if mark is None:
-                    continue
-                technical.remove(mark)
-                if len(technical) == 0:
-                    note.find("notations").remove(technical)
-                drop_if_empty(note)
-                repair_slurs(part)
-                for other in part.iter("note"):
-                    drop_if_empty(other)
-                return True
+            for notations in note.findall("notations"):
+                for holder in [notations, *notations]:
+                    mark = next((found for found in holder if found.get("id") == mark_id), None)
+                    if mark is None or holder.tag not in ("notations", "technical", "articulations", "ornaments"):
+                        continue
+                    if mark.tag == "harmonic":
+                        from pipeline.technique import remove_harmonic  # It builds on this module.
+
+                        remove_harmonic(root, note)
+                        return True
+                    holder.remove(mark)
+                    if holder is not notations and len(holder) == 0:
+                        notations.remove(holder)
+                    drop_if_empty(note)
+                    repair_slurs(part)
+                    for other in part.iter("note"):
+                        drop_if_empty(other)
+                    return True
     return False
 
 
@@ -721,13 +785,20 @@ def relabel_note_mark(root: ET.Element, mark_id: str, text: str) -> bool:
         elif mark.tag in RELABELLED:
             if RELABELLED[mark.tag].fullmatch(text) is None:
                 raise EditError("That isn't a finger or a string.")
+            from pipeline import technique  # It builds on this module.
+
+            if mark.tag == "fingering":
+                for finger in text:
+                    technique.check_finger(root, note, finger)
+            elif mark.tag == "string":
+                technique.check_string(root, note, int(text))
             mark.text = text
             if mark.tag == "string":
                 from pipeline import fretted  # It needs nothing from here.
 
                 part = next(found for found in root.findall("part") if any(member is note for member in found.iter("note")))
                 board = fretted.boards(root)[root.findall("part").index(part)]
-                if board is not None and board.tab:
+                if board is not None:
                     fretted.choose_string(root, note.get("id"), int(text))
         else:
             raise EditError("This mark can only be removed.")
@@ -809,9 +880,11 @@ def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
     Notes are copied as they're written, with how far their part sounds from that, so pasted
     into another instrument they sound the same, as they do in MuseScore. A player's techniques
     come too: each note's fingering, pluck, string number, bend, harmonic and dead note, a guitar
-    note's string on the tablature, and the hammer-ons, pull-offs, slides, glissandos and vibratos
-    between copied notes. A violin's artificial harmonic is copied as its stopped note, and the
-    paste adds the diamond back.
+    note's string, and the hammer-ons, pull-offs, slides, glissandos and vibratos between copied
+    notes. A violin's artificial harmonic is copied as its stopped note, and the paste adds the
+    diamond back. So do the words written over the passage: "pizz." and "arco", positions and
+    hands at their notes (`words`), and the P.M., let ring and sul lines starting there, to the
+    copied note each ends on or the copy's last (`lines`, as that note's place and the words).
     """
     from pipeline import fretted, technique  # They build on this module.
 
@@ -824,20 +897,33 @@ def copy_stretch(root: ET.Element, first_id: str, last_id: str) -> dict:
         ends: dict[str, int] = {}
         joined: dict[tuple[str, str], int] = {}
         board = fretted.boards(root)[root.findall("part").index(start.part)]
+        lines = technique.lines_from(start.part, start.key[0])
+        sources = [number for number, item in enumerate(copied["events"]) if item["source"] is not None]
+        spans = []  # Each copied note's place and end, and its last copied piece: a rest can be copied as several.
+        for position, number in enumerate(sources):
+            spot = locate(root, copied["events"][number]["source"])
+            last = sources[position + 1] - 1 if position + 1 < len(sources) else len(copied["events"]) - 1
+            spans.append((number, (spot.context.index, spot.event.onset), (spot.context.index, spot.event.end), last))
         for number, item in enumerate(copied["events"]):
             source = item.pop("source")
-            item.update(marks=[], dynamic=None, slur=[], techniques=[], strings=[], joins=[])
+            item.update(marks=[], dynamic=None, slur=[], techniques=[], strings=[], joins=[], words=[], lines=[])
             if source is None:
                 continue
             note = find_note(root, source)
             spot = locate(root, source)
             item["marks"] = mark_names(note)
             item["dynamic"] = dynamic_at(spot.context, spot.event.onset)
+            item["words"] = technique.words_at(spot)
+            here = (spot.context.index, spot.event.onset)
+            for begins, stops, said in lines:
+                if begins == here:
+                    covered = [last for _, _, end, last in spans if stops is None or end <= stops]
+                    item["lines"].append([max([number, *covered]), said])
             touching = [index for index, member in enumerate(spot.event.notes) if technique.harmonic_kind(member)[1] == "touching-pitch"]
             item["pitches"] = [pitch for index, pitch in enumerate(item["pitches"]) if index not in touching]
             members = [member for index, member in enumerate(spot.event.notes) if index not in touching]
             item["techniques"] = [technique.techniques_of(member) for member in members]
-            if board is not None and board.linked:
+            if board is not None:
                 carriers = [fretted.copy_of(root, start.part, board, member) for member in members]
                 item["strings"] = [fretted.string_of(carrier) if carrier is not None else None for carrier in carriers]
             # A join that stops here ends one from before, or, starting here too, is a vibrato over this note alone.
@@ -923,6 +1009,10 @@ def paste_stretch(root: ET.Element, at_id: str, items: list[dict]) -> dict:
         for last, name in item.get("joins") or []:
             if 0 <= last < len(items) and last >= number and not locate(root, placed[number]).event.is_rest:
                 technique.join(root, placed[number], placed[last], name)
+        technique.give_words(root, placed[number], item.get("words") or [])
+        for last, words in item.get("lines") or []:
+            if 0 <= last < len(items) and last >= number:
+                technique.give_line(root, placed[number], placed[last], words)
     if strings:
         done["onStrings"] = strings
     return done

@@ -14,7 +14,7 @@ import verovio
 from pipeline import decorate, diagrams
 from pipeline.layout import page_layout
 from pipeline.musicxml import UnreadableScore
-from pipeline.fretted import tab_staves
+from pipeline.fretted import boards, tab_staves
 from pipeline.rhythm import OCTAVE_SHIFTS, contexts, octave_lines, place, read_measure
 from pipeline.structure import BREAK_PREFIX, bars_per_line
 from pipeline.technique import drawn_on_other_staves
@@ -155,10 +155,10 @@ def add_beams(root: ET.Element) -> None:
     """Beam eighth notes and shorter, because recognized scores arrive with none.
 
     This runs each time a page is drawn, so beams stay right after notes are edited. Fret numbers
-    on a tablature staff have no stems to beam.
+    on a tablature staff under a standard staff have no stems to beam; tablature on its own has.
     """
-    for part in root.findall("part"):
-        tabs = set(tab_staves(part))
+    for part, board in zip(root.findall("part"), boards(root)):
+        tabs = {board.linked} if board is not None and board.linked else set()
         divisions, beats, beat_type = 1, 4, 4
         for measure in part.findall("measure"):
             divisions = int(measure.findtext(".//attributes/divisions") or divisions)
@@ -283,29 +283,41 @@ def place_octave_lines(root: ET.Element) -> None:
 
 
 def prepare_tablature(root: ET.Element) -> None:
-    """Draw tablature as fret numbers alone, and a standard staff as one whatever tuning it keeps.
+    """Draw tablature as fret numbers, and a standard staff as one whatever tuning it keeps.
 
-    A TAB staff shows no rests and no stems here, as its standard staff above shows the rhythm, and
-    a note with no fret, which no string could play, isn't drawn: Verovio would print nonsense for
-    it. Verovio draws any staff whose <staff-details> tune strings as tablature, so a guitar with no
-    TAB staff keeps its tuning in the file but not in the drawing.
+    A TAB staff under a standard staff shows no rests and no stems here, as the staff above shows
+    the rhythm. Tablature on its own shows its rests and its stems, beamed. A note with no fret,
+    which no string could play, isn't drawn: Verovio would print nonsense for it. Verovio draws any
+    staff whose <staff-details> tune strings as tablature, so a guitar with no TAB staff keeps its
+    tuning in the file but not in the drawing, and the strings kept on its notes aren't drawn.
     """
-    for part in root.findall("part"):
+    for part, board in zip(root.findall("part"), boards(root)):
         tabs = set(tab_staves(part))
         for details in part.iter("staff-details"):
             if details.get("number", "1") not in tabs:
                 for child in [*details.findall("staff-tuning"), *details.findall("capo")]:
                     details.remove(child)
+        for note in part.iter("note"):
+            if (note.findtext("staff") or "1") in tabs:
+                continue
+            for technical in note.iterfind("notations/technical"):
+                if technical.find("fret") is not None:
+                    for child in [*technical.findall("string"), *technical.findall("fret")]:
+                        technical.remove(child)
         if not tabs:
             continue
+        linked = board is not None and board.linked is not None
         for note in part.iter("note"):
             if (note.findtext("staff") or "1") not in tabs:
                 continue
-            if note.find("rest") is not None or note.findtext("notations/technical/fret") is None:
+            if note.find("rest") is not None:
+                if linked:
+                    note.set("print-object", "no")
+            elif note.findtext("notations/technical/fret") is None:
                 note.set("print-object", "no")
-            elif note.find("stem") is None:
-                place(note, ET.Element("stem"))
-            if note.find("stem") is not None:
+            elif linked:
+                if note.find("stem") is None:
+                    place(note, ET.Element("stem"))
                 note.find("stem").text = "none"
 
 

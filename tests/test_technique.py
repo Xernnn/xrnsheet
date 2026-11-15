@@ -747,7 +747,7 @@ def test_techniques_an_instrument_hasnt_got_are_left_off_a_paste(client):
     assert done.status_code == 200, done.json()
     pasted = [found for found in saved(client, piano).iter("note") if found.find("pitch") is not None]
     assert len(pasted) == 2 and not any(found.find("notations/technical/fingering") is not None for found in pasted), "a pianist has no finger 0"
-    assert all(found.findtext("notations/technical/pluck") == "p" for found in pasted)
+    assert not any(found.find("notations/technical/pluck") is not None for found in pasted), "nor a guitarist's right-hand fingers"
 
 
 def test_a_guitars_string_number_retyped_moves_its_tablature(client):
@@ -777,3 +777,278 @@ def test_a_pull_off_over_a_barline_is_drawn_on_each_staff_from_note_to_note():
     assert len(slurs) >= 2
     for _, start, _, end in slurs:
         assert abs(int(start) - int(end)) < 600, "it stays on its staff, not drawn from one to the other"
+
+
+def kinds_listed(root):
+    return {item["kind"]: item for item in marks.list_marks(root) if item["drawn"] == "self"}
+
+
+def test_slides_vibratos_harmonics_and_bowings_are_named_in_the_drawing_and_removed_by_a_click():
+    root, ids = score("guitar-tab", 2, 64, 67, 69, 71, 72, 74, 76, 77)
+    technique.toggle_pair(root, ids[0], ids[1], "slide")
+    technique.toggle_pair(root, ids[1], ids[2], "glissando")
+    technique.toggle_vibrato(root, ids[2], ids[3])
+    technique.toggle_harmonic(root, [ids[4]], "natural")
+    technique.toggle_harmonic(root, [ids[5]], "artificial")
+    marks.toggle_mark(root, [ids[6]], "upbow")
+    marks.toggle_mark(root, [ids[7]], "staccato")
+    marks.toggle_mark(root, [ids[7]], "downbow")
+    finished(root)
+    listed = kinds_listed(root)
+    assert {"slide", "glissando", "vibrato", "harmonic", "upbow", "staccato", "downbow"} <= set(listed)
+    svg = svg_of(root)
+    named = re.findall(r'data-mark="([^"]+)"', svg)
+    assert {item["id"] for item in marks.list_marks(root)} == set(named), "every mark listed can be clicked"
+    assert named.count(listed["slide"]["id"]) == 2, "a slide is named on the staff and between the fret numbers"
+    assert re.search(rf'class="gliss slide" data-mark="{listed["slide"]["id"]}"', svg)
+    assert re.search(rf'class="trill" data-mark="{listed["vibrato"]["id"]}"', svg)
+    assert re.search(rf'class="artic technical" data-mark="{listed["upbow"]["id"]}"', svg)
+    assert re.search(rf'class="xrn-harmonic" data-mark="[^"]+"><text[^>]*>A.H.</text>', svg), "a guitar's A.H. names its harmonic"
+    natural = note(root, ids[4]).find("notations/technical/harmonic").get("id")
+    for mark_id in [listed[kind]["id"] for kind in ("slide", "vibrato", "upbow", "staccato")] + [natural]:
+        marks.remove_placed(root, mark_id)
+        finished(root)
+    assert not [mark for mark in root.iter() if mark.tag in ("slide", "wavy-line", "up-bow", "staccato")], "a slide and a vibrato go with both their ends"
+    assert technique.harmonic_kind(note(root, ids[4]))[0] is None and technique.harmonic_kind(note(root, ids[5]))[0] == "artificial"
+    assert note(root, ids[7]).find("notations/technical/down-bow") is not None, "the down-bow beside the staccato stays"
+
+
+def test_a_chords_staccato_and_a_violins_artificial_harmonic_are_named_and_removed():
+    root, ids = score("violin", 1, 67, 71)
+    edit.add_pitch(root, ids[0], "", midi=74)
+    finished(root)
+    marks.toggle_mark(root, [ids[0]], "staccato")
+    technique.toggle_harmonic(root, [ids[1]], "artificial")
+    finished(root)
+    listed = kinds_listed(root)
+    svg = svg_of(root)
+    assert re.search(rf'class="artic" data-mark="{listed["staccato"]["id"]}"', svg), "a chord's staccato is named on the chord"
+    diamond = next(found for found in root.iter("note") if technique.harmonic_kind(found)[1] == "touching-pitch")
+    assert re.search(rf'<g id="{diamond.get("id")}" class="note" data-mark="{listed["harmonic"]["id"]}"', svg), "the diamond touched above is the harmonic"
+    marks.set_label(root, listed["harmonic"]["id"], "")
+    finished(root)
+    assert technique.harmonic_kind(note(root, ids[1]))[0] is None and len(edit.locate(root, ids[1]).event.notes) == 1, "deleted, the diamond goes too"
+
+
+def test_a_mark_clicked_and_deleted_comes_back_with_undo(tmp_path, monkeypatch):
+    import threading
+
+    from fastapi.testclient import TestClient
+
+    from app import server
+
+    monkeypatch.setattr(server, "JOB_DIR", tmp_path)
+    monkeypatch.setattr(server, "stopping", threading.Event())
+    client = TestClient(server.app, base_url="http://127.0.0.1:8000")
+    url = f"/api/scores/{client.post('/api/scores/blank', json={'measures': 1, 'clef': 'guitar-tab'}).json()['id']}"
+    cursor = client.get(url).json()
+    cursor = next(key for key in cursor["notes"] if not key.endswith(TAB_COPY))
+    first = client.post(f"{url}/notes/{cursor}", json={"action": "write", "type": "quarter", "midi": 64}).json()
+    second = client.post(f"{url}/notes/{first['cursor']}", json={"action": "write", "type": "quarter", "midi": 67}).json()
+    joined = client.post(f"{url}/marks", json={"action": "join", "notes": [first["written"], second["written"]], "name": "glissando"}).json()
+    glissando = next(item["id"] for item in joined["marks"] if item["kind"] == "glissando")
+    gone = client.post(f"{url}/marks", json={"action": "remove", "id": glissando}).json()
+    assert not any(item["kind"] == "glissando" for item in gone["marks"])
+    back = client.post(f"{url}/undo").json()
+    assert any(item["id"] == glissando for item in back["marks"])
+
+
+def test_clear_marks_takes_a_players_techniques_too():
+    root, ids = score("guitar-tab", 1, 64, 67, 69)
+    technique.toggle_dead_note(root, [ids[0]])
+    technique.toggle_pair(root, ids[1], ids[2], "slide")
+    finished(root)
+    edit.clear_marks(root, ids[0])
+    edit.clear_marks(root, ids[1])
+    finished(root)
+    assert note(root, ids[0]).find("notehead") is None, "a dead note is a plain note again"
+    assert not list(root.iter("slide")), "a slide goes with both its ends"
+    violin, notes = score("violin", 1, 67)
+    technique.toggle_harmonic(violin, notes, "artificial")
+    finished(violin)
+    edit.clear_marks(violin, notes[0])
+    assert len(edit.locate(violin, notes[0]).event.notes) == 1, "an artificial harmonic's diamond goes with it"
+
+
+def words_over(root, part=0):
+    return sorted((technique.words_of(direction), direction.find("sound") is not None) for direction in root.findall("part")[part].iter("direction") if technique.words_of(direction))
+
+
+def test_a_copy_carries_the_words_and_lines_over_a_passage():
+    root, ids = score("violin", 4, 67, 69, 71, 72)
+    technique.set_pizzicato(root, ids[0], True)
+    technique.set_position(root, ids[1], 3)
+    technique.toggle_sul(root, ids[1], ids[2], "G")
+    finished(root)
+    copied = marks.copy_stretch(root, ids[0], ids[3])
+    events = copied["events"]
+    assert events[0]["words"] == [{"kind": "pizzicato", "on": True}] and events[1]["words"] == [{"kind": "position", "number": 3}]
+    assert events[1]["lines"] == [[2, "sul G"]], "a line goes to the copied note it ends on"
+    later = next(note for note in root.findall("part/measure")[2].iter("note")).get("id")
+    marks.paste_stretch(root, later, events)
+    finished(root)
+    assert words_over(root).count(("pizz.", True)) == 2 and words_over(root).count(("III pos.", False)) == 2
+    sul = [line for line in technique.sul_lines(root.find("part"))]
+    assert len(sul) == 2 and sul[1][0] == (2, 1) and sul[1][1] == (2, 3), "the pasted sul G covers the notes it covered"
+
+
+def test_a_paste_over_its_own_words_keeps_them():
+    root, ids = score("violin", 2, 67, 69)
+    technique.set_pizzicato(root, ids[0], True)
+    technique.toggle_sul(root, ids[0], ids[1], "D")
+    finished(root)
+    marks.paste_stretch(root, ids[0], marks.copy_stretch(root, ids[0], ids[1])["events"])
+    finished(root)
+    assert words_over(root) == [("pizz.", True), ("sul D", False)], "pasted where they were, the words stay, once"
+
+
+def test_a_paste_leaves_out_words_the_instrument_has_no_use_for():
+    guitar, notes = score("guitar-tab", 2, 64, 67)
+    technique.toggle_named_line(guitar, notes[0], notes[1], "palmMute")
+    technique.set_position(guitar, notes[1], 5)
+    finished(guitar)
+    events = marks.copy_stretch(guitar, notes[0], notes[1])["events"]
+    piano, keys = score("piano", 2, 64, 67)
+    marks.paste_stretch(piano, keys[0], events)
+    finished(piano)
+    assert words_over(piano) == [], "a piano has no palm mute or positions"
+    again = next(note for note in guitar.findall("part/measure")[1].iter("note") if (note.findtext("staff") or "1") == "1").get("id")
+    marks.paste_stretch(guitar, again, events)
+    finished(guitar)
+    assert words_over(guitar).count(("P.M.", False)) == 2 and words_over(guitar).count(("V pos.", False)) == 2
+    right, hands = score("piano", 1, 72)
+    technique.toggle_hand(right, hands, "RH")
+    finished(right)
+    marks.paste_stretch(piano, keys[1], marks.copy_stretch(right, hands[0], hands[0])["events"])
+    finished(piano)
+    assert words_over(piano) == [("R.H.", False)], "a hand goes from piano to piano"
+
+
+def test_a_hammer_on_to_a_note_the_tablature_leaves_out_keeps_its_letter_on_the_staff():
+    root, ids = score("guitar-tab", 1, 64, 30)  # The second note is below the lowest string.
+    technique.toggle_pair(root, ids[0], ids[1], "hammerOn")
+    finished(root)
+    assert re.search(r'class="xrn-joined"[^>]*><text [^>]*>H</text>', svg_of(root))
+
+
+def test_every_capo_is_named_as_the_apps_own_words():
+    plain, ids = score("guitar", 1, 64)
+    fretted.set_strings(plain, 0, capo=2)
+    marks.add_text(plain, ids[0], "Hello")
+    finished(plain)
+    svg = svg_of(plain)
+    assert svg.count('class="xrn-capo"') == 1 and svg.count('class="dir"') == 1, "a guitar without tablature too: only Hello is the score's"
+    two = finished(structure.blank_score(clef="guitar-tab", measures=1))
+    structure.add_part(two, "guitar-tab")
+    finished(two)
+    fretted.set_strings(two, 0, capo=2)
+    fretted.set_strings(two, 1, capo=2)
+    finished(two)
+    drawn = svg_of(two)
+    assert drawn.count('class="xrn-capo"') == 2 and 'class="dir"' not in drawn
+
+
+def test_a_chord_diagrams_fingers_leave_the_bars_fingerings_named():
+    root, ids = score("guitar-tab", 1, 64, 67)
+    technique.set_fingering(root, ids[:1], "2")
+    edit.add_chord(root, ids[0], "C")
+    finished(root)
+    harmony = next(root.iter("harmony"))
+    frame = ET.SubElement(harmony, "frame")
+    ET.SubElement(frame, "frame-strings").text = "6"
+    ET.SubElement(frame, "frame-frets").text = "4"
+    dot = ET.SubElement(frame, "frame-note")
+    ET.SubElement(dot, "string").text = "5"
+    ET.SubElement(dot, "fret").text = "3"
+    ET.SubElement(dot, "fingering").text = "3"
+    finger = next(item["id"] for item in marks.list_marks(root) if item["kind"] == "fingering")
+    assert f'data-mark="{finger}"' in svg_of(root)
+
+
+def test_a_run_of_hammer_ons_in_one_bar_is_not_held_to_six():
+    root, ids = score("guitar-tab", 1, 64, 66, 67, 69, 71, 72, 74, 76, length="eighth")
+    technique.toggle_pair(root, ids[0], ids[-1], "hammerOn")
+    finished(root)
+    assert len([mark for mark in root.iter("hammer-on") if mark.get("type") == "start"]) == 7
+    assert len(re.findall(r'class="xrn-joined"', svg_of(root))) == 7
+
+
+def test_hands_over_a_chord_are_put_once():
+    root, ids = score("piano", 1, 60)
+    edit.add_pitch(root, ids[0], "", midi=64)
+    finished(root)
+    chord = [note.get("id") for note in edit.locate(root, ids[0]).event.notes]
+    technique.toggle_hand(root, chord, "RH")
+    assert [technique.words_of(found) for found in root.iter("direction") if technique.words_of(found)] == ["R.H."]
+
+
+def test_retyping_a_mark_is_held_to_what_the_instrument_has():
+    violin, notes = score("violin", 1, 67)
+    technique.set_fingering(violin, notes, "1")
+    technique.set_string_number(violin, notes, 4)
+    finished(violin)
+    listed = {item["kind"]: item["id"] for item in marks.list_marks(violin)}
+    for kind, text, reason in [("fingering", "5", "numbered 0 to 4"), ("string", "9", "strings 1 to 4"), ("string", "1", "String 1 can't play")]:
+        with pytest.raises(EditError, match=reason):
+            marks.set_label(violin, listed[kind], text)
+
+
+def test_a_double_stops_harmonics_keep_their_own_diamonds():
+    root, ids = score("violin", 1, 67)
+    edit.add_pitch(root, ids[0], "", midi=74)
+    finished(root)
+    lower, upper = [note.get("id") for note in edit.locate(root, ids[0]).event.notes]
+    technique.toggle_harmonic(root, [lower, upper], "artificial")
+    finished(root)
+    technique.toggle_harmonic(root, [upper], "artificial")
+    finished(root)
+    left = [note for note in edit.locate(root, lower).event.notes if technique.harmonic_kind(note)[1] == "touching-pitch"]
+    assert len(left) == 1 and (left[0].findtext("pitch/step"), left[0].findtext("pitch/octave")) == ("C", "5"), "the lower note's diamond, a fourth above G4, stays"
+
+
+def test_deleting_a_violins_stopped_note_takes_its_diamond():
+    root, ids = score("violin", 1, 67)
+    technique.toggle_harmonic(root, ids, "artificial")
+    finished(root)
+    edit.delete_note(root, ids[0])
+    finished(root)
+    assert not [note for note in root.iter("note") if note.find("pitch") is not None]
+
+
+def test_a_pasted_string_number_plays_its_note_on_that_string(client):
+    plain, notes = written_through(client, "guitar", 59)
+    client.post(f"{plain}/marks", json={"action": "stringNumber", "notes": notes, "number": 3})
+    copied = client.post(f"{plain}/copy", json={"first": notes[0], "last": notes[0]}).json()["events"]
+    copied[0]["strings"] = []  # As a copy from a guitar without a string kept for it.
+    url, _ = written_through(client, "guitar-tab")
+    at = next(found.get("id") for found in saved(client, url).iter("note"))
+    done = client.post(f"{url}/paste", json={"at": at, "events": copied}).json()
+    pasted = next(found for found in saved(client, url).iter("note") if found.find("pitch") is not None and (found.findtext("staff") or "1") == "1")
+    assert done["notes"][pasted.get("id")][5]["string"] == 3
+
+
+def test_a_chord_drawn_on_another_staff_moves_once_however_many_of_its_notes_are_chosen(client):
+    url, ids = written_through(client, "organ", 60)
+    client.post(f"{url}/notes/{ids[0]}", json={"action": "stack", "midi": 64})
+    chord = [note.get("id") for note in saved(client, url).iter("note") if note.find("pitch") is not None]
+    done = client.post(f"{url}/group", json={"action": "crossDown", "notes": chord}).json()
+    assert {done["notes"][note_id][5]["cross"] for note_id in chord} == {2}, "to the staff below, not two below"
+
+
+def test_a_piano_file_numbering_its_left_hand_from_1_keeps_it_on_its_staff(client):
+    def bar(number, left_voice):
+        attributes = ("<attributes><divisions>1</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves>"
+                      '<clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>') if number == 1 else ""
+        right = "".join(f"<note><pitch><step>{step}</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><staff>1</staff></note>" for step in "CDEF")
+        left = "".join(f"<note><pitch><step>{step}</step><octave>3</octave></pitch><duration>1</duration><voice>{left_voice}</voice><type>quarter</type><staff>2</staff></note>" for step in "CDEF")
+        return f'<measure number="{number}">{attributes}{right}<backup><duration>4</duration></backup>{left}</measure>'
+
+    for left_voice in ("2", "5"):
+        text = ('<?xml version="1.0"?><score-partwise version="4.0"><part-list><score-part id="P1"><part-name>Piano</part-name><score-instrument id="P1-I1"><instrument-name>Piano</instrument-name>'
+                f'<instrument-sound>keyboard.piano</instrument-sound></score-instrument></score-part></part-list><part id="P1">{bar(1, left_voice)}{bar(2, left_voice)}</part></score-partwise>')
+        opened = client.post("/api/scores", files={"file": ("piano.musicxml", io.BytesIO(text.encode()))}).json()
+        data = client.get(f"/api/scores/{opened['id']}").json()
+        left = [details for details in data["notes"].values() if details[2] == 3]
+        assert len(left) == 8 and not any(len(details) > 5 and "cross" in details[5] for details in left), f"the left hand as voice {left_voice} is on its own staff"
+        played = client.get(f"/api/scores/{opened['id']}/playback").json()["notes"]
+        assert {entry["staff"] for entry in played if entry["midi"] < 60} == {2}

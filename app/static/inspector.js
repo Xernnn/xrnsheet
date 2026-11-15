@@ -15,8 +15,9 @@ const INSTRUMENT_CELLS = {
   other: [],
 };
 
+// The inspector is Write's: in Read and Practice it's away, and asking for it goes to Write.
 function inspectorShown() {
-  return !document.body.classList.contains("inspectorHidden") && (innerWidth > 1180 || document.body.classList.contains("inspectorOpen"));
+  return writing() && !document.body.classList.contains("inspectorHidden") && (innerWidth > 1180 || document.body.classList.contains("inspectorOpen"));
 }
 
 // Show the inspector, on the selection or on the score, or put it away.
@@ -39,7 +40,7 @@ function toggleInspector(pane = null) {
 
 function shownPane() {
   const target = score ? actionTarget() : null;
-  if (inspector.pane === "score" || (!target && !selectedMark)) return "score";
+  if (inspector.pane === "score" || (!target && !selectedMark && selectedChord === null)) return "score";
   return "selection";
 }
 
@@ -68,10 +69,13 @@ function measureIndexOf(element) {
 }
 
 // The key, time, tempo and barline in force at a measure, as the timeline lists where they change.
-function measureFacts(index) {
+// The key is the part's own, as a transposing instrument's is written in another.
+function measureFacts(index, part = 0) {
   const measures = score?.timeline?.measures ?? [];
   const before = name => { for (let at = Math.min(index, measures.length - 1); at >= 0; at--) if (measures[at]?.[name]) return measures[at][name]; return ""; };
-  return { number: measures[index]?.number ?? String(index + 1), key: before("key"), time: before("time"), tempo: before("tempo"), barline: measures[index]?.barline ?? "" };
+  const fifths = score?.timeline?.keys?.[part]?.[index];
+  const key = fifths !== undefined && fifths >= -7 && fifths <= 7 ? KEY_NAMES[fifths + 7] : before("key");
+  return { number: measures[index]?.number ?? String(index + 1), key, time: before("time"), tempo: before("tempo"), barline: measures[index]?.barline ?? "" };
 }
 
 function handName(part, staff) {
@@ -207,10 +211,12 @@ function drawInspector() {
   const target = score ? actionTarget() : null;
   const element = target && document.getElementById(target);
   const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
-  $("inspectorTabs").querySelector('[data-pane="selection"]').disabled = !element && !mark;
+  if (selectedChord !== null && (element || mark || !score?.chords?.[selectedChord])) selectedChord = null;
+  $("inspectorTabs").querySelector('[data-pane="selection"]').disabled = !element && !mark && selectedChord === null;
   $("propScore").hidden = pane !== "score";
   $("propMark").hidden = pane !== "selection" || !mark;
   $("propNote").hidden = $("propMeasure").hidden = pane !== "selection" || !element;
+  drawChordPane();
   if (mark && pane === "selection") {
     $("propMarkKind").textContent = markName(mark);
     $("propMarkText").textContent = mark.text ? `“${mark.text}”` : "";
@@ -231,7 +237,7 @@ function drawSelection(element) {
   const hand = crossed ? `${handName(part, crossed - 1)}, drawn on its staff` : handName(part, staffInPart(element));
   const where = [`voice ${layerNumber(element) + 1}`, `${partLabel(part)}${hand ? `, ${hand}` : ""}`];
   const index = measureIndexOf(element);
-  const facts = measureFacts(index);
+  const facts = measureFacts(index, part);
   if (range) {
     const last = measureIndexOf(document.getElementById(range.last));
     $("propKind").textContent = `${range.ids.length} notes`;

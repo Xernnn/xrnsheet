@@ -123,6 +123,13 @@ def move_chord(harmony: ET.Element, interval: Interval) -> None:
     move_chord_pitch(harmony.find("bass"), "bass", interval)
 
 
+def transpose_chord(harmony: ET.Element, interval: Interval) -> None:
+    """Move a chord symbol. A diagram of its own was for the chord it was, so it takes the usual one."""
+    move_chord(harmony, interval)
+    for frame in harmony.findall("frame"):
+        harmony.remove(frame)
+
+
 def key_fifths(root: ET.Element) -> list[int]:
     return [int(found.text) for found in root.iter("fifths")]
 
@@ -164,7 +171,7 @@ def transpose_score(root: ET.Element, interval: Interval) -> None:
     for note in root.iter("note"):
         move_note(note, interval)
     for harmony in root.iter("harmony"):
-        move_chord(harmony, interval)
+        transpose_chord(harmony, interval)
     for part in root.findall("part"):
         for context in contexts(part):
             respell(context)
@@ -188,7 +195,7 @@ def transpose_stretch(root: ET.Element, first_id: str, last_id: str, interval: I
             move_note(note, interval)
         for mark in read_measure(context.measure, context.divisions).marks:
             if mark.element.tag == "harmony" and event.onset <= mark.onset < event.end:
-                move_chord(mark.element, interval)
+                transpose_chord(mark.element, interval)
     for index, context in bars.items():
         respell(context)
         repair_ties(start.part, index)

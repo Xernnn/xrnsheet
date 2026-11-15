@@ -7,7 +7,9 @@ from fractions import Fraction
 
 import pytest
 
-from pipeline import concert, edit, fretted, structure, transpose
+import copy
+
+from pipeline import concert, edit, fretted, structure, technique, transpose
 from pipeline.engrave import render_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import to_text
@@ -739,3 +741,272 @@ def test_a_guitar_with_a_capo_says_so_over_its_music():
     assert 'class="dir"' not in pages[0], "and not taken for one of the score's marks"
     assert all("Capo" not in page for page in pages[1:])
     assert "Capo" not in to_text(root), "the score itself is left as it was"
+
+
+def own_note(root, note_id):
+    return next(note for note in root.iter("note") if note.get("id") == note_id)
+
+
+def pitch_name(note):
+    alter = int(float(note.findtext("pitch/alter") or 0))
+    return f"{note.findtext('pitch/step')}{'#' * alter if alter > 0 else 'b' * -alter}{note.findtext('pitch/octave')}"
+
+
+def saved(client, url):
+    return ET.fromstring(client.get(f"{url}/score.musicxml").text.encode())
+
+
+def test_a_fret_typed_on_the_tablature_changes_the_note_on_its_string(client):
+    url = new_score(client)
+    written, _ = write_through(client, url, 64, 59)
+    done = client.post(f"{url}/notes/{written[0]}{TAB_COPY}", json={"action": "fret", "fret": 5}).json()
+    root = saved(client, url)
+    assert pitch_name(own_note(root, written[0])) == "A4" and string_and_fret(root, written[0]) == (1, 5), "the standard staff follows the fret"
+    assert done["notes"][written[0]][5] == {"string": 1, "fret": 5}
+    client.post(f"{url}/notes/{written[1]}{TAB_COPY}", json={"action": "fret", "fret": 12})
+    root = saved(client, url)
+    assert pitch_name(own_note(root, written[1])) == "B4" and string_and_fret(root, written[1]) == (2, 12), "a two-digit fret, on the B string"
+    client.post(f"{url}/undo")
+    assert string_and_fret(saved(client, url), written[1]) == (2, 0), "a note and its fret are one undo"
+
+
+def test_a_fret_on_a_string_another_note_would_take_stays_on_its_own_string(client):
+    url = new_score(client)
+    written, _ = write_through(client, url, 52)
+    client.post(f"{url}/notes/{written[0]}", json={"action": "stack", "midi": 59})
+    root = saved(client, url)
+    assert string_and_fret(root, written[0]) == (4, 2)
+    # Fret 7 on the D string is A3, which the A string would play open: it stays on the D string.
+    client.post(f"{url}/notes/{written[0]}{TAB_COPY}", json={"action": "fret", "fret": 7})
+    root = saved(client, url)
+    assert pitch_name(own_note(root, written[0])) == "A3" and string_and_fret(root, written[0]) == (4, 7)
+
+
+def test_a_fret_typed_on_a_tied_note_moves_the_whole_tie():
+    root = guitar(measures=2)
+    first = write(root, 64, length="whole")[0]
+    second = next(note for note in root.iter("note") if (note.findtext("staff") or "1") == "1" and note.get("id") != first)
+    edit.write_note(root, second.get("id"), "quarter", 0, None, midi=64)
+    synced(root)
+    edit.toggle_tie(root, first)
+    synced(root)
+    fretted.play_at_fret(root, first, 3)
+    synced(root)
+    tied = edit.tied_notes(root, own_note(root, first))
+    assert len(tied) == 2 and {pitch_name(note) for note in tied} == {"G4"}, "the tie holds, at the new pitch"
+    assert {string_and_fret(root, note.get("id")) for note in tied} == {(1, 3)}
+
+
+def test_a_fret_typed_for_a_bass_guitar_sounds_from_its_strings_at_concert_pitch_or_not():
+    for concert_pitch in (False, True):
+        root = guitar(measures=1, name="bass-guitar-tab")
+        note = write(root, 40)[0]
+        assert string_and_fret(root, note) == (4, 0), "written E2 sounds the open E1 string"
+        if concert_pitch:
+            concert.set_concert_pitch(root, True)
+            with concert.editing(root):
+                fretted.play_at_fret(root, note, 3)
+        else:
+            fretted.play_at_fret(root, note, 3)
+        synced(root)
+        assert pitch_name(own_note(root, note)) == "G2", "written an octave above the G1 it sounds"
+        assert string_and_fret(root, note) == (4, 3)
+
+
+@pytest.mark.parametrize("fret, reason", [(20, "frets go from 0 to 19"), (-1, "frets go from 0 to 19")])
+def test_a_fret_the_neck_does_not_have_is_refused(fret, reason):
+    root = guitar(measures=1)
+    note = write(root, 64)[0]
+    with pytest.raises(EditError, match=reason):
+        fretted.play_at_fret(root, note, fret)
+
+
+def test_a_rest_has_no_fret():
+    root = guitar(measures=1)
+    rest = next(note for note in root.iter("note") if note.find("rest") is not None)
+    with pytest.raises(EditError, match="rest has no fret"):
+        fretted.play_at_fret(root, rest.get("id"), 3)
+
+
+def kept_place(root, note_id):
+    return fretted.place_of(own_note(root, note_id))
+
+
+def test_a_guitar_without_tablature_keeps_the_string_chosen_for_a_note(client):
+    url = new_score(client, clef="guitar")
+    cursor = first_note(client.get(f"{url}/score.musicxml").text.encode())
+    done = client.post(f"{url}/notes/{cursor}", json={"action": "write", "type": "quarter", "midi": 64, "string": 2}).json()
+    note = done["written"]
+    root = saved(client, url)
+    assert kept_place(root, note) == (2, 5) and done["notes"][note][5] == {"string": 2, "fret": 5}
+    assert "<fret>" not in "".join(done["pages"]), "it isn't drawn: there's no tablature to draw it on"
+    assert done["marks"] == [], "and it isn't a string number to click"
+    moved = client.post(f"{url}/notes/{note}", json={"action": "string", "string": 3}).json()
+    assert moved["notes"][note][5] == {"string": 3, "fret": 9}
+    capo = client.post(f"{url}/strings", json={"part": 0, "capo": 2}).json()
+    assert capo["notes"][note][5] == {"string": 3, "fret": 7}, "a capo moves its fret, as on the tablature"
+    client.post(f"{url}/strings", json={"part": 0, "capo": 0})
+    tab = client.post(f"{url}/strings", json={"part": 0, "tab": True}).json()
+    assert tab["notes"][note][5] == {"string": 3, "fret": 9}, "turned on, the tablature plays it there"
+    assert kept_place(saved(client, url), note) is None, "and keeps it from then on"
+    off = client.post(f"{url}/strings", json={"part": 0, "tab": False}).json()
+    assert off["notes"][note][5] == {"string": 3, "fret": 9}, "taken away, the note keeps it"
+    repitched = client.post(f"{url}/notes/{note}", json={"action": "semitoneUp"}).json()
+    assert len(repitched["notes"][note]) == 5 or "string" not in repitched["notes"][note][5], "a new pitch forgets it"
+
+
+def test_a_string_number_and_the_string_kept_on_a_note_are_apart():
+    root = structure.blank_score(clef="guitar", measures=1)
+    edit.ensure_note_ids(root)
+    note = write(root, 64)[0]
+    fretted.choose_string(root, note, 2)
+    synced(root)
+    from pipeline import marks, technique
+
+    technique.set_string_number(root, [note], 2)
+    synced(root)
+    found = own_note(root, note)
+    assert kept_place(root, note) == (2, 5) and fretted.string_number(found) == 2
+    marks.ensure_mark_ids(root)
+    assert [mark["kind"] for mark in marks.list_marks(root)] == ["string"], "only the circled number is a mark"
+    technique.set_string_number(root, [note], 2)
+    assert kept_place(root, note) == (2, 5) and fretted.string_number(found) is None, "taking the number away leaves the string"
+    technique.set_fingering(root, [note], "2")
+    edit.clear_marks(root, note)
+    assert kept_place(root, note) == (2, 5) and not technique.marks_of(found, "fingering"), "Clear marks leaves where it's played"
+
+
+def test_tablature_on_its_own_is_a_part_of_one_staff_that_is_the_music(client):
+    url = new_score(client, clef="guitar-tab-only")
+    data = client.get(url).json()
+    assert data["partStaves"] == [1] and data["fretted"][0]["tab"] is True and data["fretted"][0]["tabStaff"] == 1
+    written, done = write_through(client, url, 64, 67, 36)
+    root = saved(client, url)
+    assert [fretted.place_of(own_note(root, note)) for note in written[:2]] == [(1, 0), (1, 3)]
+    assert done["fretProblems"] == [{"note": written[2], "part": 0, "reason": "C2 is below this instrument's lowest string."}]
+    heard = client.get(f"{url}/playback").json()
+    assert sorted(note["midi"] for note in heard["notes"]) == [36, 64, 67], "it's played, as it's the music"
+    typed = client.post(f"{url}/notes/{written[1]}", json={"action": "fret", "fret": 5}).json()
+    assert typed["notes"][written[1]][5] == {"string": 1, "fret": 5} and pitch_name(own_note(saved(client, url), written[1])) == "A4"
+
+
+def test_tablature_on_its_own_is_drawn_with_its_rhythm():
+    root = structure.blank_score(clef="guitar-tab-only", measures=2)
+    edit.ensure_note_ids(root)
+    write(root, 64, 67, length="eighth")
+    page = render_pages(to_text(root))[0]
+    assert page.count('class="stem"') >= 2 and 'class="beam"' in page, "its eighths have stems and a beam"
+    rests = [note.get("id") for note in root.iter("note") if note.find("rest") is not None]
+    assert rests and all(re.search(rf'<g id="{rest}" class="(rest|mRest)"', page) for rest in rests), "and its rests are drawn, with their own ids to click"
+    linked = render_pages(to_text(guitar(measures=2)))[0]
+    assert 'class="mRest"' in linked, "a TAB staff under a standard staff still shows its rhythm only above"
+
+
+def test_tablature_on_its_own_taken_away_is_a_standard_staff_keeping_its_strings():
+    root = structure.blank_score(clef="guitar-tab-only", measures=1)
+    edit.ensure_note_ids(root)
+    note = write(root, 64)[0]
+    fretted.choose_string(root, note, 2)
+    synced(root)
+    fretted.set_tab(root, 0, False)
+    synced(root)
+    clef = root.find("part/measure/attributes/clef")
+    assert (clef.findtext("sign"), clef.findtext("clef-octave-change")) == ("G", "-1") and fretted.tab_staves(root.find("part")) == []
+    assert kept_place(root, note) == (2, 5)
+    fretted.set_tab(root, 0, True)
+    synced(root)
+    assert string_and_fret(root, note) == (2, 5)
+
+
+def test_tablature_on_its_own_is_offered_for_a_guitar_and_a_bass():
+    listed = {item["id"]: item["label"] for item in structure.instrument_list()}
+    assert listed["guitar-tab-only"] == "Guitar, tablature only" and listed["bass-guitar-tab-only"] == "Bass Guitar, tablature only"
+    bass = structure.blank_score(clef="bass-guitar-tab-only", measures=1)
+    assert board(bass).count == 4 and concert.transpositions(bass.find("part"))[0].semitones == -12
+
+
+def test_a_group_written_as_one_tag_opens_nothing():
+    from pipeline.decorate import group_end
+
+    svg = '<g id="a" class="measure"><g id="b" class="tabDurSym" /><g id="c"><path /></g></g><g id="d"></g>'
+    assert group_end(svg, 0) == svg.index('<g id="d"')
+
+
+def test_a_capo_leaves_the_frets_behind_it_out_of_reach():
+    root = guitar(measures=1)  # A nylon-string guitar, with 19 frets.
+    high = write(root, 83, 84)
+    assert [item["note"] for item in fretted.problems(root)] == [high[1]], "B5 is the top string's 19th fret, C6 would be its 20th"
+    fretted.set_strings(root, 0, capo=12)
+    synced(root)
+    listed = {item["note"]: item["reason"] for item in fretted.problems(root)}
+    assert high[1] in listed and "above the 19th fret" in listed[high[1]], "a capo on the 12th fret leaves seven above it, not nineteen"
+    assert string_and_fret(root, high[0]) == (1, 7)
+    with pytest.raises(EditError, match="fret 7 from the capo"):
+        fretted.choose_string(root, high[0], 2)
+
+
+def test_a_chord_written_a_note_at_a_time_is_fingered_as_a_chord():
+    root = guitar(measures=1)
+    first = write(root, 60)[0]
+    chord(root, first, 64)
+    chord(root, first, 67)
+    frets = [string_and_fret(root, note.get("id"))[1] for note in edit.locate(root, first).event.notes]
+    assert max(frets) - min(fret for fret in frets if fret) <= fretted.LONGEST_SPAN, f"playable together, not {frets}"
+
+
+def test_a_chosen_string_still_holds_in_a_chord_it_can_be_played_in():
+    root = guitar(measures=1)
+    first = write(root, 60)[0]
+    fretted.choose_string(root, first, 3)
+    synced(root)
+    chord(root, first, 64)
+    assert string_and_fret(root, first) == (3, 5)
+
+
+def test_a_note_hidden_on_the_staff_is_hidden_on_the_tablature():
+    root = guitar(measures=1)
+    hidden = write(root, 64, 67)[0]
+    own_note(root, hidden).set("print-object", "no")
+    synced(root)
+    assert copy_of(root, hidden).get("print-object") == "no"
+
+
+def test_a_string_chosen_for_a_note_is_the_apps_own_and_left_out_of_a_file():
+    root = guitar(measures=1)
+    note = write(root, 64)[0]
+    fretted.choose_string(root, note, 2)
+    synced(root)
+    assert copy_of(root, note).get(fretted.CHOSEN) == "yes"
+    assert fretted.CHOSEN not in to_text(technique.drawn_on_other_staves(copy.deepcopy(root)))
+
+
+def test_a_tuning_or_capo_asked_for_again_is_not_an_edit(client):
+    url = new_score(client)
+    for unchanged in ({"part": 0, "capo": 0}, {"part": 0, "tuning": "standard"}, {"part": 0, "strings": list(structure.GUITAR_STRINGS)}):
+        assert client.post(f"{url}/strings", json=unchanged).status_code == 422
+    assert client.get(url).json()["canUndo"] is False
+
+
+def test_a_grace_note_is_on_the_tablature_and_its_string_can_be_chosen():
+    from pipeline import marks
+
+    root = guitar(measures=1)
+    note = write(root, 69)[0]
+    grace = marks.add_grace(root, note)
+    synced(root)
+    assert copy_of(root, grace).find("grace") is not None and string_and_fret(root, grace) == (1, 5), "the grace, an A4 too, on the top string"
+    fretted.choose_string(root, grace, 2)
+    synced(root)
+    assert string_and_fret(root, grace) == (2, 10) and string_and_fret(root, note) == (1, 5), "it keeps the string chosen, and isn't in its note's way"
+    assert render_pages(to_text(root))
+
+
+def test_a_grace_note_cuts_short_the_note_before_it_on_its_string():
+    from pipeline import marks
+
+    root = guitar(measures=1)
+    before = write(root, 69, 71)
+    lead = marks.add_grace(root, before[1])
+    edit.move_semitone(root, lead, -2)
+    synced(root)
+    assert string_and_fret(root, before[0]) == (1, 5) and string_and_fret(root, lead) == (1, 5), "an A grace after an A on the top string takes the top string too"

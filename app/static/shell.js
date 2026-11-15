@@ -57,6 +57,9 @@ const SHORTCUTS = [
   ["↑  ↓", "Move a note a semitone. With Ctrl, an octave"],
   ["Alt+Shift+↑  ↓", "Move a note one step of the scale"],
   ["Ctrl+Shift+↑  ↓", "Draw the note on the staff above or below, for a pianist's other hand"],
+  ["0 to 9, on the tablature", "Type a fret for the selected note, or while entering notes there, write it on the cursor's string. Two digits typed together are one fret"],
+  ["Shift+0 to 7, on the tablature", "A rest, or a duration, as the digits are frets there"],
+  ["Ctrl+↑  ↓, on the tablature", "Move the note to the string above or below, keeping its sound. While entering notes there, ↑ ↓ move the cursor"],
   ["A to G, on a selected note", "Rename it. With Shift, add that note to its chord"],
   ["Alt+2 to 9", "Add a note that interval above"],
   ["Q  W", "Half or twice as long. With Shift, through the dotted lengths"],
@@ -406,6 +409,7 @@ function setZoom(value) {
   if (![...choice.options].some(option => option.value === zoom)) choice.append(new Option(`${zoom}%`, zoom));
   choice.value = zoom;
   drawCursor();
+  if (score) drawStickyStart();
 }
 
 function stepZoom(by) {
@@ -708,7 +712,22 @@ function setUpShell() {
     if (chosenPart === null) return;
     const index = chosenPart;
     chosenPart = null;
-    await send("parts", { action: "remove", index });
+    // Practice's choices name parts by their place, which moves up for those below, so they're
+    // moved before the score comes back without the part.
+    const moved = (choice, none) => {
+      const [kind, part, ...rest] = choice.split(":");
+      if (kind !== "part" && kind !== "staff") return choice;
+      if (Number(part) === index) return none;
+      return Number(part) > index ? [kind, Number(part) - 1, ...rest].join(":") : choice;
+    };
+    const before = { hear: practice.hear, waitFor: practice.waitFor };
+    Object.assign(practice, { hear: moved(practice.hear, "all"), waitFor: moved(practice.waitFor, "off") });
+    try {
+      await send("parts", { action: "remove", index });
+    } catch (error) {
+      Object.assign(practice, before);
+      throw error;
+    }
   }));
   $("partDialog").querySelector("form").addEventListener("submit", () => {
     const names = [...partChooser.picked];

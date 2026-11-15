@@ -70,9 +70,15 @@ def pitched(root: ET.Element, note_ids: list[str]) -> list[ET.Element]:
     return list(found.values())
 
 
-def technical_of(note: ET.Element) -> ET.Element:
+def holds_marks(technical: ET.Element, tag: str) -> bool:
+    """Say whether a <technical> can hold marks of this kind. A <string> beside a <fret> is where the
+    note is played (see fretted.py), not a string number to read."""
+    return tag != "string" or technical.find("fret") is None
+
+
+def technical_of(note: ET.Element, tag: str = "") -> ET.Element:
     notations = notations_of(note)
-    technical = notations.find("technical")
+    technical = next((found for found in notations.findall("technical") if holds_marks(found, tag)), None)
     if technical is None:
         technical = ET.SubElement(notations, "technical")
     return technical
@@ -81,6 +87,8 @@ def technical_of(note: ET.Element) -> ET.Element:
 def drop_technical(note: ET.Element, tag: str) -> None:
     """Take every mark of one kind out of a note, and the <technical> holding it once it's empty."""
     for technical in note.findall("notations/technical"):
+        if not holds_marks(technical, tag):
+            continue
         for found in technical.findall(tag):
             technical.remove(found)
         if len(technical) == 0:
@@ -89,7 +97,7 @@ def drop_technical(note: ET.Element, tag: str) -> None:
 
 
 def marks_of(note: ET.Element, tag: str) -> list[str]:
-    return [(found.text or "").strip() for found in note.iterfind(f"notations/technical/{tag}")]
+    return [(found.text or "").strip() for technical in note.iterfind("notations/technical") if holds_marks(technical, tag) for found in technical.findall(tag)]
 
 
 def set_text_mark(notes: list[ET.Element], tag: str, values: list[str], placements: list[str | None] | None = None) -> None:
@@ -103,7 +111,29 @@ def set_text_mark(notes: list[ET.Element], tag: str, values: list[str], placemen
         mark = element_with_text(tag, value)
         if placement:
             mark.set("placement", placement)
-        technical_of(note).append(mark)
+        technical_of(note, tag).append(mark)
+
+
+def check_finger(root: ET.Element, note: ET.Element, finger: str) -> None:
+    """Refuse a finger the note's instrument doesn't number, as a piano's 0 or a violin's 5."""
+    allowed = FINGERS.get(family_of(root, context_of(root, note)[0]), ANY_FINGER)
+    if finger.isdigit() and finger not in allowed:
+        raise EditError(f"Fingers here are numbered {allowed[0]} to {allowed[-1]}.")
+
+
+def check_string(root: ET.Element, note: ET.Element, chosen: int) -> None:
+    """Refuse a string number the note's instrument hasn't, or a string that can't play the note."""
+    part, context = context_of(root, note)
+    strings = string_names(root, part)
+    board = fretted.boards(root)[root.findall("part").index(part)]
+    if not strings:
+        raise EditError("Only a string instrument's notes have string numbers.")
+    if not 1 <= chosen <= len(strings):
+        raise EditError(f"This instrument has strings 1 to {len(strings)}.")
+    midi = fretted.note_midi(note) + transposition_at(part, context.index).semitones
+    lowest = fretted.midi_of(*pitch_of_name(strings[len(strings) - chosen]))
+    if (board is not None and board.fret(chosen, midi) is None) or (board is None and midi < lowest):
+        raise EditError(f"String {chosen} can't play {fretted.name_of(midi)}.")
 
 
 def set_fingering(root: ET.Element, note_ids: list[str], text: str) -> None:
@@ -122,9 +152,9 @@ def set_fingering(root: ET.Element, note_ids: list[str], text: str) -> None:
     placements = []
     for note, finger in zip(notes, fingers):
         family = family_of(root, context_of(root, note)[0])
-        allowed = FINGERS.get(family, ANY_FINGER)
-        if finger not in allowed:
-            raise EditError(f"Fingers here are numbered {allowed[0]} to {allowed[-1]}.")
+        if finger not in FINGERS.get(family, ANY_FINGER):
+            check_finger(root, note, finger)
+            raise EditError("That isn't a finger.")
         placements.append(("below" if (note.findtext("staff") or "1") != "1" else "above") if family == KEYBOARDS else None)
     set_text_mark(notes, "fingering", fingers, placements)
 
@@ -151,27 +181,22 @@ def string_names(root: ET.Element, part: ET.Element) -> tuple[str, ...]:
 def set_string_number(root: ET.Element, note_ids: list[str], number: int) -> None:
     """Say which string plays each note, in a circle on a guitar and as a Roman numeral on a violin.
 
-    On a guitar with tablature, the tablature moves to that string too. Without a number, a guitar's
-    notes are marked with the strings its tablature has them on.
+    A guitar plays the note on that string too, on its tablature or kept on the note. Without a
+    number, a guitar's notes are marked with the strings they're played on.
     """
     notes = pitched(root, note_ids)
     values = []
     for note in notes:
-        part, context = context_of(root, note)
+        part, _ = context_of(root, note)
         strings = string_names(root, part)
         board = fretted.boards(root)[root.findall("part").index(part)]
         if not strings:
             raise EditError("Only a string instrument's notes have string numbers.")
         chosen = number
-        if not chosen and board is not None and board.tab:
+        if not chosen and board is not None:
             carrier = fretted.copy_of(root, part, board, note)
             chosen = fretted.string_of(carrier) if carrier is not None else None
-        if not chosen or not 1 <= chosen <= len(strings):
-            raise EditError(f"This instrument has strings 1 to {len(strings)}.")
-        midi = fretted.note_midi(note) + transposition_at(part, context.index).semitones
-        lowest = fretted.midi_of(*pitch_of_name(strings[len(strings) - chosen]))
-        if (board is not None and board.fret(chosen, midi) is None) or (board is None and midi < lowest):
-            raise EditError(f"String {chosen} can't play {fretted.name_of(midi)}.")
+        check_string(root, note, chosen or 0)
         values.append(str(chosen))
     marked = all(marks_of(note, "string") == [value] for note, value in zip(notes, values))
     set_text_mark(notes, "string", values)
@@ -179,7 +204,7 @@ def set_string_number(root: ET.Element, note_ids: list[str], number: int) -> Non
         for note, value in zip(notes, values):
             part, _ = context_of(root, note)
             board = fretted.boards(root)[root.findall("part").index(part)]
-            if board is not None and board.tab:
+            if board is not None:
                 fretted.choose_string(root, note.get("id"), int(value))
 
 
@@ -210,9 +235,15 @@ def harmonic_kind(note: ET.Element) -> tuple[str | None, str | None]:
 
 
 def touching_note(root: ET.Element, note: ET.Element) -> ET.Element | None:
-    """Return the diamond a fourth above a violin's artificial harmonic, which is in the same chord."""
+    """Return the diamond a fourth above a violin's artificial harmonic, which is in the same chord.
+
+    In a double stop with a harmonic on each note, it's the one a fourth above this note.
+    """
     event = locate(root, note.get("id")).event
-    return next((other for other in event.notes if harmonic_kind(other) == ("artificial", "touching-pitch")), None)
+    wanted = move_pitch(note.findtext("pitch/step"), round(float(note.findtext("pitch/alter") or 0)), int(note.findtext("pitch/octave")), TOUCHED_ABOVE)
+    diamonds = [other for other in event.notes if harmonic_kind(other) == ("artificial", "touching-pitch")]
+    pitch = lambda other: (other.findtext("pitch/step"), round(float(other.findtext("pitch/alter") or 0)), int(other.findtext("pitch/octave")))
+    return next((other for other in diamonds if pitch(other) == tuple(wanted)), diamonds[0] if len(diamonds) == 1 else None)
 
 
 def write_harmonic(note: ET.Element, kind: str, which: str | None = None) -> None:
@@ -348,7 +379,7 @@ def toggle_pair(root: ET.Element, first_id: str, last_id: str, name: str) -> Non
     for (first_context, first), (second_context, second) in pairs:
         if pair_number(first, second, group, tag):
             continue
-        number = str(free_number(start.part, tag, first_context.index, second_context.index))
+        number = str(free_number(start.part, tag, first_context.index, second_context.index, (first, second)))
         begin = ET.Element(tag, {"type": "start", "number": number})
         if group:
             begin.text = look
@@ -383,7 +414,7 @@ def toggle_vibrato(root: ET.Element, first_id: str, last_id: str) -> None:
                 note.find("notations").remove(ornaments)
             drop_if_empty(note)
         return
-    number = str(free_number(start.part, "wavy-line", first_context.index, last_context.index))
+    number = str(free_number(start.part, "wavy-line", first_context.index, last_context.index, (first, last)))
     for note, kind in ((first, "start"), (last, "stop")):
         ornaments = notations_of(note).find("ornaments")
         if ornaments is None:
@@ -404,10 +435,11 @@ def remove_direction(end: tuple | None) -> None:
         end[0].remove(end[1])
 
 
-def toggle_text_line(root: ET.Element, first_id: str, last_id: str, words: str, placement: str) -> None:
+def toggle_text_line(root: ET.Element, first_id: str, last_id: str, words: str, placement: str, keep: bool = False) -> None:
     """Put words with a dashed line over a stretch, as "P.M." or "let ring", or take them away.
 
-    Two lines with the same words can't lie over each other on a staff, so one the new line overlaps goes.
+    Two lines with the same words can't lie over each other on a staff, so one the new line overlaps
+    goes. With `keep`, as a paste has it, the same line already there stays rather than going.
     """
     begin, chosen = events_between(root, first_id, last_id)
     first_context, _, first_event = chosen[0]
@@ -420,6 +452,8 @@ def toggle_text_line(root: ET.Element, first_id: str, last_id: str, words: str, 
         if said == words and (line_start[1].findtext("staff") or "1") == staff and line_start[3] < ends and starts < stop:
             overlapping.append((line_start, line_stop))
     same = any(found[0][3] == starts and found[1] is not None and found[1][3] == ends for found in overlapping)
+    if same and keep:
+        return
     for line_start, line_stop in overlapping:
         remove_direction(line_start)
         remove_direction(line_stop)
@@ -433,20 +467,20 @@ def toggle_text_line(root: ET.Element, first_id: str, last_id: str, words: str, 
     repair_lines(begin.part)
 
 
-def toggle_named_line(root: ET.Element, first_id: str, last_id: str, name: str) -> None:
+def toggle_named_line(root: ET.Element, first_id: str, last_id: str, name: str, keep: bool = False) -> None:
     if name not in TEXT_LINES:
         raise EditError("That isn't a line this app knows.")
-    toggle_text_line(root, first_id, last_id, *TEXT_LINES[name])
+    toggle_text_line(root, first_id, last_id, *TEXT_LINES[name], keep=keep)
 
 
-def toggle_sul(root: ET.Element, first_id: str, last_id: str, where: str) -> None:
+def toggle_sul(root: ET.Element, first_id: str, last_id: str, where: str, keep: bool = False) -> None:
     """Ask for a passage to be played on one string, as "sul G", or near the bridge or over the fingerboard."""
     where = where.strip()
     part = locate(root, first_id).part
     names = {name.rstrip("0123456789").rstrip("#b") for name in string_names(root, part)}
     if where not in names and where not in SUL_PLACES:
         raise EditError(f"Say a string, such as {' or '.join(sorted(names)) or 'G'}, or pont. or tasto.")
-    toggle_text_line(root, first_id, last_id, f"sul {where}", "above")
+    toggle_text_line(root, first_id, last_id, f"sul {where}", "above", keep=keep)
 
 
 def directions_here(spot: Spot, wanted) -> list[ET.Element]:
@@ -462,11 +496,14 @@ def words_of(direction: ET.Element) -> str:
     return " ".join((words.text or "").strip() for words in direction.iter("words")).strip()
 
 
-def toggle_words(root: ET.Element, note_id: str, text: str, kind_of, placement: str = "above", sound: dict | None = None) -> None:
-    """Put words of one kind at a note, replacing others of that kind there. The same words again take them away."""
+def toggle_words(root: ET.Element, note_id: str, text: str, kind_of, placement: str = "above", sound: dict | None = None, keep: bool = False) -> None:
+    """Put words of one kind at a note, replacing others of that kind there. The same words again take
+    them away, unless they're to be kept, as a paste keeps them."""
     spot = locate(root, note_id)
     existing = directions_here(spot, kind_of)
     same = any(words_of(found) == text for found in existing)
+    if same and keep:
+        return
     for found in existing:
         spot.context.measure.remove(found)
     if same:
@@ -478,16 +515,20 @@ def is_pizzicato_mark(direction: ET.Element) -> bool:
     return direction.find("sound[@pizzicato]") is not None
 
 
-def set_pizzicato(root: ET.Element, note_id: str, on: bool) -> None:
+def set_pizzicato(root: ET.Element, note_id: str, on: bool, keep: bool = False) -> None:
     """Mark "pizz." or "arco" at a note. Playback plucks the strings from "pizz." until "arco"."""
-    toggle_words(root, note_id, "pizz." if on else "arco", is_pizzicato_mark, sound={"pizzicato": "yes" if on else "no"})
+    toggle_words(root, note_id, "pizz." if on else "arco", is_pizzicato_mark, sound={"pizzicato": "yes" if on else "no"}, keep=keep)
 
 
-def set_position(root: ET.Element, note_id: str, number: int) -> None:
+def is_position_mark(direction: ET.Element) -> bool:
+    return words_of(direction).endswith(POSITION_WORDS)
+
+
+def set_position(root: ET.Element, note_id: str, number: int, keep: bool = False) -> None:
     """Mark the position the hand plays in from a note, as "III pos.", with 0 for half position."""
     if not 0 <= number < len(ROMAN):
         raise EditError(f"A position is from ½ to {ROMAN[-1]}.")
-    toggle_words(root, note_id, ROMAN[number] + POSITION_WORDS, lambda direction: words_of(direction).endswith(POSITION_WORDS))
+    toggle_words(root, note_id, ROMAN[number] + POSITION_WORDS, is_position_mark, keep=keep)
 
 
 HANDS = {"RH": "R.H.", "LH": "L.H."}
@@ -497,12 +538,90 @@ HANDS = {"RH": "R.H.", "LH": "L.H."}
 CROSS_STAFF = "xrn-staff"
 
 
-def toggle_hand(root: ET.Element, note_ids: list[str], hand: str) -> None:
+def is_hand_mark(direction: ET.Element) -> bool:
+    return words_of(direction) in HANDS.values()
+
+
+def event_key(spot: Spot) -> tuple:
+    """What tells one chord or rest from another: its part, bar, staff and voice, and its moment."""
+    return (spot.part.get("id"), spot.context.index, spot.key, spot.event.onset)
+
+
+def toggle_hand(root: ET.Element, note_ids: list[str], hand: str, keep: bool = False) -> None:
     """Mark which hand plays the chosen notes, as "R.H." or "L.H." over them."""
     if hand not in HANDS:
         raise EditError("A hand is RH or LH.")
+    # The words go over each chord once, however many of its notes are chosen.
+    heads = {}
     for note in pitched(root, note_ids):
-        toggle_words(root, note.get("id"), HANDS[hand], lambda direction: words_of(direction) in HANDS.values())
+        heads.setdefault(event_key(locate(root, note.get("id"))), note)
+    for note in heads.values():
+        toggle_words(root, note.get("id"), HANDS[hand], is_hand_mark, keep=keep)
+
+
+# The words and lines over a passage that a copy carries, and the instruments a paste gives them to.
+LINE_FAMILIES = {"P.M.": {PLUCKED}, "let ring": {PLUCKED}, "sul": {BOWED}}
+WORD_FAMILIES = {"pizzicato": {BOWED}, "position": {BOWED, PLUCKED}, "hand": {KEYBOARDS}}
+
+
+def words_at(spot: Spot) -> list[dict]:
+    """Say what a copy carries of the words at a note: "pizz." or "arco", a position, and a hand."""
+    found = []
+    for direction in directions_here(spot, lambda direction: True):
+        said = words_of(direction)
+        if is_pizzicato_mark(direction):
+            found.append({"kind": "pizzicato", "on": direction.find("sound").get("pizzicato") == "yes"})
+        elif said.endswith(POSITION_WORDS) and said.removesuffix(POSITION_WORDS) in ROMAN:
+            found.append({"kind": "position", "number": ROMAN.index(said.removesuffix(POSITION_WORDS))})
+        elif said in HANDS.values():
+            found.append({"kind": "hand", "name": next(name for name, words in HANDS.items() if words == said)})
+    return found
+
+
+def lines_from(part: ET.Element, staff: str) -> list[tuple[tuple[int, Fraction], tuple[int, Fraction] | None, str]]:
+    """A staff's P.M., let ring and sul lines, each with where it starts and stops, and its words."""
+    found = []
+    for begun, ended, said in text_lines(part):
+        if (begun[1].findtext("staff") or "1") == staff and (said in LINE_FAMILIES or said.startswith("sul ")):
+            found.append((begun[3], ended[3] if ended is not None else None, said))
+    return found
+
+
+def fits(root: ET.Element, note_id: str, families: set[str]) -> bool:
+    """Say whether a note's instrument has a use for words of these families. A plain staff takes any."""
+    family = family_of(root, locate(root, note_id).part)
+    return family is None or family in families
+
+
+def give_words(root: ET.Element, note_id: str, found: list[dict]) -> None:
+    """Put back the words a copied note had, as far as its new instrument has a use for them."""
+    for item in found:
+        if not fits(root, note_id, WORD_FAMILIES.get(item.get("kind"), set())):
+            continue
+        try:
+            if item["kind"] == "pizzicato":
+                set_pizzicato(root, note_id, bool(item.get("on")), keep=True)
+            elif item["kind"] == "position":
+                set_position(root, note_id, int(item.get("number", -1)), keep=True)
+            elif item["kind"] == "hand":
+                toggle_hand(root, [note_id], str(item.get("name")), keep=True)
+        except (EditError, KeyError, TypeError, ValueError):
+            pass  # Not something this note can have: it's pasted without it.
+
+
+def give_line(root: ET.Element, first_id: str, last_id: str, words: str) -> None:
+    """Put back a copied P.M., let ring or sul line over the notes it covered, on an instrument that has them."""
+    kind = "sul" if words.startswith("sul ") else words
+    if kind not in LINE_FAMILIES or not fits(root, first_id, LINE_FAMILIES[kind]):
+        return
+    try:
+        if words.startswith("sul "):
+            toggle_sul(root, first_id, last_id, words.removeprefix("sul "), keep=True)
+        else:
+            name = next(name for name, (said, _) in TEXT_LINES.items() if said == words)
+            toggle_named_line(root, first_id, last_id, name, keep=True)
+    except (EditError, StopIteration):
+        pass  # The instrument hasn't that string, say: the notes are pasted without it.
 
 
 def cross_staff(root: ET.Element, note_id: str, change: int) -> None:
@@ -529,6 +648,7 @@ def cross_staff(root: ET.Element, note_id: str, change: int) -> None:
 def drawn_on_other_staves(root: ET.Element) -> ET.Element:
     """Put each note moved to another staff on that staff, as MusicXML and Verovio have it, for a file or a drawing."""
     for note in root.iter("note"):
+        note.attrib.pop(fretted.CHOSEN, None)  # The app's own, which no other program reads.
         staff = note.attrib.pop(CROSS_STAFF, None)
         if staff is None:
             continue
@@ -557,6 +677,10 @@ def keep_cross_staff(root: ET.Element) -> None:
         staves = int(part.findtext("measure/attributes/staves") or 1)
         if staves < 2:
             continue
+        # The staves whose own voices are numbered as MuseScore numbers them, 5 to 8 on the second.
+        # Only on such a staff is a voice of another number wholly there drawn from another staff:
+        # elsewhere it may be that staff's own voice 2, as other programs number them.
+        numbered = {note.findtext("staff") or "1" for note in part.iter("note") if (note.findtext("voice") or "").isdigit() and str((int(note.findtext("voice")) - 1) // VOICES_PER_STAFF + 1) == (note.findtext("staff") or "1") and (note.findtext("staff") or "1") != "1"}
         for measure in part.findall("measure"):
             runs: list[list[ET.Element]] = [[]]
             for child in measure:
@@ -577,7 +701,7 @@ def keep_cross_staff(root: ET.Element) -> None:
                 usual = usual if usual is not None and int(usual) <= staves else None
                 if len(set(drawn)) > 1:
                     home = usual if usual in drawn else max(dict.fromkeys(drawn), key=drawn.count)
-                elif usual is not None and drawn[0] != usual and (usual, voice) not in natural:
+                elif usual is not None and drawn[0] != usual and (usual, voice) not in natural and (drawn[0] in numbered or usual != "1"):
                     home = usual
                 else:
                     continue
@@ -613,7 +737,8 @@ def sul_lines(part: ET.Element) -> list[tuple[tuple[int, Fraction], tuple[int, F
 def how_played(root: ET.Element) -> dict[str, dict]:
     """Say how each note is played, by its id, where the score says: for the inspector and the instrument below.
 
-    A guitar's string and fret come from its tablature, counted from the capo. A string number, a
+    A guitar's string and fret come from its tablature, counted from the capo, or without one from
+    the note, where a string was chosen for it. A string number, a
     finger, a pluck, a bend, a harmonic, a dead note and a note drawn on another staff come from the
     note. A bowed instrument's notes also have the position in force and a "sul G" over them.
     """
@@ -628,21 +753,21 @@ def how_played(root: ET.Element) -> dict[str, dict]:
         for context in contexts(part):
             timeline = read_measure(context.measure, context.divisions)
             for key, line in timeline.lines.items():
-                if board is not None and key[0] in board.tab:
-                    continue
+                if board is not None and key[0] == board.linked:
+                    continue  # Fret numbers copying the staff above, which says how they're played.
                 for event in line:
                     for note in [*event.grace, *event.notes]:
                         if note.find("pitch") is None or not note.get("id"):
                             continue
                         details: dict = {}
-                        carrier = copies.get(note.get("id") + TAB_COPY)
-                        if carrier is not None and fretted.string_of(carrier) is not None:
-                            details["string"] = fretted.string_of(carrier)
-                            details["fret"] = int(carrier.findtext("notations/technical/fret") or 0)
+                        carrier = (copies.get(note.get("id") + TAB_COPY) if board.linked else note) if board is not None else None
+                        played_at = fretted.place_of(carrier) if carrier is not None else None
+                        if played_at is not None:
+                            details["string"], details["fret"] = played_at
                         for tag, name in (("fingering", "finger"), ("pluck", "pluck")):
                             if marks_of(note, tag):
                                 details[name] = marks_of(note, tag)[0]
-                        marked = fretted.string_of(note)
+                        marked = fretted.string_number(note)
                         if marked is not None:
                             details["mark"] = marked
                         bend = note.findtext("notations/technical/bend/bend-alter")
@@ -704,6 +829,11 @@ def stopped_here(note: ET.Element) -> list[tuple[str, str]]:
     return found
 
 
+# The instruments each of a player's techniques belongs to, which a paste gives them to.
+TECHNIQUE_FAMILIES = {"pluck": {PLUCKED}, "bend": {PLUCKED}, "dead": {PLUCKED}, "harmonic": {PLUCKED, BOWED}, "string": {PLUCKED, BOWED}}
+JOIN_FAMILIES = {"hammerOn": {PLUCKED}, "pullOff": {PLUCKED}, "slide": {PLUCKED, BOWED}, "vibrato": {PLUCKED, BOWED}}
+
+
 def give_techniques(root: ET.Element, note_id: str, found: dict) -> None:
     """Give a pasted note what its copy carried, as far as its instrument allows: a guitar's pluck has no place on a piano."""
     setters = {
@@ -715,7 +845,7 @@ def give_techniques(root: ET.Element, note_id: str, found: dict) -> None:
         "dead": lambda value: toggle_dead_note(root, [note_id]),
     }
     for name, value in found.items():
-        if name not in setters:
+        if name not in setters or (name in TECHNIQUE_FAMILIES and not fits(root, note_id, TECHNIQUE_FAMILIES[name])):
             continue
         try:
             setters[name](value)
@@ -724,7 +854,9 @@ def give_techniques(root: ET.Element, note_id: str, found: dict) -> None:
 
 
 def join(root: ET.Element, first_id: str, last_id: str, name: str) -> None:
-    """Join two pasted notes as their copies were, unless they're joined already."""
+    """Join two pasted notes as their copies were, unless they're joined already or the instrument has no such join."""
+    if name in JOIN_FAMILIES and not fits(root, first_id, JOIN_FAMILIES[name]):
+        return
     try:
         if name == "vibrato":
             toggle_vibrato(root, first_id, last_id)

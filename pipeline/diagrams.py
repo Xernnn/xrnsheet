@@ -9,7 +9,10 @@ the nut, so a D chord with the capo on the second fret is a C shape.
 
 The diagrams are drawn into the page above their chord symbols (Verovio doesn't draw MusicXML's
 <frame>), and written into a MusicXML file as each <harmony>'s <frame>, so MuseScore shows them too.
-A frame a file brings that isn't the library's, someone's own fingering, is kept and drawn as it is.
+A frame a file brings that isn't the library's, someone's own fingering, is kept and drawn as it is,
+and so is one chosen here: another of the shapes the chord can be played with, or dots, a barre and
+open and unplayed strings set one by one. A new capo or tuning keeps such a shape's sound where the
+strings can still play it, and a transposed chord goes back to the usual shape.
 """
 
 import functools
@@ -21,10 +24,16 @@ from chords.vocab import Chord, clean_text, parse_chord
 from pipeline.fretted import Fretboard, boards, midi_of
 from pipeline.musicxml import chord_from_harmony
 from pipeline.playback import CHORD_TONES
+from pipeline.rhythm import EditError
 from pipeline.structure import GUITAR_STRINGS, pitch_of_name, read_setting, write_setting
 
 DIAGRAMS = "xrnsheet-chord-diagrams"
-PITCH_CLASSES = {"C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4, "F": 5, "F#": 6, "Gb": 6, "G": 7, "G#": 8, "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11}
+# Every name a chord's root or bass can have, E sharp and C flat among them, as a transposed or a
+# concert-pitch chord can be spelled.
+PITCH_CLASSES = {
+    "C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4, "F": 5, "F#": 6, "Gb": 6, "G": 7, "G#": 8, "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11,
+    "E#": 5, "B#": 0, "Cb": 11, "Fb": 4,
+}
 NAMES = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 X = None  # A string that isn't played.
 # Open chords, each string's fret from the low E up.
@@ -73,11 +82,22 @@ def set_shown(root: ET.Element, on: bool) -> None:
     write_setting(root, DIAGRAMS, "yes" if on else None)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Shape:
-    """Where each string is played, from the lowest up: a fret counted from the capo, 0 for open, None for not played."""
+    """Where each string is played, from the lowest up: a fret counted from the capo, 0 for open, None for not played.
+
+    A barre a frame marks is kept as its fret and the strings it lies across, counted from the lowest.
+    Two shapes are the same when their frets and their barres are, however the barre was found.
+    """
 
     frets: tuple[int | None, ...]
+    marked: tuple[int, int, int] | None = None
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Shape) and (self.frets, self.barre) == (other.frets, other.barre)
+
+    def __hash__(self) -> int:
+        return hash((self.frets, self.barre))
 
     @property
     def fretted(self) -> list[int]:
@@ -96,6 +116,8 @@ class Shape:
         lowest fret, from the first string fretted there to the last, if every string between them
         is played no lower.
         """
+        if self.marked is not None:
+            return self.marked
         if len(self.fretted) <= FINGERS:
             return None
         low = min(self.fretted)
@@ -149,34 +171,40 @@ def worked_out(chord: Chord, opens: tuple[int, ...]) -> Shape | None:
     one with the most strings. A ukulele's strings don't go from low to high, so its chords have no
     bass to keep at the bottom.
     """
+    for position in range(0, HIGHEST_POSITION + 1):
+        found = worked_at(chord, opens, position)
+        if found is not None:
+            return found
+    return None
+
+
+def worked_at(chord: Chord, opens: tuple[int, ...], position: int) -> Shape | None:
+    """The shape worked out with the hand at one place on the neck, with the most strings, if there is one."""
     tones = tones_of(chord)
     needed = needed_of(chord)
     bass = PITCH_CLASSES[chord.bass] if chord.bass else PITCH_CLASSES[chord.root]
     rising = all(lower < higher for lower, higher in zip(opens, opens[1:]))
     best = None
-    for position in range(0, HIGHEST_POSITION + 1):
-        frets = range(max(position, 1), position + WINDOW + 1)
-        for lowest in range(len(opens) - 1):
-            options = []
-            for index, sound in enumerate(opens):
-                if index < lowest:
-                    options.append([None])
-                    continue
-                choices = [fret for fret in [0, *frets] if (sound + fret) % 12 in (tones if index > lowest or not rising else {bass})]
-                options.append(choices if index == lowest else choices or [None])
-            for shape in combinations(options):
-                if None in shape[lowest:] and any(fret is not None for fret in shape[shape.index(None, lowest):]):
-                    continue
-                sounding = {(opens[index] + fret) % 12 for index, fret in enumerate(shape) if fret is not None}
-                played = sum(fret is not None for fret in shape)
-                if not needed <= sounding or played < 3:
-                    continue
-                score = (position, -played)
-                if best is None or score < best[0]:
-                    best = (score, Shape(tuple(shape)))
-        if best is not None:
-            return best[1]
-    return None
+    frets = range(max(position, 1), position + WINDOW + 1)
+    for lowest in range(len(opens) - 1):
+        options = []
+        for index, sound in enumerate(opens):
+            if index < lowest:
+                options.append([None])
+                continue
+            choices = [fret for fret in [0, *frets] if (sound + fret) % 12 in (tones if index > lowest or not rising else {bass})]
+            options.append(choices if index == lowest else choices or [None])
+        for shape in combinations(options):
+            if None in shape[lowest:] and any(fret is not None for fret in shape[shape.index(None, lowest):]):
+                continue
+            sounding = {(opens[index] + fret) % 12 for index, fret in enumerate(shape) if fret is not None}
+            played = sum(fret is not None for fret in shape)
+            if not needed <= sounding or played < 3:
+                continue
+            score = (position, -played)
+            if best is None or score < best[0]:
+                best = (score, Shape(tuple(shape)))
+    return best[1] if best is not None else None
 
 
 def combinations(options: list[list]) -> list[tuple]:
@@ -227,16 +255,156 @@ def frame_of(shape: Shape) -> ET.Element:
 
 
 def shape_of_frame(frame: ET.Element) -> Shape | None:
-    """Read a <frame> back as a shape."""
+    """Read a <frame> back as a shape, with the barre it marks."""
     count = int(frame.findtext("frame-strings") or 0)
     if count <= 0:
         return None
     frets: list[int | None] = [None] * count
+    ends = {}
     for note in frame.findall("frame-note"):
         string, fret = note.findtext("string"), note.findtext("fret")
         if string and fret and string.isdigit() and fret.isdigit() and 1 <= int(string) <= count:
             frets[count - int(string)] = int(fret)
-    return Shape(tuple(frets))
+            if note.find("barre") is not None:
+                ends[note.find("barre").get("type")] = (count - int(string), int(fret))
+    marked = None
+    if "start" in ends and "stop" in ends and ends["start"][1] == ends["stop"][1]:
+        marked = (ends["start"][1], min(ends["start"][0], ends["stop"][0]), max(ends["start"][0], ends["stop"][0]))
+    return Shape(tuple(frets), marked)
+
+
+def shapes_for(text: str, strings: tuple[str, ...] = GUITAR_STRINGS, capo: int = 0, frets: int = 19) -> list[Shape]:
+    """Every shape a chord can be played with here, low on the neck first: the open one, the barre
+    chords on the low E and A strings and an octave up, and one worked out at each place on the neck."""
+    chord = parse_chord(clean_text(text))
+    if chord is None:
+        return []
+    fingered = moved(chord, capo)
+    found: list[Shape] = []
+    if strings == GUITAR_STRINGS and not fingered.bass:
+        if str(fingered) in OPEN:
+            found.append(Shape(OPEN[str(fingered)]))
+        for forms, string in ((ON_E, LOW_E), (ON_A, LOW_A)):
+            if fingered.quality in forms:
+                barre = (PITCH_CLASSES[fingered.root] - string) % 12
+                relative = forms[fingered.quality]
+                for start in (barre, barre + 12):
+                    if start and start + min(fret for fret in relative if fret is not None) >= 0:
+                        found.append(Shape(tuple(None if fret is None else start + fret for fret in relative)))
+    opens = tuple(midi_of(*pitch_of_name(name)) for name in strings)
+    found.extend(shape for position in range(0, HIGHEST_POSITION + 1) if (shape := worked_at(fingered, opens, position)) is not None)
+    unique = []
+    for shape in found:
+        if shape not in unique and all(fret is None or fret <= frets - capo for fret in shape.frets):
+            unique.append(shape)
+    return sorted(unique, key=lambda shape: min(shape.fretted, default=0))[:MOST_SHAPES]
+
+
+MOST_SHAPES = 8
+
+
+def board_frets(board: Fretboard | None) -> tuple[tuple[str, ...], int, int]:
+    return (board.names, board.capo, board.frets) if board else (GUITAR_STRINGS, 0, 19)
+
+
+def shape_now(harmony: ET.Element, board: Fretboard | None) -> tuple[Shape | None, bool]:
+    """The shape a chord symbol's diagram shows, and whether it's one chosen for it rather than the usual one."""
+    frame = harmony.find("frame")
+    if frame is not None:
+        return shape_of_frame(frame), True
+    chord = chord_from_harmony(harmony)
+    names, capo, _ = board_frets(board)
+    return (shape_for(str(chord), names, capo) if chord else None), False
+
+
+def described(shape: Shape | None, custom: bool = False) -> dict | None:
+    if shape is None:
+        return None
+    return {"frets": list(shape.frets), "barre": list(shape.barre) if shape.barre else None, "first": shape.first, "custom": custom}
+
+
+def chord_diagrams(root: ET.Element) -> list[dict | None]:
+    """Each chord symbol's diagram, in the order the chords are listed, for the page to show and edit."""
+    from pipeline.edit import harmonies_in_order
+
+    if not shown(root):
+        return []
+    board = board_for(root)
+    return [described(*shape_now(harmony, board)) for _, harmony in harmonies_in_order(root)]
+
+
+def chord_shapes(root: ET.Element, index: int) -> dict:
+    """The shapes a chord can be played with, and the strings and frets a diagram of it has."""
+    from pipeline.edit import harmony_at
+
+    harmony = harmony_at(root, index)[1]
+    board = board_for(root)
+    names, capo, frets = board_frets(board)
+    chord = chord_from_harmony(harmony)
+    shape, custom = shape_now(harmony, board)
+    return {
+        "chord": str(chord) if chord else "", "strings": list(names), "capo": capo, "frets": frets - capo,
+        "current": described(shape, custom), "shapes": [described(found) for found in shapes_for(str(chord), names, capo, frets)] if chord else [],
+    }
+
+
+def set_frame(root: ET.Element, index: int, frets: list[int | None] | None, barre: list[int] | None = None) -> None:
+    """Give a chord symbol a diagram of its own, or with no frets the usual one again."""
+    from pipeline.edit import harmony_at
+
+    harmony = harmony_at(root, index)[1]
+    for found in harmony.findall("frame"):
+        harmony.remove(found)
+    if frets is None:
+        return
+    board = board_for(root)
+    names, capo, most = board_frets(board)
+    if len(frets) != len(names):
+        raise EditError(f"A diagram here has {len(names)} strings.")
+    if all(fret is None for fret in frets):
+        raise EditError("A diagram needs a string to play.")
+    if any(fret is not None and not 0 <= fret <= most - capo for fret in frets):
+        raise EditError(f"A diagram's frets go from 0 to {most - capo}.")
+    marked = None
+    if barre:
+        fret, low, high = barre
+        if not 0 <= low < high < len(frets) or frets[low] != fret or frets[high] != fret or any(found is None or found < fret for found in frets[low: high + 1]) or fret < 1:
+            raise EditError("A barre lies across strings fretted at its fret, from one end to the other.")
+        marked = (fret, low, high)
+    shape = Shape(tuple(frets), marked)
+    chord = chord_from_harmony(harmony)
+    usual = shape_for(str(chord), names, capo) if chord else None
+    if usual is not None and ET.tostring(frame_of(usual)) == ET.tostring(frame_of(shape)):
+        return  # The usual shape needs no frame of its own.
+    position = next((number for number, child in enumerate(harmony) if child.tag in ("offset", "footnote", "level", "staff")), len(harmony))
+    harmony.insert(position, frame_of(shape))
+
+
+def refit(root: ET.Element, before: Fretboard | None) -> None:
+    """Keep each chosen diagram's sound on a new tuning or capo, where the strings can still play it.
+
+    One that can't be played there any more goes, and the chord shows the usual shape.
+    """
+    after = board_for(root)
+    if before is None or after is None or (before.names, before.capo) == (after.names, after.capo):
+        return
+    for harmony in root.iter("harmony"):
+        frame = harmony.find("frame")
+        shape = shape_of_frame(frame) if frame is not None else None
+        if shape is None:
+            continue
+        harmony.remove(frame)
+        if before.count != after.count or len(shape.frets) != after.count:
+            continue
+        moved_frets = tuple(None if fret is None else before.opens[number] + before.capo + fret - after.opens[number] - after.capo for number, fret in enumerate(shape.frets))
+        if any(fret is not None and not 0 <= fret <= after.frets - after.capo for fret in moved_frets):
+            continue
+        shift = before.capo - after.capo
+        marked = (shape.marked[0] + shift, *shape.marked[1:]) if shape.marked and before.names == after.names else None
+        if marked and marked[0] < 1:
+            marked = None
+        position = next((number for number, child in enumerate(harmony) if child.tag in ("offset", "footnote", "level", "staff")), len(harmony))
+        harmony.insert(position, frame_of(Shape(moved_frets, marked)))
 
 
 def library_frame(harmony: ET.Element, board: Fretboard | None) -> ET.Element | None:
@@ -246,8 +414,14 @@ def library_frame(harmony: ET.Element, board: Fretboard | None) -> ET.Element | 
 
 
 def with_frames(root: ET.Element) -> ET.Element:
-    """Give each chord symbol its diagram as a <frame>, for a MusicXML file, when the score shows them."""
+    """Give each chord symbol its diagram as a <frame>, for a MusicXML file, when the score shows them.
+
+    When it doesn't, a file has none, as other programs would draw them.
+    """
     if not shown(root):
+        for harmony in root.iter("harmony"):
+            for frame in harmony.findall("frame"):
+                harmony.remove(frame)
         return root
     board = board_for(root)
     for harmony in root.iter("harmony"):

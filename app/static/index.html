@@ -136,6 +136,22 @@
           <button id="markDelete" title="Remove it from the score (Del)">Delete</button>
         </div>
       </section>
+      <section id="propChord" hidden>
+        <h3 id="propChordName">Chord</h3>
+        <p id="propChordWhat" class="sub"></p>
+        <div id="chordDiagramTools">
+          <div id="chordDiagram" role="group" aria-label="The chord's diagram: click a string at a fret to put a finger there, or above the nut for an open or unplayed string"></div>
+          <div class="row tight">
+            <button id="diagramNut" class="flat" title="Show the frets nearer the nut" aria-label="Nearer the nut"><span data-icon="up"></span></button>
+            <button id="diagramBody" class="flat" title="Show the frets further up the neck" aria-label="Further up the neck"><span data-icon="down"></span></button>
+            <button id="diagramBarre" class="toggle" title="Lay the first finger across the strings at the lowest fret">Barre</button>
+            <button id="diagramUsual" title="The shape the library or the score gives this chord">Usual shape</button>
+          </div>
+          <span class="label">Other shapes</span>
+          <div id="chordShapes" role="group" aria-label="Other shapes for this chord"></div>
+        </div>
+        <button id="diagramShow" hidden>Show chord diagrams</button>
+      </section>
       <section id="propNote" hidden>
         <h3 id="propKind">Note</h3>
         <p id="propWhat" class="sub"></p>

@@ -50,6 +50,21 @@ copy's rests aren't drawn and aren't clickable.
 
 Notes on a TAB staff are never played: playback and MIDI only sound the standard staff.
 
+**Tablature on its own** is a part of one staff, a TAB staff that is the music itself:
+`guitar-tab-only` ("Guitar, tablature only") and `bass-guitar-tab-only` in `GET /api/instruments`.
+Its notes carry their own `<string>` and `<fret>`, it's played, and it's drawn with its rhythm:
+stems, beams and rests, which have their notes' ids in the drawing (`<g id="note7" class="rest">`) as
+on any other staff. `fretted` says `"tab": true, "tabStaff": 1`, and `fretProblems` lists its notes
+no string can play. `{"tab": false}` on `/strings` turns it into a standard staff in the
+instrument's own clef, each note keeping its string (below).
+
+**A guitar without tablature** keeps a string chosen for a note on the note itself, as a
+`<technical>` holding its `<string>` and `<fret>` (a `<string>` with no `<fret>` beside it is a
+circled string number, a mark). It isn't drawn, but `notes` gives it as `{"string": 2, "fret": 5}`
+as for a guitar with tablature. A new pitch forgets it, a new tuning or capo moves its fret while
+the string can still play the note, tablature turned on plays the note there, and tablature taken
+away leaves each note's string on the note.
+
 New instruments for the chooser (`GET /api/instruments`), each with `"family": "Strings - Plucked"`:
 `guitar-tab` ("Guitar + tablature"), `acoustic-guitar-tab`, `electric-guitar-tab` and
 `bass-guitar-tab` (four strings, E1 A1 D2 G2). The plain `guitar`, `bass-guitar` and the rest are
@@ -90,14 +105,26 @@ The named tunings, each string from the lowest up:
 Plays the note on that string (1 is the highest), and its fret follows. Notes tied to it move with
 it. The choice holds until the note's pitch changes. Refused with the reason when the string can't
 play the note ("String 1 can't play C4: the lowest it plays is E4."), when it would be past the last
-fret, when another note sounding at that moment is on that string, or when the instrument has no
-tablature yet.
+fret, or when another note sounding at that moment is on that string. A guitar without tablature
+keeps it on the note (above).
 
 A note written or stacked (`"action": "write"` or `"stack"`) can carry `"string": 2`, as a fret
-clicked on the fretboard does. On a guitar with tablature the note is played on that string in the
-same edit, so one undo takes both back; on a bowed instrument it gets that string number. If the
-string is busy the note is still written, on a string of its own, and the reply's `message` says
-why. A guitar without tablature has nowhere to keep it.
+clicked on the fretboard does. On a guitar the note is played on that string in the same edit, so
+one undo takes both back; on a bowed instrument it gets that string number. If the string is busy
+the note is still written, on a string of its own, and the reply's `message` says why.
+
+### A fret typed on the tablature: `POST /api/scores/{id}/notes/{note_id}`
+
+```json
+{"action": "fret", "fret": 7}
+```
+
+Makes the note the sound of that fret (counted from the capo) on the string it's played on now, or
+on `"string": 3` if one is given, and plays it there: the standard staff follows, spelled as the key
+spells the sound, and the notes tied to it change with it. `note_id` is the fret number's `-tab` id
+or a note of tablature on its own. Refused with the reason for a rest, a fret past the
+instrument's last, or a note no string plays yet. The page types two-digit frets itself, waiting a
+moment after a first digit that could begin one.
 
 Strings are otherwise chosen automatically for every new or changed note: a string that's free at
 that moment, near where the hand already is, open strings while the hand is low on the neck, and
@@ -120,9 +147,30 @@ They're drawn into the page SVG inside each chord symbol's `g.harm`, as `g.xrn-d
 click on a diagram is a click on its chord. Each system gets room above it for them, chords close
 together on a line get smaller diagrams, and the composer's line moves up out of their way.
 
-A downloaded MusicXML file has each chord's diagram as its `<harmony><frame>`. A file opened with
-`<frame>`s turns diagrams on; a frame that isn't the library's shape (someone's own fingering) is
-kept and drawn as it is.
+A downloaded MusicXML file has each chord's diagram as its `<harmony><frame>`, and none while
+diagrams are off. A file opened with `<frame>`s turns diagrams on; a frame that isn't the library's
+shape (someone's own fingering) is kept and drawn as it is.
+
+### Choosing a chord's shape
+
+While diagrams are shown, each entry of `chords` in `GET /api/scores/{id}` has its `diagram`:
+`{"frets": [null, 3, 2, 0, 1, 0], "barre": null, "first": 1, "custom": false}`, each string's fret
+from the lowest string up, counted from the capo (0 open, `null` not played), the barre as `[fret,
+lowest string, highest string]` counted from the lowest from 0, the fret the diagram starts at, and
+whether it's a shape of the chord's own.
+
+- `GET /api/scores/{id}/chords/{index}/shapes` lists the shapes the chord can be played with, low on
+  the neck first, as `{"chord": "C", "strings": [...], "capo": 0, "frets": 19, "current": {...},
+  "shapes": [{...}, ...]}` (`frets` is how many there are above the capo). Nothing is changed.
+- `POST /api/scores/{id}/chords/{index}/frame` with `{"frets": [null, 3, 5, 5, 5, 3], "barre": [3, 1,
+  5]}` gives the chord that shape, kept as its `<frame>` with its barre; `{"frets": null}` gives it
+  its usual shape again, and so does the usual shape sent as frets. It's an edit, so it can be undone.
+  Refused (422) for the wrong number of strings, no string played, a fret past the last, or a barre
+  that doesn't lie across strings fretted at its fret.
+
+A new tuning or capo (`/strings`) keeps each chosen shape's sound where the strings can still play
+it, moving its frets, and otherwise the chord takes its usual shape. A transposed chord takes its
+usual shape too, and a retyped one is a new chord.
 
 ## Techniques and markings: `POST /api/scores/{id}/marks`
 
@@ -158,6 +206,18 @@ and asking for something else of the same kind replaces it.
   marks on notes. `"self"` means the drawing already carries the id: the element has
   `data-mark="<id>"` (a `g.fing` for fingerings, plucks and string numbers, `g.xrn-bend`, and the
   hammer-on's `g.slur` and its `g.xrn-joined` letter). Don't match these up by order.
+- `"kind": "slide" | "glissando" | "vibrato"`, also `"drawn": "self"`: a `g.gliss` on the staff and
+  another between the fret numbers, and a vibrato's `g.trill`. Removing one removes both its ends.
+- `"kind": "harmonic" | "upbow" | "downbow" | "open" | "stopped" | "staccato" | "staccatissimo" |
+  "tenuto" | "accent" | "marcato"`, `"drawn": "self"`: the `g.artic` Verovio draws inside the note's
+  `g.note` (or its chord's `g.chord`), a guitar's `g.xrn-harmonic` A.H., and for a violin's
+  artificial harmonic the diamond's own `g.note`, which is that harmonic's and not a note to select.
+  Removing a violin's artificial harmonic removes its diamond.
+
+A dead note is its notehead, an "x", so it isn't a mark of its own: its note is selected, and the
+`deadNote` action or the note's `clear` action takes it away. `clear` now takes a player's
+techniques too, a slide's and a glissando's other ends and a violin harmonic's diamond with them,
+and leaves the string and fret a guitar's note is played at.
 
 Removing a hammer-on or pull-off removes both its ends. `{"action": "label", "id": ..., "text": "3"}`
 retypes a clicked fingering, pluck or string number, and a bend as `½`, `full` or `1½`; an empty text
@@ -176,12 +236,17 @@ or `5<17>` for harmonics on the tablature, and "A.H." over a guitar's artificial
 ### Copying and pasting them
 
 `POST /api/scores/{id}/copy` gives each copied event `techniques` (one per note of the chord: its
-`fingering`, `pluck`, `string`, `bend`, `harmonic`, `dead`), `strings` (on a guitar with
-tablature, each note's string) and `joins` (`[later event, "hammerOn" | "pullOff" | "slide" |
-"glissando" | "vibrato"]`). `POST /api/scores/{id}/paste` puts them back, leaving out what the
-instrument pasted into can't have, and the strings once its tablature has the notes, as one edit.
-A violin's artificial harmonic is copied as its stopped note, and the paste adds its diamond. A
-passage's words and lines (P.M., sul G, pizz., positions, hands) aren't copied.
+`fingering`, `pluck`, `string`, `bend`, `harmonic`, `dead`), `strings` (on a guitar, each
+note's string), `joins` (`[later event, "hammerOn" | "pullOff" | "slide" | "glissando" |
+"vibrato"]`), `words` (`[{"kind": "pizzicato", "on": true}]`, `{"kind": "position",
+"number": 3}` or `{"kind": "hand", "name": "RH"}`, at that note) and `lines` (`[later event,
+"P.M." | "let ring" | "sul G" ...]`, a line starting at the note, to the copied note it ends on or
+the copy's last). `POST /api/scores/{id}/paste` puts them back, leaving out what the instrument
+pasted into can't have (palm mute and let ring are a fretted instrument's, sul and pizz. a bowed
+one's, positions either's, hands a keyboard's; a plain staff takes any), and the strings once its
+tablature has the notes, as one edit. Words or a line already there the same stay, rather than
+being toggled away. A violin's artificial harmonic is copied as its stopped note, and the paste
+adds its diamond.
 
 ### A capo
 

@@ -141,6 +141,9 @@ INSTRUMENTS = {
     "electric-guitar-tab": Instrument("Electric Guitar", ("treble8", TAB_CLEF), program=28, family="Strings - Plucked", sound="pluck.guitar.electric", strings=GUITAR_STRINGS, frets=24),
     "bass-guitar": Instrument("Bass Guitar", ("bass",), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass", strings=BASS_STRINGS, frets=20),
     "bass-guitar-tab": Instrument("Bass Guitar", ("bass", TAB_CLEF), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass", strings=BASS_STRINGS, frets=20),
+    # Tablature alone, with its rhythm drawn on it, as many guitarists and bassists read.
+    "guitar-tab-only": Instrument("Guitar", (TAB_CLEF,), program=25, family="Strings - Plucked", sound="pluck.guitar.nylon-string", strings=GUITAR_STRINGS, frets=19),
+    "bass-guitar-tab-only": Instrument("Bass Guitar", (TAB_CLEF,), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass", strings=BASS_STRINGS, frets=20),
     "electric-bass": Instrument("Electric Bass", ("bass",), octaves=-1, program=34, family="Strings - Plucked", sound="pluck.bass.electric", strings=BASS_STRINGS, frets=24),
     "harp": Instrument("Harp", GRAND_STAFF, program=47, family="Strings - Plucked", sound="pluck.harp"),
     "ukulele": Instrument("Ukulele", program=25, family="Strings - Plucked", sound="pluck.ukulele", strings=("G4", "C4", "E4", "A4"), frets=15),
@@ -155,6 +158,7 @@ INSTRUMENTS = {
 STAFF_NAMES = {
     "treble": "Treble staff", "bass": "Bass staff", "guitar-tab": "Guitar + tablature", "acoustic-guitar-tab": "Acoustic Guitar + tablature",
     "electric-guitar-tab": "Electric Guitar + tablature", "bass-guitar-tab": "Bass Guitar + tablature",
+    "guitar-tab-only": "Guitar, tablature only", "bass-guitar-tab-only": "Bass Guitar, tablature only",
 }
 BARLINE_ORDER = ["bar-style", "footnote", "level", "wavy-line", "segno", "coda", "fermata", "ending", "repeat"]
 # A time signature can be drawn as a sign instead of numbers: C for 4/4 and a struck-through C for 2/2.

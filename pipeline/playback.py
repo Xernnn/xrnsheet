@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 
 from chords.vocab import QUALITIES
-from pipeline.fretted import fretboard
+from pipeline.fretted import fretboard, place_of
 from pipeline.marks import ACCENTS, DYNAMICS
 from pipeline.musicxml import chord_from_harmony
 from pipeline.rhythm import STEPS, TAB_COPY, Context, Event, Timeline, alteration_in_key, contexts, is_tied, line_end, read_measure
@@ -472,12 +472,13 @@ class Style:
         instrument = instrument_of(entry)
         frets = {}
         opens = {}
-        if board is not None and board.tab:
+        if board is not None:
             opens = {string: board.open_of(string) + board.capo for string in range(1, board.count + 1)}
             for note in part.iter("note"):
-                string, fret = note.findtext("notations/technical/string"), note.findtext("notations/technical/fret")
-                if (note.findtext("staff") or "1") in board.tab and string and fret and string.isdigit() and fret.isdigit():
-                    frets[(note.get("id") or "").removesuffix(TAB_COPY)] = (int(string), int(fret))
+                # On the tablature, or kept on a note of a guitar without one.
+                found = place_of(note) if not board.tab or (note.findtext("staff") or "1") in board.tab else None
+                if found is not None:
+                    frets[(note.get("id") or "").removesuffix(TAB_COPY)] = found
         changes = []
         for _, timeline, start in bars:
             for mark in timeline.marks:

@@ -31,6 +31,7 @@ const playState = {
   data: null, // The latest playback, for the position and tempo shown while nothing plays.
   wanted: 0,
   chosen: null, // A note or rest selected since, which playback starts from instead, as in MuseScore.
+  starting: null, // Playback on its way, while its notes are fetched: Stop before then stops it starting.
 };
 let player = null;
 
@@ -268,8 +269,8 @@ function showPlaying(on) {
 function playingPlace() {
   const now = player.audio.currentTime;
   const cycle = player.cycles.findLast(item => item.zero <= now) ?? player.cycles[0];
-  const seconds = player.clock(cycle.from) + Math.max(0, now - cycle.zero);
-  return Math.min(player.clock.place(seconds), cycle.until);
+  const seconds = cycle.clock(cycle.from) + Math.max(0, now - cycle.zero);
+  return Math.min(cycle.clock.place(seconds), cycle.until);
 }
 
 // One time through: to the end of the score, or round the loop, which then goes round again.
@@ -283,10 +284,14 @@ function showSounding(data, note, at, until) {
   if (timers && instrumentShown() && (note.part ?? 0) === activePart()) timers.push(soundKey(note.midi, at(Math.min(note.start + note.length, until)) - at(note.start), note.id));
 }
 
+// Each time round a loop can go a little faster (see nextSpeed), shown as that time round begins.
 function playCycle(from, until, zero) {
-  const { audio, data, speed } = player;
+  const { audio, data } = player;
+  const speed = player.cycles.length ? nextSpeed(player.speed) : player.speed;
+  player.speed = speed;
   const { notes, chords, at } = schedule(audio, data, from, zero, speed, until, { metronome: playState.metronome, chords: playState.chords, nodes: player.nodes, only: hearing() });
-  player.cycles.push({ from, until, zero });
+  player.cycles.push({ from, until, zero, clock: clockFor(data, speed) });
+  if (player.cycles.length > 1) player.timers.push(setTimeout(() => showSpeed(speed), Math.max(0, (zero - audio.currentTime) * 1000)));
   for (const note of notes) {
     player.timers.push(setTimeout(() => showSounding(data, note, at, until), (at(note.start) - audio.currentTime) * 1000));
   }
@@ -317,9 +322,13 @@ function playFromNote(id) {
   if (found && !player) drawPosition(found.start);
 }
 
-// Play from a place given, or from the playback position.
-async function startPlaying(place = null) {
+// Play from a place given, or from the playback position. Started again where it was playing, as a
+// new speed or a part to hear does, it's not counted in again.
+async function startPlaying(place = null, counted = true) {
+  const starting = playState.starting = {};
   const data = await fetchPlayback();
+  if (playState.starting !== starting) return; // Stopped, or started again, while its notes came.
+  playState.starting = null;
   if (!data) { message("This sheet couldn't be played."); return; }
   // While entering notes it's where the next note goes, as it always was.
   const fromNote = editor.on ? plainId(editor.cursor) : playState.chosen;
@@ -333,7 +342,7 @@ async function startPlaying(place = null) {
   const nodes = mixerNodes(audio, mixerForPlayback());
   player = { audio, data, nodes, speed: playState.speed, clock: clockFor(data, playState.speed), timers: [], cycles: [], loop };
   // In Practice a bar or two can be counted in first.
-  const lead = countIn(audio, data, from, audio.currentTime + START_DELAY, nodes);
+  const lead = counted ? countIn(audio, data, from, audio.currentTime + START_DELAY, nodes) : 0;
   playCycle(from, loop ? loop.end : data.total, audio.currentTime + START_DELAY + lead);
   showPlaying(true);
   followPlaying();
@@ -351,12 +360,15 @@ function stopPlaying(finished = false) {
   clearPlaying();
   quietKeys();
   showPlaying(false);
+  showWait("");
+  speedBack();
   drawPosition(playState.place);
 }
 
 // In Practice, with someone's notes to wait for, playback waits for you to play them.
 function togglePlaying() {
   if (player || practice.follower) return stopPlaying();
+  if (playState.starting) { playState.starting = null; return; }
   return practising() && practice.waitFor !== "off" ? startFollowing() : startPlaying();
 }
 
@@ -365,7 +377,7 @@ function playFrom(place) {
   playState.chosen = null;
   if (practice.follower) {
     stopPlaying();
-    startFollowing(place);
+    startFollowing(place, false);
     return;
   }
   if (!player) {
@@ -374,7 +386,7 @@ function playFrom(place) {
     return;
   }
   stopPlaying();
-  startPlaying(place);
+  startPlaying(place, false);
 }
 
 function rewind() {
@@ -412,6 +424,7 @@ function toggleMetronome() {
 
 function setSpeed(percent) {
   const value = Math.min(FASTEST_SPEED, Math.max(SLOWEST_SPEED, Math.round(Number(percent) || 100)));
+  practice.startSpeed = null; // A speed chosen is where a stepped-up loop starts from now.
   playState.speed = value / 100;
   $("speed").value = value;
   $("speedValue").value = value;

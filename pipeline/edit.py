@@ -1073,6 +1073,10 @@ def delete_note(root: ET.Element, note_id: str) -> None:
     if note.find("pitch") is None:
         delete_extra_rest(root, note_id)
         return
+    from pipeline.technique import harmonic_kind, remove_harmonic  # It builds on this module.
+
+    if harmonic_kind(note) == ("artificial", "base-pitch"):
+        remove_harmonic(root, note)  # The diamond touched above it goes with it.
     part, context = context_of(root, note)
     if note.find("grace") is not None:
         context.measure.remove(note)
@@ -1379,22 +1383,40 @@ def paste(root: ET.Element, at_id: str, items: list[dict]) -> dict:
 
 
 def clear_marks(root: ET.Element, note_id: str) -> None:
-    """Remove fermatas, ornaments, articulations and bowings, keeping slurs and ties.
+    """Remove fermatas, ornaments, articulations, bowings and a player's techniques, keeping slurs and ties.
 
-    Chord text just above a staff is sometimes misread as one of these, about once a page.
+    Chord text just above a staff is sometimes misread as one of these, about once a page. A dead
+    note's x is one of a guitarist's techniques too, and its notehead becomes a plain one again.
     """
-    notations = find_note(root, note_id).find("notations")
+    from pipeline.technique import harmonic_kind, remove_harmonic  # It builds on this module.
+
+    note = find_note(root, note_id)
     removed = 0
+    for head in note.findall("notehead"):
+        if (head.text or "").strip() == "x":
+            note.remove(head)
+            removed += 1
+    if harmonic_kind(note) == ("artificial", "base-pitch"):
+        remove_harmonic(root, note)  # With the diamond touched above it.
+        removed += 1
+    notations = note.find("notations")
     if notations is not None:
-        for tag in ("fermata", "ornaments", "articulations", "technical", "arpeggiate"):
+        for tag in ("fermata", "ornaments", "articulations", "technical", "arpeggiate", "slide", "glissando"):
             for child in notations.findall(tag):
+                if tag == "technical" and child.find("fret") is not None:
+                    # The string and fret a guitar's note is played at aren't marks.
+                    marks = [mark for mark in child if mark.tag not in ("string", "fret")]
+                    for mark in marks:
+                        child.remove(mark)
+                    removed += len(marks)
+                    continue
                 notations.remove(child)
                 removed += 1
     if not removed:
         raise EditError("This note has no marks to clear")
-    if len(notations) == 0:
-        find_note(root, note_id).remove(notations)
-    repair_slurs(context_of(root, find_note(root, note_id))[0], {"hammer-on", "pull-off", "wavy-line"})  # Their other ends go too.
+    if notations is not None and len(notations) == 0:
+        note.remove(notations)
+    repair_slurs(context_of(root, find_note(root, note_id))[0], {"hammer-on", "pull-off", "wavy-line", "slide", "glissando"})  # Their other ends go too.
 
 
 def list_chords(root: ET.Element) -> list[dict]:
@@ -1435,13 +1457,18 @@ def require_chord(text: str):
     return chord
 
 
-def harmony_at(root: ET.Element, index: int) -> tuple[ET.Element, ET.Element]:
+def harmonies_in_order(root: ET.Element) -> list[tuple[ET.Element, ET.Element]]:
+    """Every chord symbol with its measure, in the order list_chords numbers them."""
     placed = []
     for part_number, part in enumerate(root.findall("part")):
         for measure_index, measure in enumerate(part.findall("measure")):
             placed.extend((measure_index, part_number, measure, harmony) for harmony in measure.findall("harmony"))
     placed.sort(key=lambda item: item[:2])
-    harmonies = [item[2:] for item in placed]
+    return [item[2:] for item in placed]
+
+
+def harmony_at(root: ET.Element, index: int) -> tuple[ET.Element, ET.Element]:
+    harmonies = harmonies_in_order(root)
     if not 0 <= index < len(harmonies):
         raise EditError(f"No chord number {index}")
     return harmonies[index]
