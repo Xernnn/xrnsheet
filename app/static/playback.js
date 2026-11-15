@@ -13,6 +13,25 @@ const FAMILY_SOUNDS = {
   9: { wave: "sine", level: 1.2 }, // Flutes.
 };
 const USUAL_SOUND = { wave: "triangle", level: 1 };
+// Instruments recorded from the real thing: a note every few semitones, each played a little faster
+// or slower for the notes between, as a sampler does. The level makes a middle C's first fifth of a
+// second as loud as the triangle it replaces, so the mix and the metronome keep their balance.
+// Another instrument is one more set, and one more family below, with a folder of its own notes.
+const SAMPLE_SETS = {
+  piano: { name: "piano", folder: "sounds/piano", lowest: 21, highest: 108, every: 3, level: 4.7 }, // The Salamander Grand Piano, A0 to C8 (see its README).
+};
+const SAMPLED_FAMILIES = { 0: SAMPLE_SETS.piano }; // The piano family, General MIDI's first eight sounds.
+// Chord symbols are played softly under the music on the piano, the usual accompaniment, or on the
+// sine wave they had if its recordings can't be had.
+const CHORD_SOUND = { wave: "sine", level: 1, samples: SAMPLE_SETS.piano };
+const CHORD_VOLUME = 0.045;
+const FILE_NAMES = ["C", "Cs", "D", "Ds", "E", "F", "Fs", "G", "Gs", "A", "As", "B"]; // A recording's name, as in "Fs3.mp3".
+// A key let go: the damper comes down on the string and quiets it over this long, rather than cutting it off.
+const DAMPER_SECONDS = 0.3;
+const SLOW_LOADING_MS = 1000; // Getting the recordings ready is mentioned only if it takes longer than this.
+// Each recording is fetched and decoded once, when something first needs it, and kept for every
+// player after: Play, Practice, the keys below and exported audio alike.
+const recordings = { buffers: new Map(), loading: new Map(), decoder: null, warned: false };
 const TICK = { strong: 1760, weak: 1320, seconds: 0.04, level: 0.35 }; // The metronome: higher on the first beat of a bar.
 const SLOWEST_SPEED = 10, FASTEST_SPEED = 300; // Percent of the written tempo, as MuseScore allows.
 const EARLY = 1e-9; // Places are sums of fractions, so a beat may land a hair before where it's due.
@@ -48,6 +67,79 @@ function tone(audio, midi, at, length, volume, wave, destination = audio.destina
   oscillator.connect(gain).connect(destination);
   oscillator.start(at);
   oscillator.stop(end + 0.02);
+}
+
+// The recording nearest a pitch: the note it was recorded at, and where its file is.
+function recordingOf(set, midi) {
+  const count = Math.floor((set.highest - set.lowest) / set.every);
+  const recorded = set.lowest + Math.min(count, Math.max(0, Math.round((midi - set.lowest) / set.every))) * set.every;
+  return { midi: recorded, url: `${set.folder}/${FILE_NAMES[recorded % 12]}${Math.floor(recorded / 12) - 1}.mp3` };
+}
+
+// Fetched and decoded the first time it's asked for. One that can't be had is null, and the
+// instrument plays its stand-in instead, which is said once.
+function loadRecording(url) {
+  if (!recordings.loading.has(url)) {
+    recordings.loading.set(url, (async () => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`${url} answered ${response.status}`);
+      recordings.decoder ??= new OfflineAudioContext(2, 1, AUDIO_RATE);
+      const buffer = await recordings.decoder.decodeAudioData(await response.arrayBuffer());
+      recordings.buffers.set(url, buffer);
+      return buffer;
+    })().catch(error => {
+      if (!recordings.warned) console.warn("A recorded instrument couldn't be loaded, so it plays its stand-in sound.", error);
+      recordings.warned = true;
+      return null;
+    }));
+  }
+  return recordings.loading.get(url);
+}
+
+// A recorded note: the string is struck, rings for as long as the key is held, and is damped when
+// it's let go. Between two recordings it's the nearer one played faster or slower.
+function sampled(audio, set, midi, at, length, volume, destination) {
+  const recording = recordingOf(set, midi);
+  const buffer = recordings.buffers.get(recording.url);
+  if (!buffer) return false;
+  const source = audio.createBufferSource();
+  const gain = audio.createGain();
+  const end = at + Math.max(length, 0.05);
+  // A stereo recording goes through the mixer's pan whole, so it isn't given back what a pan in the
+  // middle takes from a sound in one channel.
+  const level = Math.max(volume * set.level / (buffer.numberOfChannels > 1 ? PAN_LAW : 1), 1e-6);
+  source.buffer = buffer;
+  source.playbackRate.value = 2 ** ((midi - recording.midi) / 12);
+  gain.gain.setValueAtTime(level, at);
+  gain.gain.setValueAtTime(level, end);
+  gain.gain.exponentialRampToValueAtTime(level / 1000, end + DAMPER_SECONDS);
+  source.connect(gain).connect(destination);
+  source.start(at);
+  source.stop(end + DAMPER_SECONDS);
+  return true;
+}
+
+// A note in a part's sound: its recording, where it has one that's ready, or else its wave.
+function play(audio, sound, midi, at, length, volume, destination = audio.destination) {
+  if (sound.samples && sampled(audio, sound.samples, midi, at, length, volume, destination)) return;
+  tone(audio, midi, at, length, volume * sound.level, sound.wave, destination);
+}
+
+// What a playback will play from recordings is fetched before it starts, so its first notes aren't
+// missing. They come from this server, so it's short, and only a wait longer than that is mentioned.
+async function readySamples(data) {
+  if (!data) return data;
+  const wanted = new Set(), names = new Set();
+  const want = (set, midi) => { if (set) { wanted.add(recordingOf(set, midi).url); names.add(set.name); } };
+  for (const note of data.notes) want(soundOf(data, note).samples, note.midi);
+  if (playState.chords) for (const chord of data.chords) chord.midi.forEach(midi => want(CHORD_SOUND.samples, midi));
+  if (!wanted.size) return data;
+  const words = `Getting the ${[...names].join(" and ")} ready…`;
+  const slow = setTimeout(() => message(words), SLOW_LOADING_MS);
+  await Promise.all([...wanted].map(loadRecording));
+  clearTimeout(slow);
+  if ($("message").textContent === words) message("");
+  return data;
 }
 
 // A metronome's tick: a short, bright click that dies away at once.
@@ -87,7 +179,18 @@ function clockFor(data, speed) {
 
 function soundOf(data, note) {
   const program = data.programs?.[note.part] ?? 1;
+  const samples = samplesOf(data, note.part ?? 0);
+  if (samples) return { ...USUAL_SOUND, samples }; // The triangle is what it plays if its recordings can't be had.
   return FAMILY_SOUNDS[Math.floor((program - 1) / 8)] ?? USUAL_SOUND;
+}
+
+// The recordings a part is played with, if its family has them. A part that names no sound is given
+// program 1, the grand piano, so that one is a piano only when the part is a keyboard by its name
+// or its staves, as the instrument below decides, and a melody on a plain staff keeps its triangle.
+function samplesOf(data, part) {
+  const program = data.programs?.[part] ?? 1;
+  if (program === 1 && kindOfPart(part) !== "piano") return null;
+  return SAMPLED_FAMILIES[Math.floor((program - 1) / 8)] ?? null;
 }
 
 // The beat a bar is counted in: its time signature's lower number, or a dotted beat in 6/8, 9/8 and 12/8.
@@ -160,22 +263,22 @@ function applyMixer(settings) {
 }
 
 // Works with speakers or with an offline context, which is how the tests check what would be heard.
-// Nothing is played from `until` on, which is where a loop goes back to its start.
+// Nothing is played from `until` on, which is where a loop goes back to its start. A recorded
+// instrument plays the recordings readySamples has fetched, and its stand-in for any it hasn't.
 function schedule(audio, data, from, zero, speed = 1, until = Infinity, options = {}) {
   const clock = clockFor(data, speed);
   const at = place => zero + clock(place) - clock(from);
   const nodes = options.nodes ?? mixerNodes(audio, options.mixer);
   const notes = data.notes.filter(note => note.start >= from && note.start < until && (!options.only || options.only(note)));
   for (const note of notes) {
-    const { wave, level } = soundOf(data, note);
     const ends = Math.min(note.start + note.length, until);
-    tone(audio, note.midi, at(note.start), at(ends) - at(note.start), 0.4 * note.volume ** 2 * level, wave, nodes.part(note.part ?? 0).gain);
+    play(audio, soundOf(data, note), note.midi, at(note.start), at(ends) - at(note.start), 0.4 * note.volume ** 2, nodes.part(note.part ?? 0).gain);
   }
   const chords = options.chords === false ? [] : data.chords.filter(chord => chord.start + chord.length > from && chord.start < until);
   for (const chord of chords) {
     const begins = Math.max(chord.start, from);
     const ends = Math.min(chord.start + chord.length, until);
-    for (const midi of chord.midi) tone(audio, midi, at(begins), at(ends) - at(begins), 0.045, "sine", nodes.chords.gain);
+    for (const midi of chord.midi) play(audio, CHORD_SOUND, midi, at(begins), at(ends) - at(begins), CHORD_VOLUME, nodes.chords.gain);
   }
   const beats = options.metronome ? beatsBetween(data, from, Math.min(until, data.total)) : [];
   for (const beat of beats) tick(audio, at(beat.place), beat.strong, nodes.metronome.gain);
@@ -219,7 +322,7 @@ async function fetchPlayback() {
 // it's switched on.
 function saveAudio() {
   return enqueue(async () => {
-    const data = await fetchPlayback();
+    const data = await readySamples(await fetchPlayback());
     const seconds = clockFor(data, 1)(data.total) + AUDIO_TAIL_SECONDS;
     const audio = new OfflineAudioContext(2, Math.ceil(seconds * AUDIO_RATE), AUDIO_RATE);
     schedule(audio, data, 0, 0, 1, Infinity, { metronome: playState.metronome, chords: playState.chords, mixer: mixerForPlayback() });
@@ -387,7 +490,7 @@ function playFromNote(id) {
 // new speed or a part to hear does, it's not counted in again.
 async function startPlaying(place = null, counted = true) {
   const starting = playState.starting = {};
-  const data = await fetchPlayback();
+  const data = await readySamples(await fetchPlayback());
   if (playState.starting !== starting) return; // Stopped, or started again, while its notes came.
   playState.starting = null;
   if (!data) { message("This sheet couldn't be played."); return; }

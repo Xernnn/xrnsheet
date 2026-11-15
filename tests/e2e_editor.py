@@ -13,6 +13,7 @@ crashes. It isn't collected by pytest, because it needs a browser and a running 
 import argparse
 import array
 import json
+import math
 import os
 import shutil
 import urllib.request
@@ -2159,6 +2160,121 @@ def test_audio_file(page, base: str, created: list[str]) -> None:
     check("a stereo file keeps left and right side by side", paired == [2, 44100 * 4, 4, 32767, 0, 0, -32767], paired)
 
 
+# Count what the speakers' playback makes its sounds with from here on: an oscillator for each
+# stand-in wave, a buffer source for each recording. Exported audio's offline context isn't counted.
+COUNT_SOUNDS = """() => {
+    window.made = { oscillators: 0, recordings: 0 };
+    if (window.countingSounds) return;
+    window.countingSounds = true;
+    const live = AudioContext.prototype, oscillator = live.createOscillator, source = live.createBufferSource;
+    live.createOscillator = function () { made.oscillators += 1; return oscillator.call(this); };
+    live.createBufferSource = function () { made.recordings += 1; return source.call(this); };
+}"""
+
+
+def loudness(samples: array.array, rate: int, start: float, end: float) -> float:
+    """The RMS of a stereo WAV's samples between two times, in seconds."""
+    window = samples[int(start * rate) * 2 : int(end * rate) * 2]
+    return math.sqrt(sum(sample * sample for sample in window) / max(1, len(window)))
+
+
+def held_piano_note(page, base: str, created: list[str]) -> str:
+    """A piano score of one bar: middle C as a whole note at 40 a minute, six seconds long."""
+    score_id = open_blank(page, base, created, bars=1, staff="piano")
+    page.keyboard.press("Escape")
+    show_instrument(page)
+    page.keyboard.press("n")
+    page.keyboard.press("7")
+    page.locator('#pianoKeys [data-midi="60"]').click()
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    select_notes(page, 0)
+    menu(page, "Add", "Text", "Tempo marking")
+    page.fill("#chordInput", "40")
+    page.keyboard.press("Enter")
+    settle(page)
+    page.keyboard.press("Escape")
+    if page.evaluate("() => playState.metronome"):
+        page.click("#metronome")
+    return score_id
+
+
+def test_piano_sound(context, base: str, created: list[str]) -> None:
+    page = context.new_page()
+    score_id = held_piano_note(page, base, created)
+    data = json.loads(fetch_text(base, f"/api/scores/{score_id}/playback"))
+    check("a piano score of one held middle C, played slowly", [(note["midi"], note["length"]) for note in data["notes"]] == [(60, 4.0)] and data["tempo"] == 40, (data["notes"], data["tempo"]))
+    with page.expect_download() as download:
+        menu(page, "File", "Export", "Audio (WAV)")
+    with wave.open(str(download.value.path())) as sound:
+        rate = sound.getframerate()
+        samples = array.array("h", sound.readframes(sound.getnframes()))
+    struck, later = loudness(samples, rate, 0, 0.2), loudness(samples, rate, 2, 2.5)
+    check("exported, the piano can be heard", max(abs(sample) for sample in samples[: int(rate * 0.2) * 2]) > 3000)
+    # A triangle wave held for six seconds is still nine tenths as loud two seconds in.
+    check("and its held note dies away, as a struck string does, where a synthesizer's would hold", struck > 4 * later, (round(struck), round(later)))
+    check("let go, the damper quiets it rather than leaving it ringing", max(abs(sample) for sample in samples[int(rate * 6.35) * 2 :]) == 0)
+    page.evaluate(COUNT_SOUNDS)
+    page.click("#play")
+    wait_playing(page, True)
+    made = page.evaluate("() => made")
+    page.click("#play")
+    wait_playing(page, False)
+    check("Play sounds a piano's notes from its recordings, with no oscillator", made["recordings"] >= 1 and made["oscillators"] == 0, made)
+    page.evaluate(COUNT_SOUNDS)
+    page.locator('#pianoKeys [data-midi="64"]').click()
+    page.wait_for_function("() => made.recordings + made.oscillators > 0")
+    made = page.evaluate("() => made")
+    check("a key of the keyboard below sounds the piano, a recording it hadn't needed yet", made == {"oscillators": 0, "recordings": 1}, made)
+    page.evaluate(COUNT_SOUNDS)
+    select_notes(page, 0)
+    page.wait_for_function("() => made.recordings + made.oscillators > 0")
+    made = page.evaluate("() => made")
+    check("and so does a note selected", made == {"oscillators": 0, "recordings": 1}, made)
+    menu(page, "Add", "Text", "Chord symbol")
+    page.fill("#chordInput", "C")
+    page.keyboard.press("Enter")
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    page.evaluate(COUNT_SOUNDS)
+    page.click("#play")
+    wait_playing(page, True)
+    made = page.evaluate("() => made")
+    page.click("#play")
+    wait_playing(page, False)
+    check("chord symbols are played softly on the piano too: the note and C E G", made == {"oscillators": 0, "recordings": 4}, made)
+
+    fresh = context.new_page()
+    fresh.goto(f"{base}/#{score_id}")
+    fresh.wait_for_selector("#pages svg")
+    fresh.evaluate(COUNT_SOUNDS)
+    fresh.click("#play")
+    wait_playing(fresh, True)
+    made = fresh.evaluate("() => made")
+    fresh.click("#play")
+    check("the first Play waits for the recordings, so none of its notes is left to the old sound", made == {"oscillators": 0, "recordings": 4}, made)
+    check("and says nothing about it, as they're here in a moment", fresh.is_hidden("#message"), fresh.inner_text("#message"))
+    fresh.close()
+
+    broken = context.new_page()
+    warned: list[str] = []
+    broken.on("console", lambda item: warned.append(item.text) if item.type == "warning" else None)
+    broken.route("**/sounds/piano/*", lambda route: route.fulfill(status=404, body=""))
+    broken.goto(f"{base}/#{score_id}")
+    broken.wait_for_selector("#pages svg")
+    broken.evaluate(COUNT_SOUNDS)
+    broken.click("#play")
+    wait_playing(broken, True)
+    made = broken.evaluate("() => made")
+    broken.click("#play")
+    said = [text for text in warned if "couldn't be loaded" in text]
+    check("without its recordings a piano still plays, on its old sound, and says why once", made["oscillators"] >= 1 and made["recordings"] == 0 and len(said) == 1, (made, said))
+    broken.close()
+    page.close()
+
+
 def mixer_strip(page, name: str):
     return page.locator(f'#mixerStrips .strip:has(.name:text-is("{name}"))')
 
@@ -4209,9 +4325,12 @@ def test_practice(context, base: str, shots: Path | None, created: list[str]) ->
     check("it doesn't move on while it waits", page.evaluate("() => followerPlace()") == 0)
     page.evaluate("() => press(74)")
     check("a wrong note is named", page.inner_text("#waitState").startswith("That was D5"), page.inner_text("#waitState"))
+    page.evaluate(COUNT_SOUNDS)
     page.evaluate("() => press(72)")
     page.wait_for_function("() => practice.follower?.index === 1 && practice.follower.arrived")
     check("the right one on a MIDI keyboard plays on to the next", page.inner_text("#waitState") == "Play D5", page.inner_text("#waitState"))
+    made = page.evaluate("() => made")
+    check("the note played and the left hand playing along are both the piano's recordings", made["oscillators"] == 0 and made["recordings"] >= 2, made)
     page.locator('#pianoKeys [data-midi="74"]').dispatch_event("pointerdown")
     page.wait_for_timeout(300)
     check("and so does the keyboard below", page.evaluate("() => practice.follower?.index") == 2, page.evaluate("() => practice.follower?.index"))
@@ -4791,6 +4910,7 @@ def main() -> None:
             test_instrument_sounds(page, base, created)
             test_pickup(page, base, created)
             test_audio_file(page, base, created)
+            test_piano_sound(context, base, created)
             test_mixer(page, base, arguments.shots, created)
             test_piano_keyboard(page, base, arguments.shots, created)
             test_timeline(page, base, arguments.shots, created)

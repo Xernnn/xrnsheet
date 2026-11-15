@@ -617,6 +617,17 @@ def test_midi_downloads_with_its_own_type(client, ready_score):
     assert response.headers["content-type"] == "audio/midi"
 
 
+def test_the_piano_samples_are_served_as_audio(client):
+    """A piano part plays recordings of each minor third from A0 to C8, which the page fetches by name."""
+    names = ["A0", *(f"{letter}{octave}" for octave in range(1, 8) for letter in ("C", "Ds", "Fs", "A")), "C8"]
+    assert len(names) == 30
+    for name in names:
+        response = client.get(f"/sounds/piano/{name}.mp3")
+        assert response.status_code == 200, name
+        assert response.headers["content-type"] == "audio/mpeg", name
+        assert response.content.startswith(b"ID3"), name
+
+
 def test_marks_carry_through_copy_and_paste_over_the_server(client, ready_score):
     url = f"/api/scores/{ready_score}"
     client.post(f"{url}/marks", json={"action": "toggle", "name": "accent", "notes": ["note0"]})
