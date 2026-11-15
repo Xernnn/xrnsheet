@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from helpers import harmony, note, parsed, tied_note
 from PIL import Image
+from reading_stand_in import write_stand_in
 
 from app import server
 from pipeline import rhythm
@@ -25,6 +26,8 @@ from pipeline.musicxml import to_text
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "JOB_DIR", tmp_path)
     monkeypatch.setattr(server, "stopping", threading.Event())  # Each test's app has yet to stop.
+    for name, empty in (("line", []), ("began", {}), ("cancelled", set())):
+        monkeypatch.setattr(server, name, empty)  # And nothing waiting to be read.
     return TestClient(server.app, base_url="http://127.0.0.1:8000")
 
 
@@ -92,6 +95,51 @@ def test_marking_a_sheet_checked_round_trips(client, ready_score):
     assert client.post(f"/api/scores/{ready_score}/checked", json={"checked": False}).json()["checked"] is False
 
 
+def test_a_sheet_un_marked_is_no_longer_learnt_from(client, tmp_path, monkeypatch):
+    """Checked sheets are taught to the chord reader as right, so one marked by mistake must come out
+    of what was gathered for it too, as retraining reads that until it's gathered again."""
+    from test_corrections import recognized, write_sheet
+
+    out = tmp_path / "corrections"
+    monkeypatch.setattr(server.corrections, "OUT_DIR", out)
+    sheet = write_sheet(server.JOB_DIR, "f" * 32, [recognized(0, 0.0, "C")], ["D"])
+    other = write_sheet(server.JOB_DIR, "e" * 32, [recognized(0, 0.0, "F")], ["G"], upload=b"other")
+    for folder in (sheet, other):
+        server.write_status(folder, "ready")
+        (folder / "recognized" / "pages.json").write_text("[1]")
+    server.corrections.export(server.JOB_DIR, out)
+    gathered = {row["sheet"]: row["image"] for row in server.corrections.load_labels(out)}
+    assert set(gathered) == {sheet.name, other.name}
+    assert client.post(f"/api/scores/{sheet.name}/checked", json={"checked": False}).json()["checked"] is False
+    assert [row["sheet"] for row in server.corrections.load_labels(out)] == [other.name]
+    assert not (out / gathered[sheet.name]).exists() and (out / gathered[other.name]).exists()
+    assert server.corrections.checked_sheets(server.JOB_DIR) == [other]
+    assert client.post(f"/api/scores/{sheet.name}/checked", json={"checked": True}).json()["checked"] is True
+    assert server.corrections.checked_sheets(server.JOB_DIR) == [other, sheet]  # Marked again, it's gathered next time.
+
+
+def test_a_checked_sheet_deleted_is_no_longer_learnt_from(client, tmp_path, monkeypatch):
+    """A deleted sheet sits in the trash, where gathering doesn't look, but what was gathered from it
+    already must come out too, as retraining reads that until it's gathered again."""
+    from test_corrections import recognized, write_sheet
+
+    out = tmp_path / "corrections"
+    monkeypatch.setattr(server.corrections, "OUT_DIR", out)
+    sheet = write_sheet(server.JOB_DIR, "f" * 32, [recognized(0, 0.0, "C")], ["D"])
+    other = write_sheet(server.JOB_DIR, "e" * 32, [recognized(0, 0.0, "F")], ["G"], upload=b"other")
+    for folder in (sheet, other):
+        server.write_status(folder, "ready")
+        (folder / "recognized" / "pages.json").write_text("[1]")
+    server.corrections.export(server.JOB_DIR, out)
+    gathered = {row["sheet"]: row["image"] for row in server.corrections.load_labels(out)}
+    assert client.delete(f"/api/scores/{sheet.name}").json()["undo"] is True
+    assert [row["sheet"] for row in server.corrections.load_labels(out)] == [other.name]
+    assert not (out / gathered[sheet.name]).exists() and (out / gathered[other.name]).exists()
+    assert server.corrections.checked_sheets(server.JOB_DIR) == [other]
+    assert client.post(f"/api/scores/{sheet.name}/restore").status_code == 200
+    assert server.corrections.checked_sheets(server.JOB_DIR) == [other, sheet]  # Back, and still checked, it's gathered next time.
+
+
 def test_a_sheet_still_reading_cannot_be_checked(client):
     score_id = "c" * 32
     folder = server.JOB_DIR / score_id
@@ -100,12 +148,13 @@ def test_a_sheet_still_reading_cannot_be_checked(client):
     assert client.post(f"/api/scores/{score_id}/checked", json={"checked": True}).status_code == 409
 
 
-def test_finished_sheets_are_listed_and_unfinished_ones_are_not(client, ready_score):
+def test_sheets_are_listed_with_how_far_they_have_got(client, ready_score):
     unfinished = server.JOB_DIR / ("d" * 32)
     unfinished.mkdir()
     server.write_status(unfinished, "processing")
-    sheets = client.get("/api/scores").json()
-    assert [sheet["id"] for sheet in sheets] == [ready_score] and sheets[0]["pages"] == 1
+    sheets = {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}
+    assert sheets[ready_score]["status"] == "ready" and sheets[ready_score]["pages"] == 1
+    assert sheets[unfinished.name]["status"] == "processing"
 
 
 def test_a_missing_source_page_is_not_found(client, ready_score):
@@ -133,6 +182,65 @@ def fake_recognizer(failing=()):
         return None
 
     return recognize
+
+
+def page_with_its_places(image, out_dir):
+    """Stand in for reading a page of four bars of four quarter notes, two bars a line, keeping where they are.
+
+    Each line runs from x 50 to 850 with a barline at 450 and a note every 100 from x 100, the first
+    line's staff from y 100 to 140, the second's from 300 to 340. A C chord is found on the first beat.
+    """
+    out_dir.mkdir(parents=True)
+    bar = "".join(note(step) for step in "CDEF")
+    root = parsed(harmony("C", "", "major") + bar, bar, '<print new-system="yes"/>' + bar, bar)
+    (out_dir / "page.musicxml").write_text(to_text(root), encoding="utf-8")
+    item = {"text": "C", "chord": "C", "confidence": 0.9, "box": [90, 70, 130, 90], "measure": 0, "onset": 0.0}
+    (out_dir / "chords.json").write_text(json.dumps([item]), encoding="utf-8")
+    lines = [{"left": 50, "right": 850, "top": top, "bottom": top + 40, "unit": 10, "bars": [450], "notes": [100, 200, 300, 400, 500, 600, 700, 800]} for top in (100, 300)]
+    (out_dir / "layout.json").write_text(json.dumps(lines), encoding="utf-8")
+    Image.new("RGB", (900, 400), "white").save(out_dir / "page.jpg")
+
+
+def chords_of(client, score_id):
+    return [(chord["text"], chord["measure"], chord["onset"]) for chord in client.get(f"/api/scores/{score_id}").json()["chords"]]
+
+
+def test_a_chord_missed_is_added_where_it_was_clicked_on_the_original(client, monkeypatch):
+    """A chord the reader missed had no box and couldn't be added from the original, only from a note in the score."""
+    monkeypatch.setattr(server, "recognize_page", page_with_its_places)
+    folder, upload = job_for_pdf(2)
+    server.recognize_job(folder, upload)
+    url = f"/api/scores/{folder.name}"
+    lines = client.get(f"{url}/source/2/layout").json()["lines"]
+    assert [[bar["measure"] for bar in line["bars"]] for line in lines] == [[4, 5], [6, 7]]  # Page 2 starts at the score's fifth bar.
+    assert [(beat["onset"], beat["x"]) for beat in lines[0]["bars"][1]["beats"]] == [(0.0, 500), (1.0, 600), (2.0, 700), (3.0, 800)]
+    assert (lines[1]["top"], lines[1]["bottom"], lines[0]["bars"][1]["left"], lines[0]["bars"][1]["right"]) == (300, 340, 450, 850)
+
+    box = [690, 75, 730, 95]
+    added = client.post(f"{url}/chords/at", json={"measure": 5, "onset": 2.0, "text": "G7", "page": 2, "box": box}).json()
+    found = next(chord for chord in added["chords"] if chord["text"] == "G7")
+    assert (found["measure"], found["onset"], found["box"], found["page"], found["added"]) == (5, 2.0, box, 2, True)
+    assert client.post(f"{url}/chords/at", json={"measure": 5, "onset": 2.0, "text": "A7"}).status_code == 422  # One's there already.
+    assert "G7" not in (folder / "recognized" / "chords.json").read_text()  # What the reader found is what it learns from.
+    client.post(f"{url}/undo")
+    assert ("G7", 5, 2.0) not in chords_of(client, folder.name)
+
+    first = server.current_root(folder).find("part/measure/note").get("id")
+    client.post(f"{url}/bars", json={"action": "insert", "note": first})
+    client.post(f"{url}/chords/at", json={"measure": 5, "onset": 1.0, "text": "Dm7"})
+    assert ("Dm7", 6, 1.0) in chords_of(client, folder.name)  # In the bar read as the sixth, wherever it is now.
+    sixth = next(measure for measure in server.current_root(folder).find("part").findall("measure") if measure.get("id") == "m5")
+    client.post(f"{url}/bars", json={"action": "delete", "note": sixth.find("note").get("id")})
+    refused = client.post(f"{url}/chords/at", json={"measure": 5, "onset": 0.0, "text": "C"})
+    assert refused.status_code == 422 and "deleted" in refused.json()["detail"]
+
+
+def test_a_page_read_before_its_places_were_kept_says_so(client, monkeypatch):
+    monkeypatch.setattr(server, "recognize_page", fake_recognizer())
+    folder, upload = job_for_pdf(1)
+    server.recognize_job(folder, upload)
+    assert client.get(f"/api/scores/{folder.name}/source/1/layout").json() == {"lines": []}
+    assert client.get(f"/api/scores/{folder.name}/source/3/layout").status_code == 404
 
 
 def job_for_pdf(count):
@@ -844,6 +952,158 @@ def test_a_sheet_whose_reading_was_stopped_is_left_for_the_next_start_to_report(
     folder, upload = job_for_pdf(3)
     server.recognize_job(folder, upload)
     assert tried == ["page_001", "page_002"] and server.read_status(folder)["status"] == "processing"
+
+
+def photo(shade="black"):
+    """A small photo, with something dark on it unless it's all white."""
+    image = Image.new("RGB", (120, 80), "white")
+    image.paste(Image.new("RGB", (100, 4), shade), (10, 30))
+    data = io.BytesIO()
+    image.save(data, format="PNG")
+    return data.getvalue()
+
+
+def upload_photo(client, name, shade="black"):
+    response = client.post("/api/scores", files={"file": (name, io.BytesIO(photo(shade)))})
+    assert response.status_code == 200
+    return response.json()["id"]
+
+
+def until(condition, seconds=20):
+    for _ in range(int(seconds / 0.05)):
+        if condition():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_sheet_waiting_its_turn_is_listed_with_how_many_are_ahead(client, monkeypatch):
+    """The window used to say nothing about a second sheet, which waited unseen behind the first."""
+    finish = threading.Event()
+    read = []
+
+    def slow(folder, upload):
+        read.append(folder.name)
+        finish.wait(20)
+        server.write_status(folder, "failed", "Recognition failed.")
+
+    monkeypatch.setattr(server, "recognize_job", slow)
+    first = upload_photo(client, "first page.jpg")
+    second = upload_photo(client, "second page.jpg")
+    try:
+        assert until(lambda: read == [first])
+        sheets = {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}
+        assert sheets[first]["status"] == sheets[second]["status"] == "processing"
+        assert (sheets[first]["ahead"], sheets[second]["ahead"]) == (0, 1)
+        assert sheets[first]["name"] == "first page.jpg" and sheets[first]["elapsed"] is not None and sheets[second]["elapsed"] is None
+        assert client.get(f"/api/scores/{second}").json() | {"message": ""} == {"status": "processing", "message": "", "name": "second page.jpg", "pdf": False, "ahead": 1, "elapsed": None}
+    finally:
+        finish.set()
+    assert until(lambda: read == [first, second] and not server.line)
+
+
+def test_cancelling_a_sheet_waiting_its_turn_removes_it_unread(client, monkeypatch):
+    finish = threading.Event()
+    read = []
+
+    def slow(folder, upload):
+        read.append(folder.name)
+        finish.wait(20)
+        server.write_status(folder, "failed", "Recognition failed.")
+
+    monkeypatch.setattr(server, "recognize_job", slow)
+    first = upload_photo(client, "first.png")
+    second = upload_photo(client, "second.png")
+    try:
+        assert until(lambda: read == [first])
+        assert client.delete(f"/api/scores/{second}").json() == {"removed": second, "undo": False}
+        assert not (server.JOB_DIR / second).exists() and [sheet["id"] for sheet in client.get("/api/scores").json()] == [first]
+    finally:
+        finish.set()
+    assert until(lambda: not server.line) and read == [first]
+
+
+def test_cancelling_the_sheet_being_read_stops_its_reader_and_starts_the_next(client, tmp_path, monkeypatch):
+    """Cancel has to stop the reader itself: hidden, it would hold its memory and the line for minutes."""
+    stand_in = write_stand_in(tmp_path / "stand_in", seconds=60)
+    monkeypatch.setattr(server, "ROOT", stand_in)
+    monkeypatch.setattr(server.shutil, "which", lambda name: None)
+    started = stand_in / "started"
+    first = upload_photo(client, "first.png")
+    second = upload_photo(client, "second.png")
+    readers = []
+    try:
+        assert until(lambda: started.exists() and started.read_text())
+        readers.append(int(started.read_text()))
+        assert client.delete(f"/api/scores/{first}").json() == {"removed": first, "undo": False}
+        with pytest.raises(ProcessLookupError):
+            os.kill(readers[0], 0)
+        assert not (server.JOB_DIR / first).exists()
+        assert client.get(f"/api/scores/{first}").status_code == 404
+        assert until(lambda: started.read_text() != str(readers[0]))  # The next sheet's turn has come.
+        readers.append(int(started.read_text()))
+        assert [(sheet["id"], sheet["ahead"]) for sheet in client.get("/api/scores").json()] == [(second, 0)]
+        assert client.delete(f"/api/scores/{second}").json() == {"removed": second, "undo": False}
+        assert until(lambda: not server.line) and not (server.JOB_DIR / second).exists()
+    finally:
+        for reader in readers:
+            try:
+                os.kill(reader, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_a_sheet_that_could_not_be_read_stays_listed_with_why_to_read_again_or_remove(client, ready_score, monkeypatch):
+    """It was dropped with a message that went as soon as anything else was done, and nobody saw it if they'd gone elsewhere."""
+    def ready(folder, upload):
+        root = parsed(note() + note("D") + note("E") + note("F"))
+        server.edit.ensure_note_ids(root)
+        server.save_version(folder, root)
+        server.write_status(folder, "ready")
+
+    monkeypatch.setattr(server, "recognize_job", lambda folder, upload: server.write_status(folder, "failed", server.NO_STAVES))
+    failed = upload_photo(client, "blurry.jpg")
+    assert until(lambda: not server.line)
+    listed = {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}[failed]
+    assert (listed["status"], listed["message"], listed["name"]) == ("failed", server.NO_STAVES, "blurry.jpg")
+    monkeypatch.setattr(server, "recognize_job", ready)
+    assert client.post(f"/api/scores/{failed}/retry").json() == {"id": failed}
+    assert until(lambda: not server.line) and client.get(f"/api/scores/{failed}").json()["status"] == "ready"
+    assert client.post(f"/api/scores/{failed}/retry").status_code == 409  # Read now, so there's nothing to try again.
+
+    monkeypatch.setattr(server, "recognize_job", lambda folder, upload: server.write_status(folder, "failed", server.NO_STAVES))
+    other = upload_photo(client, "dark.jpg")
+    assert until(lambda: not server.line)
+    assert client.delete(f"/api/scores/{other}").json() == {"removed": other, "undo": True} and not (server.JOB_DIR / other).exists()
+    assert client.post(f"/api/scores/{other}/restore").json() == {"id": other}
+    assert {sheet["id"]: sheet["status"] for sheet in client.get("/api/scores").json()}[other] == "failed"  # Back as it was.
+
+
+def test_a_deleted_score_leaves_the_library_and_comes_back_if_undone(client, ready_score):
+    """There was no way to delete a score at all."""
+    url = f"/api/scores/{ready_score}"
+    client.post(f"{url}/chords/0", json={"text": "Bb7"})
+    client.post(f"{url}/checked", json={"checked": True})
+    assert client.delete(url).json() == {"removed": ready_score, "undo": True}
+    assert client.get(url).status_code == 404 and client.get("/api/scores").json() == []
+    assert server.corrections.checked_sheets(server.JOB_DIR) == []  # Nor is it learnt from.
+    assert client.post(f"{url}/chords/0", json={"text": "C"}).status_code == 404
+    assert client.post(f"{url}/restore").json() == {"id": ready_score}
+    back = client.get(url).json()
+    assert back["chords"][0]["text"] == "Bb7" and back["canUndo"] is True and back["checked"] is True  # As it was.
+    assert [sheet["id"] for sheet in client.get("/api/scores").json()] == [ready_score]
+    assert client.post(f"{url}/restore").status_code == 404  # Nothing left to bring back.
+
+
+def test_the_trash_is_emptied_a_week_after_a_delete(client, ready_score):
+    client.delete(f"/api/scores/{ready_score}")
+    kept = server.JOB_DIR / server.TRASH / ready_score
+    week = time.time() - server.TRASH_SECONDS - 60
+    os.utime(kept, (week, week))
+    other = blank(client)
+    client.delete(f"/api/scores/{other}")  # Deleting empties what's old.
+    assert not kept.exists() and (server.JOB_DIR / server.TRASH / other).exists()
+    assert client.post(f"/api/scores/{ready_score}/restore").status_code == 404
 
 
 def long_score(name):

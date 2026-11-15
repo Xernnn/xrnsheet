@@ -37,12 +37,13 @@ from pydantic import BaseModel
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from chords import corrections
 from chords.fonts import ROOT
-from pipeline import concert, diagrams, edit, fretted, layout, marks, mixer, structure, technique, transpose
+from pipeline import align, concert, diagrams, edit, fretted, layout, marks, mixer, structure, technique, transpose
 from pipeline.engrave import VIEWS, export_pdf, glyph_script, keep_lines, page_size, render_pages, system_starts
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
-from pipeline.musicxml import UnreadableScore, read_score_file, to_text
+from pipeline.musicxml import UnreadableScore, read_measures, read_score_file, to_text
 from pipeline.playback import playback
 from pipeline.rhythm import fit_divisions, indexed
 from pipeline.timeline import places, timeline
@@ -64,15 +65,22 @@ MEMORY_LIMIT = "6G"
 DRAWINGS_KEPT = 4  # A long score's drawing is a few megabytes, so only the last few are kept.
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
+SOURCE_FILE = "source.json"  # The name of the file a sheet is read from, to call it by until it has a title.
+CANCEL_WAIT_SECONDS = 10  # How long a cancel waits for the page being read to stop, which is usually at once.
+TRASH = ".trash"  # In the folder of scores: those deleted, kept a while so a delete can be undone.
+TRASH_SECONDS = 7 * 24 * 60 * 60
 OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
 ONLY_READS = {"GET", "HEAD", "OPTIONS"}
 OPENED_FILE = "opened.json"  # Beside a score opened from a MusicXML file.
+LAYOUT_FILE = "layout.json"  # Beside each page read: where its lines of music, barlines and notes are.
+ADDED_FILE = "added.json"  # Chords added from the original sheet, with where they were clicked, for their boxes.
 FIRST_VERSION_HEAD = 8192  # Where a file names the program that wrote it, near its start.
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     fail_interrupted_jobs()
+    empty_trash()
     yield
     stop_reading()
 
@@ -148,9 +156,15 @@ class SizeLimit:
 app = FastAPI(title="xrnsheet", lifespan=lifespan)
 app.add_middleware(SizeLimit)
 app.add_middleware(OwnPagesOnly)
-one_at_a_time = threading.Semaphore(1)  # Recognition is memory hungry.
-# The page being read now, and whether the app is stopping, so that the page can stop with it.
-reading: set[subprocess.Popen] = set()
+# Sheets to be read, by id, in the order they came. The first is the one being read: recognition is
+# memory hungry, so sheets are read one at a time, and the page shows each its place in the line.
+line: list[str] = []
+line_changed = threading.Condition()
+began: dict[str, float] = {}  # When the sheet being read began, for the page to show how long it has taken.
+cancelled: set[str] = set()  # Sheets whose reading is being stopped, to be removed as they leave the line.
+# The page being read now, by the folder it's read into, and whether the app is stopping, so that
+# the page can stop with it.
+reading: dict[subprocess.Popen, Path] = {}
 reading_lock = threading.Lock()
 stopping = threading.Event()
 # Edits read the latest version and write the next one, so two at once would lose one of them.
@@ -164,6 +178,17 @@ class ChordEdit(BaseModel):
 class ChordAdd(BaseModel):
     note: str
     text: str
+
+
+class ChordAt(BaseModel):
+    """A chord the reader missed, at a bar numbered as the score was read and a place in it in quarter notes,
+    with where on which page of the original it was clicked."""
+
+    measure: int
+    onset: float
+    text: str
+    page: int | None = None
+    box: list[float] | None = None
 
 
 class ChordFrame(BaseModel):
@@ -453,7 +478,7 @@ def recognize_page(image: Path, out_dir: Path) -> str | None:
         if stopping.is_set():
             return INTERRUPTED
         process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        reading.add(process)
+        reading[process] = out_dir
     try:
         _, errors = process.communicate(timeout=PAGE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
@@ -462,7 +487,7 @@ def recognize_page(image: Path, out_dir: Path) -> str | None:
         return "Recognition took too long."
     finally:
         with reading_lock:
-            reading.discard(process)
+            reading.pop(process, None)
     if process.returncode == 0 and list(out_dir.glob("*.musicxml")):
         return None
     print(errors[-2000:], file=sys.stderr)
@@ -479,6 +504,8 @@ def stop_reading() -> None:
         stopping.set()
         for process in reading:
             process.kill()
+    with line_changed:
+        line_changed.notify_all()  # Sheets waiting their turn stop waiting, and are reported at the next start.
 
 
 def combine_pages(folder: Path, numbers: list[int]) -> ET.Element:
@@ -494,38 +521,97 @@ def combine_pages(folder: Path, numbers: list[int]) -> ET.Element:
     return merged
 
 
+def given_up(folder: Path) -> bool:
+    """Say whether a sheet's reading is to stop: the app is stopping, or someone cancelled it."""
+    return stopping.is_set() or folder.name in cancelled
+
+
 def recognize_job(folder: Path, upload: Path) -> None:
-    with one_at_a_time:
-        try:
-            images, note = pdf_to_images(upload) if upload.suffix.lower() == ".pdf" else ([upload], "")
-            if not images:
-                write_status(folder, "failed", "That PDF has no pages.")
+    try:
+        images, note = pdf_to_images(upload) if upload.suffix.lower() == ".pdf" else ([upload], "")
+        if not images:
+            write_status(folder, "failed", "That PDF has no pages.")
+            return
+        read, failed = [], {}
+        for number, image in enumerate(images, start=1):
+            if given_up(folder):
                 return
-            read, failed = [], {}
-            for number, image in enumerate(images, start=1):
-                if len(images) > 1:
-                    write_status(folder, "processing", f"Reading page {number} of {len(images)}.")
-                reason = recognize_page(image, folder / "recognized" / f"page_{number:03d}")
-                if stopping.is_set():
-                    return  # It's left as still being read, which the next start reports as interrupted.
-                if reason is None:
-                    read.append(number)
-                else:
-                    failed[number] = reason
-            if not read:
-                write_status(folder, "failed", next(iter(failed.values())))
-                return
-            root = combine_pages(folder, read)
-            edit.ensure_note_ids(root)
-            structure.ensure_measure_ids(root)
-            save_version(folder, root)
-            if failed:
-                listed = ", ".join(str(number) for number in failed)
-                note = f"{note} Couldn't read page {listed}, so it was left out.".strip()
-            write_status(folder, "ready", note)
-        except Exception as error:  # A background thread has no one else to report to.
-            print(f"recognition error: {error}", file=sys.stderr)
-            write_status(folder, "failed", "Recognition failed.")
+            if len(images) > 1:
+                write_status(folder, "processing", f"Reading page {number} of {len(images)}.")
+            reason = recognize_page(image, folder / "recognized" / f"page_{number:03d}")
+            if given_up(folder):
+                return  # Stopping, it's left as still being read, which the next start reports as interrupted.
+            if reason is None:
+                read.append(number)
+            else:
+                failed[number] = reason
+        if not read:
+            write_status(folder, "failed", next(iter(failed.values())))
+            return
+        root = combine_pages(folder, read)
+        edit.ensure_note_ids(root)
+        structure.ensure_measure_ids(root)
+        save_version(folder, root)
+        if failed:
+            listed = ", ".join(str(number) for number in failed)
+            note = f"{note} Couldn't read page {listed}, so it was left out.".strip()
+        write_status(folder, "ready", note)
+    except Exception as error:  # A background thread has no one else to report to.
+        print(f"recognition error: {error}", file=sys.stderr)
+        write_status(folder, "failed", "Recognition failed.")
+
+
+def queue_reading(folder: Path, upload: Path) -> None:
+    """Put a sheet at the end of the line, to be read when its turn comes."""
+    with line_changed:
+        line.append(folder.name)
+    threading.Thread(target=read_in_turn, args=(folder, upload), daemon=True).start()
+
+
+def read_in_turn(folder: Path, upload: Path) -> None:
+    """Wait for the sheets ahead to be read, then read this one, and give the next its turn.
+
+    A sheet cancelled while it waits has left the line already, with its folder. One cancelled while
+    it's read is removed here, once its reader has stopped, so nothing is still writing into it.
+    """
+    name = folder.name
+    with line_changed:
+        line_changed.wait_for(lambda: name not in line or line[0] == name or stopping.is_set())
+        if name not in line or stopping.is_set():
+            return
+        began[name] = time.time()
+    try:
+        recognize_job(folder, upload)
+    finally:
+        with line_changed:
+            line.remove(name)
+            began.pop(name, None)
+            if name in cancelled:
+                cancelled.discard(name)
+                shutil.rmtree(folder, ignore_errors=True)
+            line_changed.notify_all()
+
+
+def source_of(folder: Path) -> dict:
+    """Say what a sheet was read from: the file's name, if it was kept, and whether it was a PDF."""
+    try:
+        name = json.loads((folder / SOURCE_FILE).read_text(encoding="utf-8")).get("name")
+    except (OSError, ValueError, AttributeError):
+        name = None
+    return {"name": name if isinstance(name, str) and name else None, "pdf": (folder / "upload.pdf").exists()}
+
+
+def reading_state(folder: Path) -> dict:
+    """Say how a sheet still to be read is getting on: how many sheets are ahead of it, and how long it has been read for."""
+    with line_changed:
+        ahead = line.index(folder.name) if folder.name in line else None
+        started = began.get(folder.name)
+    return {"ahead": ahead, "elapsed": round(time.time() - started, 1) if ahead == 0 and started else None}
+
+
+def unfinished(folder: Path, status: dict) -> dict:
+    """Describe a sheet that isn't ready: being read, waiting its turn, or failed, with why."""
+    return status | source_of(folder) | (reading_state(folder) if status["status"] == "processing" else {})
 
 
 @app.post("/api/scores")
@@ -545,8 +631,9 @@ async def create_score(file: UploadFile) -> dict:
     folder.mkdir(parents=True)
     upload = folder / f"upload{suffix}"
     upload.write_bytes(data)
+    write_whole(folder / SOURCE_FILE, json.dumps({"name": Path(file.filename or "").name[:200]}))
     write_status(folder, "processing")
-    threading.Thread(target=recognize_job, args=(folder, upload), daemon=True).start()
+    queue_reading(folder, upload)
     return {"id": score_id}
 
 
@@ -595,6 +682,16 @@ def opened_from_file(folder: Path) -> bool:
 def read_chord_file(folder: Path) -> list[dict]:
     path = folder / "recognized" / "chords.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def added_chords(folder: Path) -> list[dict]:
+    """The chords added from the original sheet, kept apart from those the reader found, which are what
+    its corrections are learnt from."""
+    try:
+        found = json.loads((folder / "recognized" / ADDED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return found if isinstance(found, list) else []
 
 
 def source_pages(folder: Path) -> list[int]:
@@ -738,7 +835,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
     marks.ensure_mark_ids(root)
     shown = concert.shown(root)  # The same score at concert pitch, if it's shown that way.
     read_info: dict[tuple[int, float], dict] = {}
-    for item in read_chord_file(folder):
+    for item in [*read_chord_file(folder), *added_chords(folder)]:
         read_info.setdefault((item["measure"], round(float(item["onset"]), 3)), item)  # Only the first was placed.
     chords = []
     shapes = diagrams.chord_diagrams(shown)
@@ -749,6 +846,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
             "confidence": found["confidence"] if unchanged else None,
             "box": found["box"] if found else None,
             "page": found["page"] if found else None,
+            "added": bool(found and found.get("added")),
             "diagram": shapes[chord["index"]] if chord["index"] < len(shapes) else None,
         })
     view = view_of(folder)
@@ -822,16 +920,25 @@ def list_instruments() -> list[dict]:
 
 @app.get("/api/scores")
 def list_scores() -> list[dict]:
-    """List finished sheets, newest first, so one can be reopened after closing the page.
+    """List the sheets, newest first, so one can be reopened after closing the page.
 
+    A sheet still being read is listed too, with how it's getting on, so the window can be used for
+    something else meanwhile, and so is one that couldn't be read, with why, to read again or remove.
     A sheet whose files can't be read is left out, rather than taking every other sheet with it.
     """
     found = []
     for folder in JOB_DIR.glob("*") if JOB_DIR.exists() else []:
         try:
-            if not (folder / "status.json").exists() or read_status(folder)["status"] != "ready":
+            if not (folder / "status.json").exists() or folder.name in cancelled:
+                continue
+            status = read_status(folder)
+            if status["status"] != "ready":
+                upload = next(folder.glob("upload.*"), folder / "status.json")
+                found.append(unfinished(folder, status) | {"id": folder.name, "saved": upload.stat().st_mtime})
                 continue
             found.append({
+                "status": "ready",
+                "name": source_of(folder)["name"],
                 "id": folder.name,
                 "saved": versions(folder)[-1].stat().st_mtime,
                 "pages": len(source_pages(folder)),
@@ -848,8 +955,91 @@ def list_scores() -> list[dict]:
 @app.get("/api/scores/{score_id}")
 def get_score(score_id: str) -> dict:
     folder = job_folder(score_id)
+    if score_id in cancelled:
+        raise HTTPException(404, "That sheet's reading was cancelled.")
     status = read_status(folder)
-    return describe(folder, status) if status["status"] == "ready" else status
+    return describe(folder, status) if status["status"] == "ready" else unfinished(folder, status)
+
+
+def empty_trash() -> None:
+    """Delete for good the scores deleted more than a week ago."""
+    for folder in (JOB_DIR / TRASH).glob("*") if (JOB_DIR / TRASH).is_dir() else []:
+        try:
+            if time.time() - folder.stat().st_mtime > TRASH_SECONDS:
+                shutil.rmtree(folder)
+        except OSError as error:
+            print(f"couldn't empty {folder.name} from the trash: {error!r}", file=sys.stderr)
+
+
+@app.delete("/api/scores/{score_id}")
+def remove_sheet(score_id: str) -> dict:
+    """Delete a score, remove a sheet that couldn't be read, or stop reading one and remove it.
+
+    The one way anything leaves the library. A score or a failed sheet goes to the trash, a folder
+    beside the scores, where nothing lists it, and comes back from there if the delete is undone;
+    it's deleted for good a week later. Deleting only once the page's Undo had gone would lose the
+    delete if the window closed first, and would need the page to stay open to finish it.
+
+    A sheet waiting its turn just leaves the line. The one being read has its reader stopped, not
+    merely hidden, as it would otherwise hold its memory, and the sheets behind it, for minutes more.
+    Neither is kept: there's no reading half done to come back to, and the file is where it was.
+    """
+    folder = job_folder(score_id)
+    with line_changed:
+        if score_id in line:
+            if line[0] != score_id:
+                line.remove(score_id)
+                line_changed.notify_all()
+                shutil.rmtree(folder, ignore_errors=True)
+                return {"removed": score_id, "undo": False}
+            cancelled.add(score_id)
+            with reading_lock:
+                for process, out_dir in reading.items():
+                    if folder in out_dir.parents:
+                        process.kill()
+            # Its reader stops at once and removes the folder as it leaves the line. A PDF still
+            # being turned into pictures stops after that, and is listed as gone meanwhile.
+            line_changed.wait_for(lambda: score_id not in line, timeout=CANCEL_WAIT_SECONDS)
+            return {"removed": score_id, "undo": False}
+        with edit_lock:  # An edit to it can't land halfway through its going.
+            trash = JOB_DIR / TRASH
+            trash.mkdir(exist_ok=True)
+            shutil.rmtree(trash / score_id, ignore_errors=True)
+            os.replace(folder, trash / score_id)
+            os.utime(trash / score_id)  # When it was deleted, which the trash is emptied by.
+        # Gathering corrections doesn't look in the trash, but retraining reads what was gathered last,
+        # which would still teach a deleted sheet's chords as right. Brought back, it's gathered again.
+        corrections.forget(score_id, corrections.OUT_DIR)
+    empty_trash()
+    return {"removed": score_id, "undo": True}
+
+
+@app.post("/api/scores/{score_id}/restore")
+def restore_sheet(score_id: str) -> dict:
+    """Bring a deleted score back from the trash, as it was."""
+    kept = JOB_DIR / TRASH / score_id
+    if re.fullmatch(r"[0-9a-f]{32}", score_id) is None or not kept.is_dir():
+        raise HTTPException(404, "That score is no longer in the trash.")
+    with edit_lock:
+        if (JOB_DIR / score_id).exists():
+            raise HTTPException(409, "That score is in the library already.")
+        os.replace(kept, JOB_DIR / score_id)
+    return {"id": score_id}
+
+
+@app.post("/api/scores/{score_id}/retry")
+def read_again(score_id: str) -> dict:
+    """Read a sheet that couldn't be read once more, from the file it came from."""
+    folder = job_folder(score_id)
+    with line_changed:
+        upload = next(folder.glob("upload.*"), None)
+        if score_id in line or read_status(folder)["status"] != "failed" or upload is None:
+            raise HTTPException(409, "Only a sheet that couldn't be read can be read again.")
+        for leftover in ("recognized", "pages"):
+            shutil.rmtree(folder / leftover, ignore_errors=True)
+        write_status(folder, "processing")
+        queue_reading(folder, upload)
+    return {"id": score_id}
 
 
 @app.get("/api/scores/{score_id}/source/{number}.jpg")
@@ -858,6 +1048,60 @@ def get_source_page(score_id: str, number: int) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "No such page")
     return FileResponse(path)
+
+
+def page_score(folder: Path, number: int) -> Path:
+    return next((folder / "recognized" / f"page_{number:03d}").glob("*.musicxml"))
+
+
+@app.get("/api/scores/{score_id}/source/{number}/layout")
+def get_source_layout(score_id: str, number: int) -> dict:
+    """Say where each bar and beat is on a page of the original sheet, as the reader found them.
+
+    A chord the reader missed is added by clicking where it is on the page. Its bar and beat are found
+    as the reader placed the chords it found (align.place_chord): the line of music, the bar between
+    its barlines, and the nearest note or rest in that bar. So the page is told where those are. Bars
+    are numbered as the score was read, as chords.json numbers them, which bars added or deleted since
+    don't change. A page read before they were kept has none.
+    """
+    folder = job_folder(score_id)
+    pages = source_pages(folder)
+    kept = folder / "recognized" / f"page_{number:03d}" / LAYOUT_FILE
+    if number not in pages:
+        raise HTTPException(404, "No such page")
+    if not kept.exists():
+        return {"lines": []}
+    roots = [ET.parse(page_score(folder, page)).getroot() for page in pages]
+    _, offsets = merge_pages(roots)
+    first = offsets[pages.index(number)]
+    lines = []
+    found = json.loads(kept.read_text(encoding="utf-8"))
+    for layout_found, measures in zip([align.SystemLayout(**item) for item in found], align.split_into_systems(read_measures(roots[pages.index(number)].find("part")))):
+        edges = align.measure_edges(layout_found, measures)
+        columns = align.note_columns(layout_found.notes, layout_found.unit)
+        bars = []
+        for index, measure in enumerate(measures):
+            places = align.event_positions(measure, edges[index], edges[index + 1], columns)
+            beats = [{"onset": event.onset, "x": float(x)} for event, x in zip(measure.events, places)] or [{"onset": 0.0, "x": float(edges[index])}]
+            bars.append({"measure": first + index, "left": float(edges[index]), "right": float(edges[index + 1]), "beats": beats})
+        first += len(measures)
+        lines.append({"top": layout_found.top, "bottom": layout_found.bottom, "unit": layout_found.unit, "bars": bars})
+    return {"lines": lines}
+
+
+@app.post("/api/scores/{score_id}/chords/at")
+def add_chord_at(score_id: str, body: ChordAt) -> dict:
+    """Add a chord the reader missed at the bar and beat found from where it was clicked on the original.
+
+    Where it was clicked is kept, apart from what the reader found, so the original draws its box.
+    """
+    folder = job_folder(score_id)
+    with edit_lock:
+        if body.page is not None and body.box is not None and len(body.box) == 4 and (folder / "recognized").exists():
+            kept = [item for item in added_chords(folder) if (item.get("measure"), item.get("onset")) != (body.measure, body.onset)]
+            kept.append({"measure": body.measure, "onset": body.onset, "page": body.page, "box": body.box, "chord": body.text.strip(), "confidence": None, "added": True})
+            write_whole(folder / "recognized" / ADDED_FILE, json.dumps(kept))
+        return apply_edit(score_id, lambda root: edit.add_chord_at(root, body.measure, Fraction(body.onset).limit_denominator(64), body.text))
 
 
 @app.post("/api/scores/{score_id}/checked")
@@ -875,7 +1119,10 @@ def mark_checked(score_id: str, body: CheckedMark) -> dict:
     if body.checked:
         path.write_text(json.dumps({"checked_at": time.time()}), encoding="utf-8")
     else:
+        # Un-marked, it's no longer learnt from: gathering corrections takes only checked sheets, and
+        # what was gathered from it already is taken out, as retraining reads that.
         path.unlink(missing_ok=True)
+        corrections.forget(score_id, corrections.OUT_DIR)
     return describe(folder, read_status(folder))
 
 

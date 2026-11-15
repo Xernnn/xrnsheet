@@ -16,9 +16,16 @@ import json
 import math
 import os
 import shutil
+import socket
+import struct
+import subprocess
+import tempfile
+import time
 import urllib.request
 import wave
 import xml.etree.ElementTree as ET
+import zlib
+from contextlib import contextmanager
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -5270,6 +5277,309 @@ def test_recognized(page, base: str, shots: Path | None, created: list[str]) -> 
     page.set_viewport_size(size)
 
 
+def png(width: int, height: int, dark_rows: range | tuple = ()) -> bytes:
+    """A grey picture, white but for the rows given, made without an imaging library."""
+    rows = b"".join(b"\x00" + (b"\x00" if y in dark_rows else b"\xff") * width for y in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+
+def photo(name: str, blank: bool = False) -> dict:
+    """A photo to open: five staff lines, or nothing on it at all."""
+    return {"name": name, "mimeType": "image/png", "buffer": png(480, 320, () if blank else tuple(range(120, 200, 16)))}
+
+
+@contextmanager
+def slow_reader(seconds: float):
+    """Serve the app on a port of its own, with a stand-in that reads a page in this many seconds.
+
+    The real reader takes the fixture's page in a few seconds, too quickly to see the screens shown
+    while a sheet waits or is read, and too quickly to cancel. Its scores live in a folder of their
+    own, removed afterwards.
+    """
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    work = Path(tempfile.mkdtemp(prefix="xrnsheet-e2e-"))
+    command = [str(ROOT / ".venv" / "bin" / "python"), str(ROOT / "tests" / "reading_stand_in.py"), "--seconds", str(seconds), "--port", str(port), "--jobs", str(work / "jobs"), "--reader", str(work / "reader")]
+    server = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for _ in range(300):
+            try:
+                urllib.request.urlopen(f"{base}/api/scores").close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        yield base
+    finally:
+        server.terminate()  # It stops the page it's reading as it goes.
+        try:
+            server.wait(20)
+        except subprocess.TimeoutExpired:
+            server.kill()
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def listed(base: str) -> dict[str, dict]:
+    return {sheet["id"]: sheet for sheet in json.loads(fetch_text(base, "/api/scores"))}
+
+
+def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
+    """A sheet being read used to take the whole window, with a spinner and no way out: no library,
+    no F6, no Cancel, no time, and a second sheet waited unseen behind it. One that failed was told
+    of only in a line that went with the next thing done."""
+    with slow_reader(10) as base:
+        page.goto(base)
+        page.set_input_files("#file", files=[photo("first page.png")])
+        page.wait_for_selector("#busy:not([hidden])")
+        first = page.evaluate("() => scoreId")
+        page.wait_for_function("() => /so far/.test(document.getElementById('readingTime')?.textContent ?? '')", timeout=5000)
+        check("a sheet being read says which it is, how long it has taken, and can be cancelled", page.inner_text("#readingName") == "first page.png" and page.is_visible("#readingCancel"), page.inner_text("#readingTime"))
+        check("and the library's button is there", page.is_visible("#libraryToggle"))
+        page.keyboard.press("F6")
+        tile = lambda score_id: page.locator(f'#historyList a[data-score="{score_id}"]')
+        page.wait_for_selector(f'#historyList a[data-score="{first}"]', timeout=5000)
+        check("F6 shows the library beside it, listing it as being read", page.is_visible("#library") and "Reading" in tile(first).inner_text(), tile(first).inner_text())
+
+        page.set_input_files("#file", files=[photo("second page.png")])
+        page.wait_for_function("id => scoreId && scoreId !== id && !document.getElementById('busy').hidden", arg=first)
+        second = page.evaluate("() => scoreId")
+        page.wait_for_function("id => /ahead/.test(document.querySelector(`#historyList a[data-score='${id}']`)?.textContent ?? '')", arg=second, timeout=5000)
+        check("a second sheet says it waits its turn, and behind how many", "behind 1 sheet" in page.inner_text("#busyText") and "1 sheet ahead" in tile(second).inner_text(), page.inner_text("#busyText"))
+        if shots:
+            page.screenshot(path=str(shots / "reading-two-sheets.png"))
+        page.keyboard.press("F6")  # Opening the second folded the library away, as opening a score does.
+        page.wait_for_selector("#library", state="visible")
+        page.locator(f'.jobTile:has(a[data-score="{second}"]) .actions button', has_text="Cancel").click()
+        page.wait_for_selector(f'#historyList a[data-score="{second}"]', state="detached", timeout=5000)
+        check("Cancel on its tile takes it away, here and on the server", second not in listed(base) and page.evaluate("() => document.body.classList.contains('atHome')"))
+
+        other = post_json(base, "/api/scores/blank", {"measures": 4, "title": "Something else"})["id"]
+        page.evaluate("drawHistory()")
+        tile(other).click()
+        page.wait_for_selector("#pages svg")
+        check("another score can be opened and used while the first is read", page.evaluate("() => scoreId") == other and listed(base)[first]["status"] == "processing")
+        page.click("#brand")
+        check("the logo goes back to the library", page.evaluate("() => document.body.classList.contains('atHome')") and "Reading" in tile(first).inner_text())
+
+        page.wait_for_selector("#toast:not([hidden])", timeout=30000)
+        check("a sheet read meanwhile says so when it's done", "has been read" in page.inner_text("#toastText") and page.inner_text("#toastAction") == "Open", page.inner_text("#toastText"))
+        page.click("#toastAction")
+        page.wait_for_selector("#pages svg")
+        check("and opens from there", page.evaluate("() => scoreId") == first and page.is_hidden("#busy"))
+
+        page.set_input_files("#file", files=[photo("blank.png", blank=True)])
+        page.wait_for_selector("#busy:not([hidden])")
+        failed = page.evaluate("() => scoreId")
+        page.click("#readingLibrary")
+        page.wait_for_selector(f'.jobTile[data-state="failed"] a[data-score="{failed}"]', timeout=30000)
+        check("a sheet that couldn't be read stays in the library, saying why", "No staves" in tile(failed).inner_text() and page.locator(f'.jobTile:has(a[data-score="{failed}"]) .actions button').all_inner_texts() == ["Try again", "Remove"], tile(failed).inner_text())
+        check("and says so wherever the window is", "couldn't be read" in page.inner_text("#toastText"), page.inner_text("#toastText"))
+        if shots:
+            page.screenshot(path=str(shots / "reading-failed.png"))
+        tile(failed).click()
+        page.wait_for_selector("#readingRemove:not([hidden])")
+        check("opened, it says why, with Try again and Remove", "No staves" in page.inner_text("#busyText") and page.is_visible("#readingRetry") and page.is_hidden("#readingCancel"))
+        page.click("#readingRemove")
+        page.wait_for_selector(f'#historyList a[data-score="{failed}"]', state="detached", timeout=5000)
+        check("Remove takes it away", failed not in listed(base))
+
+        page.set_input_files("#file", files=[photo("third page.png")])
+        page.wait_for_selector("#readingCancel:not([hidden])")
+        third = page.evaluate("() => scoreId")
+        page.wait_for_function("() => /so far/.test(document.getElementById('readingTime').textContent)", timeout=5000)
+        page.click("#readingCancel")
+        page.wait_for_function("() => document.body.classList.contains('atHome')", timeout=15000)
+        check("Cancel where it's shown stops it and goes back to the library", third not in listed(base) and page.locator(f'#historyList a[data-score="{third}"]').count() == 0)
+
+
+def on_the_sheet(page, x: float, y: float) -> tuple[float, float]:
+    """Where a point of the original's first page, in its own pixels, is in the window."""
+    spot = page.evaluate("""([x, y]) => {
+        const image = document.querySelector('.imageBox img'), box = image.getBoundingClientRect();
+        return { x: box.left + x / image.naturalWidth * box.width, y: box.top + y / image.naturalHeight * box.height };
+    }""", [x, y])
+    return spot["x"], spot["y"]
+
+
+def box_in_sight(page, index: int) -> bool:
+    return page.evaluate("""index => {
+        const box = document.querySelector(`.box[data-index="${index}"]`).getBoundingClientRect(), area = document.getElementById('images').getBoundingClientRect();
+        return box.left >= area.left && box.right <= area.right && box.top >= area.top && box.bottom <= area.bottom;
+    }""", index)
+
+
+def test_the_original_sheet(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """The original was a fixed picture about 340 pixels across: no zoom, a box on it did nothing, and a
+    chord the reader missed, the biggest loss on a handwritten chart, couldn't be added from it."""
+    page.goto(base)
+    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.wait_for_selector("#pages svg", timeout=120000)
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    page.wait_for_selector(".box")
+    page.wait_for_function("() => sheetPlaces[1]?.length > 0")
+    chords = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]
+    width = lambda: page.evaluate("() => document.querySelector('.imageBox').getBoundingClientRect().width")
+    fitted = width()
+    sheet = page.locator("#images").bounding_box()
+    page.mouse.move(sheet["x"] + sheet["width"] / 2, sheet["y"] + sheet["height"] / 2)
+    page.keyboard.down("Control")
+    page.mouse.wheel(0, -400)
+    page.keyboard.up("Control")
+    check("Ctrl and the wheel zoom the original", width() > fitted * 1.5 and page.inner_text("#originalFit").endswith("%"), (fitted, width(), page.inner_text("#originalFit")))
+    page.mouse.dblclick(sheet["x"] + sheet["width"] / 2, sheet["y"] + sheet["height"] / 2)
+    check("a double-click fits it in again", abs(width() - fitted) < 1 and page.inner_text("#originalFit") == "Fit")
+    x, y = on_the_sheet(page, chords[4]["box"][0], chords[4]["box"][3] + 40)  # On the staff below the chord.
+    page.mouse.dblclick(x, y)
+    page.wait_for_timeout(100)
+    check("and zooms in on the place double-clicked", width() > fitted * 2 and page.evaluate("() => sheetZoom") == 3, width())
+    scrolled = page.evaluate("() => [document.getElementById('images').scrollLeft, document.getElementById('images').scrollTop]")
+    page.mouse.move(sheet["x"] + 200, sheet["y"] + 60)
+    page.mouse.down()
+    page.mouse.move(sheet["x"] + 300, sheet["y"] + 40, steps=5)
+    page.mouse.up()
+    moved = page.evaluate("() => [document.getElementById('images').scrollLeft, document.getElementById('images').scrollTop]")
+    check("dragging moves about it", moved[0] < scrolled[0] - 50 and moved[1] > scrolled[1] + 10 and page.is_hidden("#editor"), (scrolled, moved))
+
+    far = len(chords) - 1
+    page.locator(f'#pages g.harm[data-index="{far}"]').evaluate("element => element.scrollIntoView({ block: 'center' })")
+    click_on(page, page.locator(f'#pages g.harm[data-index="{far}"]'))
+    check("choosing a chord in the score brings its box into sight on the zoomed original", page.locator(f'.box.active[data-index="{far}"]').count() == 1 and box_in_sight(page, far))
+    page.keyboard.press("Escape")
+    page.click("#originalFit")
+    page.click('.box[data-index="1"]')
+    page.wait_for_selector("#editor:not([hidden])")
+    check("a box clicked on the original opens its chord in the score to change", page.input_value("#chordInput") == chords[1]["text"] and page.evaluate("() => selectedChord") == 1 and page.locator('.box.active[data-index="1"]').count() == 1)
+    page.keyboard.press("Escape")
+
+    missed = chords[4]
+    page.click(f'.box[data-index="{missed["index"]}"]')
+    page.click("#chordDelete")
+    settle(page)
+    check("(a chord removed, as if the reader had missed it)", len(json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]) == len(chords) - 1)
+    unit = json.loads(fetch_text(base, f"/api/scores/{score_id}/source/1/layout"))["lines"][0]["unit"]
+    left, top, right, bottom = missed["box"]
+    x, y = on_the_sheet(page, left + unit / 2, (top + bottom) / 2)  # As the reader places a chord: by its box's left edge.
+    page.mouse.move(x, y)
+    tag = page.inner_text("#sheetGhost .tag") if page.is_visible("#sheetGhost") else None
+    check("the original shows where a chord clicked there goes, as a player counts it", tag == f"Add a chord: bar {missed['measure'] + 1}, beat 1", tag)
+    if shots:
+        page.screenshot(path=str(shots / "original-add-chord.png"))
+    page.mouse.click(x, y)
+    page.wait_for_selector("#editor:not([hidden])")
+    page.keyboard.type(missed["text"])
+    page.keyboard.press("Enter")
+    settle(page)
+    after = json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]
+    back = [chord for chord in after if (chord["measure"], chord["onset"]) == (missed["measure"], missed["onset"])]
+    # It's where the reader had read it, so it's that box again, and what the reader learns from counts it as read right.
+    check("a click there and the chord typed writes it at that bar and beat, with its box", [chord["text"] for chord in back] == [missed["text"]] and back[0]["box"] == missed["box"] and page.locator(f'.box[data-index="{back[0]["index"]}"]').count() == 1, back)
+    page.click("#undo")
+    settle(page)
+    check("and it's undone like any edit", len(json.loads(fetch_text(base, f"/api/scores/{score_id}"))["chords"]) == len(chords) - 1)
+
+    room = lambda: page.locator("#original").bounding_box()
+    before = room()
+    page.click("#originalLarger")
+    page.wait_for_timeout(100)
+    larger = room()
+    check("the original can be given more room", larger["height"] > before["height"] + 60 and page.get_attribute("#originalLarger", "aria-pressed") == "true", (before, larger))
+    page.click("#originalLarger")
+    grip = page.locator("#originalGrip").bounding_box()
+    page.mouse.move(grip["x"] + grip["width"] / 2, grip["y"] + grip["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(grip["x"] + grip["width"] / 2, grip["y"] + 120, steps=4)
+    page.mouse.up()
+    check("or have its edge dragged", room()["height"] > before["height"] + 80, (before, room()))
+    check("and the score beside it is still fitted to what's left", page.input_value("#zoomChoice") == "width" and page.locator("#pages svg").first.bounding_box()["height"] > 100)
+    page.click("#originalLarger")
+    page.click("#originalLarger")  # Back to the usual room, for the tests after.
+    page.evaluate("() => { keepSetting('originalHeight', ''); originalRoom(''); }")
+
+
+def test_marking_checked_with_things_still_listed(page, base: str, created: list[str]) -> None:
+    """Mark as checked was taken at once with 13 chords and 21 bars still listed, and a checked sheet's
+    chords are taught to the chord reader as right, so an early press taught wrong chords as confirmed."""
+    page.goto(base)
+    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.wait_for_selector("#pages svg", timeout=120000)
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    first = page.evaluate("() => score.places && Object.keys(score.places)[0]")
+    post_json(base, f"/api/scores/{score_id}/bars", {"action": "time", "note": first, "beats": 3, "beat_type": 4})  # Bars that no longer add up.
+    page.evaluate("id => openScore(id)", score_id)
+    page.wait_for_selector("#pages svg")
+    data = json.loads(fetch_text(base, f"/api/scores/{score_id}"))
+    chords = sum(chord["confidence"] is not None and chord["confidence"] < 0.8 for chord in data["chords"])
+    bars = len(data["barChecks"])
+    checked = lambda: json.loads(fetch_text(base, f"/api/scores/{score_id}"))["checked"]
+    page.click("#checked")
+    said = page.inner_text("#checkedWhat") if page.is_visible("#checkedDialog") else None
+    check("with chords and bars still listed, Mark as checked asks first, saying how many", chords > 0 and bars > 0 and said == f"{chords} chords and {bars} bars are still listed to check.", said)
+    page.click('#checkedDialog button[value="back"]')
+    settle(page)
+    check("going back leaves it unchecked", checked() is False and page.inner_text("#checked") == "Mark as checked")
+    page.click("#checked")
+    page.click("#checkedAnyway")
+    settle(page)
+    check("it can be marked anyway", checked() is True and page.inner_text("#checked") == "Checked ✓")
+    check("and says so, with Undo", "Marked as checked" in page.inner_text("#toastText") and page.inner_text("#toastAction") == "Undo")
+    page.click("#toastAction")
+    settle(page)
+    check("which un-marks it", checked() is False and page.inner_text("#checked") == "Mark as checked")
+    page.click("#checked")
+    page.click("#checkedAnyway")
+    settle(page)
+    check("the File menu says it's checked", menu_ticked(page, "File", "Checked, for retraining") == "true")
+    page.click("#checked")
+    settle(page)
+    check("and it can be un-marked later with the same button", checked() is False and "No longer marked" in page.inner_text("#toastText"))
+
+
+def test_deleting_a_score(page, base: str, created: list[str]) -> None:
+    """There was no way to delete a score: no menu on a tile, no right-click, nothing in the File menu."""
+    keep = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Keep me"})["id"]
+    doomed = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Delete me"})["id"]
+    created.extend([keep, doomed])
+    page.goto(base)
+    tile = page.locator(f'#historyList a[data-score="{doomed}"]')
+    tile.wait_for()
+    there = lambda: doomed in listed(base)
+    tile.hover()
+    more = page.locator(f'.tileBox:has(a[data-score="{doomed}"]) .tileMenu')
+    check("a tile has a menu", more.count() == 1 and more.is_visible())
+    if not more.count():
+        return
+    more.click()
+    page.locator(".menu button", has_text="Delete").click()
+    page.wait_for_selector(f'#historyList a[data-score="{doomed}"]', state="detached")
+    check("Delete there takes the score out of the library at once, asking nothing", not there() and page.is_hidden("dialog[open]") and page.locator(f'#historyList a[data-score="{keep}"]').count() == 1)
+    check("and says so, with Undo", "“Delete me” deleted" in page.inner_text("#toastText") and page.inner_text("#toastAction") == "Undo", page.inner_text("#toastText"))
+    page.click("#toastAction")
+    tile.wait_for()
+    check("Undo brings it back", there())
+    tile.click(button="right")
+    page.locator(".menu button", has_text="Delete").click()
+    page.wait_for_selector(f'#historyList a[data-score="{doomed}"]', state="detached")
+    check("so does a right-click on its tile", not there())
+    page.click("#toastAction")
+    tile.wait_for()
+    tile.click()
+    page.wait_for_selector("#pages svg")
+    menu(page, "File", "Delete")
+    page.wait_for_function("() => document.body.classList.contains('atHome')")
+    check("File ▸ Delete deletes the open score and goes back to the library", not there() and page.locator(f'#historyList a[data-score="{doomed}"]').count() == 0)
+    page.click("#toastAction")
+    page.wait_for_function("id => scoreId === id && score !== null", arg=doomed)
+    check("and Undo brings it back open", there() and page.is_visible("#pages svg") and page.inner_text("#scoreName") == "Delete me")
+
+
 def head_point(page, element_id: str) -> tuple[float, float]:
     """The middle of a note's head, where a mouse aims."""
     box = page.evaluate("""id => {
@@ -5543,6 +5853,7 @@ def main() -> None:
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
             test_library_search_by_composer(page, base, created)
+            test_deleting_a_score(page, base, created)
             test_another_score_opened_while_writing(page, base, created)
             test_a_score_opens_at_its_start(page, base, created)
             test_inspector(page, base, arguments.shots, created)
@@ -5571,6 +5882,9 @@ def main() -> None:
             test_practice_details(context, base, arguments.shots, created)
             test_found_by_the_bug_hunt(context, base, created)
             test_phone(context, base, arguments.shots, created)
+            test_reading_leaves_the_window_free(page, arguments.shots)
+            test_the_original_sheet(page, base, arguments.shots, created)
+            test_marking_checked_with_things_still_listed(page, base, created)
             test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])
             browser.close()

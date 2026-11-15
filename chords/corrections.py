@@ -24,7 +24,6 @@ from pathlib import Path
 import cv2
 
 from chords.fonts import ROOT
-from chords.model import CHARACTER_INDEX
 from pipeline import edit
 from pipeline.chord_boxes import crop
 from pipeline.structure import surviving_bars
@@ -33,6 +32,7 @@ from pipeline.transpose import is_transposed
 JOB_DIR = ROOT / "data" / "jobs"
 OUT_DIR = ROOT / "data" / "corrections"
 LABEL_FILE = "labels.tsv"
+COLUMNS = ["image", "sheet", "split", "label", "read_as", "confidence", "outcome"]
 TEST_SHARE = 5  # One sheet in this many is held out.
 SAME_PIECE = 0.8  # Two sheets whose chords match this closely are the same piece.
 SHORTEST_COMPARED = 8
@@ -125,6 +125,8 @@ def sheet_digest(folder: Path) -> str:
 
 def export(job_dir: Path = JOB_DIR, out_dir: Path = OUT_DIR) -> Counter:
     """Rebuild the corrections folder, and return counts of what went into it."""
+    from chords.model import CHARACTER_INDEX  # Here, so the app can forget a sheet without loading the model's code.
+
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
@@ -159,9 +161,28 @@ def export(job_dir: Path = JOB_DIR, out_dir: Path = OUT_DIR) -> Counter:
 
     with open(out_dir / LABEL_FILE, "w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file, delimiter="\t")
-        writer.writerow(["image", "sheet", "split", "label", "read_as", "confidence", "outcome"])
+        writer.writerow(COLUMNS)
         writer.writerows(rows)
     return summary
+
+
+def forget(sheet: str, out_dir: Path = OUT_DIR) -> int:
+    """Take a sheet that's no longer checked out of the corrections gathered, and return how many chords went.
+
+    Gathering again leaves it out, as it only takes checked sheets, but retraining reads what was
+    gathered last, which would still teach its chords as right until then.
+    """
+    rows = load_labels(out_dir)
+    gone = [row for row in rows if row["sheet"] == sheet]
+    if not gone:
+        return 0
+    for row in gone:
+        (out_dir / row["image"]).unlink(missing_ok=True)
+    with open(out_dir / LABEL_FILE, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, COLUMNS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(row for row in rows if row["sheet"] != sheet)
+    return len(gone)
 
 
 def load_labels(out_dir: Path = OUT_DIR) -> list[dict]:

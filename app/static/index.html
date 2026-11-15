@@ -10,7 +10,7 @@
 <body class="atHome" data-mode="write">
 <header id="topBar">
   <button id="libraryToggle" class="flat scoreOnly" aria-label="Library" aria-pressed="true" aria-controls="library" title="Show or hide the library (F6)"><span data-icon="library"></span></button>
-  <img id="brand" src="icon.svg" alt="" width="26" height="26">
+  <button id="brand" class="flat" aria-label="Library" title="Back to the library, with all your scores. Every edit is saved as it's made"><img src="icon.svg" alt="" width="26" height="26"></button>
   <button id="scoreName" class="flat scoreOnly" title="Change the title and composer"></button>
   <div id="modeSwitch" class="segmented scoreOnly" role="radiogroup" aria-label="Mode">
     <button role="radio" data-mode="read" aria-checked="false" title="Read: the score large and clean, pages turned with Space or a click (Alt+R)"><span data-icon="read"></span><span>Read</span></button>
@@ -39,6 +39,7 @@
   <button id="inspectorToggle" class="flat scoreOnly" aria-label="Inspector" aria-pressed="true" aria-controls="inspector" title="Show or hide the inspector (F8)"><span data-icon="inspector"></span></button>
 </header>
 <div id="message" role="status" hidden></div>
+<div id="toast" role="status" hidden><span id="toastText"></span><button id="toastAction"></button><button id="toastClose" class="flat" aria-label="Dismiss" title="Dismiss"><span data-icon="close"></span></button></div>
 
 <div id="body">
   <aside id="library" aria-label="Library">
@@ -64,7 +65,21 @@
 
   <main id="centre">
     <div id="start" hidden></div>
-    <div id="busy" hidden><div class="spinner"></div><div id="busyText">Reading your sheet. This usually takes under a minute.</div></div>
+    <div id="busy" hidden>
+      <section id="readingCard" aria-labelledby="readingName">
+        <div id="readingIcon" aria-hidden="true"><div class="spinner"></div></div>
+        <h2 id="readingName">Your sheet</h2>
+        <p id="busyText" aria-live="polite">Reading your sheet.</p>
+        <p id="readingTime"></p>
+        <p id="readingHint">You can carry on meanwhile: open the library (F6) or another score. It's in the library, and opens here when it's done.</p>
+        <div class="buttons">
+          <button id="readingRetry" class="primary" hidden>Try again</button>
+          <button id="readingRemove" hidden>Remove</button>
+          <button id="readingCancel" title="Stop reading this sheet and remove it">Cancel reading</button>
+          <button id="readingLibrary">Library</button>
+        </div>
+      </section>
+    </div>
 
     <div id="workspace" hidden>
       <div id="noteBar" role="toolbar" aria-label="Note input">
@@ -109,11 +124,21 @@
           <button id="zoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+=)"><span data-icon="zoomIn"></span></button>
         </div>
         <aside id="original" aria-label="Your original sheet">
+          <div id="originalGrip" role="separator" tabindex="0" aria-label="Room for the original sheet" title="Drag to give the original sheet more or less room"></div>
           <header><span>Original sheet</span>
+            <button id="originalLarger" class="flat" aria-pressed="false" aria-label="More room" title="Give the original sheet more room, or its usual room back"><span data-icon="enlarge"></span></button>
             <button id="checked" title="Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.">Mark as checked</button>
             <button id="originalClose" class="flat" aria-label="Hide the original sheet" title="Hide"><span data-icon="close"></span></button>
           </header>
-          <div id="images"></div>
+          <div id="sheetFrame">
+            <div id="images" title="Click a chord's box to change it, or the place where a chord was missed to add it. Ctrl+wheel, a pinch or a double-click zooms; drag to move about"></div>
+            <div id="sheetGhost" hidden><span class="tag"></span></div>
+            <div id="originalTools" role="toolbar" aria-label="Zoom the original sheet">
+              <button id="originalZoomOut" class="flat" aria-label="Zoom out" title="Zoom out (Ctrl+wheel)"><span data-icon="zoomOut"></span></button>
+              <button id="originalFit" class="flat" title="How far the sheet is zoomed. Click to fit it in again, as a double-click does">Fit</button>
+              <button id="originalZoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+wheel, or double-click a place)"><span data-icon="zoomIn"></span></button>
+            </div>
+          </div>
           <div id="checks" hidden><span class="label">Please check:</span></div>
         </aside>
       </div>
@@ -432,6 +457,17 @@
     <h2 id="keysTitle">Keyboard shortcuts</h2>
     <div class="content"><table id="keysTable"></table></div>
     <div class="buttons"><button type="submit" class="primary">Close</button></div>
+  </form>
+</dialog>
+
+<dialog id="checkedDialog" aria-labelledby="checkedTitle">
+  <form method="dialog">
+    <h2 id="checkedTitle">Mark as checked with things still listed?</h2>
+    <div class="content" style="max-width: 480px">
+      <div id="checkedWhat"></div>
+      <div>A checked sheet's chords are taught to the chord reader as right, so a chord still wrong would be learnt wrong. You can un-mark it later with the same button.</div>
+    </div>
+    <div class="buttons"><button type="submit" value="mark" id="checkedAnyway">Mark as checked anyway</button><button type="submit" value="back" class="primary" autofocus>Go back and check</button></div>
   </form>
 </dialog>
 
