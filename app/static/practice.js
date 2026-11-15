@@ -155,7 +155,7 @@ function showWait(text, waiting = false) {
 // Waiting for you: the notes you play, grouped by when they're played, from where playback starts.
 async function startFollowing(place = null, counted = true) {
   const starting = playState.starting = {};
-  const data = await fetchPlayback();
+  const data = await readySamples(await fetchPlayback());
   if (playState.starting !== starting) return; // Stopped, or started again, while its notes came.
   playState.starting = null;
   if (!data) { message("This sheet couldn't be played."); return; }
