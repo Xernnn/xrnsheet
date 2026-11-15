@@ -76,7 +76,8 @@ input[type="range"] { accent-color: var(--accent); }
 /* The top bar. */
 #topBar { display: flex; flex: none; align-items: center; gap: 6px; min-height: 54px; padding: 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
 #brand { flex: none; border-radius: 7px; }
-#scoreName { min-width: 0; max-width: 260px; padding: 4px 8px; font-size: 15px; font-weight: 700; justify-content: flex-start; overflow: hidden; text-overflow: ellipsis; }
+/* A block, as a flex box's text can't end in an ellipsis. */
+#scoreName { display: block; min-width: 0; max-width: 260px; padding: 4px 8px; font-size: 15px; font-weight: 700; text-align: left; overflow: hidden; text-overflow: ellipsis; }
 #modeSwitch { margin-left: auto; }
 #modeSwitch > button[aria-checked="true"] { color: var(--accent); }
 #partSwitch { gap: 6px; min-width: 0; max-width: 200px; padding: 3px 10px 3px 6px; border-radius: 999px; }
@@ -84,6 +85,7 @@ input[type="range"] { accent-color: var(--accent); }
 #partSwitch #partKind svg.icon { width: 15px; height: 15px; }
 #partSwitch #partName { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 #partSwitch .caret { color: var(--muted); font-size: 11px; }
+#partSwitch.iconOnly #partName { display: none; }
 #transport { display: flex; align-items: center; gap: 1px; padding: 2px 4px; border-radius: 999px; background: var(--sunken); border: 1px solid var(--line); margin-left: auto; }
 #transport button.flat { min-width: 30px; min-height: 30px; border-radius: 999px; }
 #play { color: var(--accent); }

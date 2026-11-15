@@ -2759,6 +2759,31 @@ def test_reading_on_a_system_at_a_time(page, base: str, created: list[str]) -> N
     page.keyboard.press("Alt+w")
 
 
+def test_top_bar_at_half_a_screen(page, base: str, created: list[str]) -> None:
+    """A window tiled to half a laptop's screen keeps the title and the instrument readable."""
+    open_blank(page, base, created, staff="piano")
+    page.keyboard.press("Escape")
+    menu(page, "File", "Title and composer…")
+    page.fill("#titleInput", "Autumn Leaves in the Evening Rain")
+    page.click("#projectDialog button[type=submit]")
+    settle(page)
+    switcher = "() => ({ shown: getComputedStyle($('partName')).display !== 'none', cut: $('partName').scrollWidth > $('partName').clientWidth + 1 || $('partSwitch').scrollWidth > $('partSwitch').clientWidth + 1, label: $('partSwitch').getAttribute('aria-label'), tip: $('partSwitch').title })"
+    title = "() => { const style = getComputedStyle($('scoreName')); return { cut: $('scoreName').scrollWidth > $('scoreName').clientWidth + 1, ellipsis: style.textOverflow === 'ellipsis' && style.display === 'block', tip: $('scoreName').title }; }"
+    size = page.viewport_size
+    page.set_viewport_size({"width": 1886, "height": size["height"]})
+    page.wait_for_timeout(100)
+    wide = page.evaluate(switcher)
+    check("on a wide window the instrument switcher names the part", wide["shown"] and not wide["cut"], wide)
+    page.set_viewport_size({"width": 940, "height": size["height"]})
+    page.wait_for_timeout(100)
+    narrow = page.evaluate(switcher)
+    check("at half a laptop's screen it shows only the instrument's icon, not a cut name", not narrow["shown"] and not narrow["cut"], narrow)
+    check("naming the part in its tooltip and to a screen reader", "Piano" in (narrow["label"] or "") and "Piano" in narrow["tip"], narrow)
+    named = page.evaluate(title)
+    check("and a title too long for the room ends in an ellipsis, with the whole title in its tooltip", named["cut"] and named["ellipsis"] and "Autumn Leaves in the Evening Rain" in named["tip"], named)
+    page.set_viewport_size(size)
+
+
 def test_library(page, base: str, created: list[str]) -> None:
     first = written_melody(page, base, created, tune="cdef")
     menu(page, "File", "Title and composer…")
@@ -4576,6 +4601,7 @@ def main() -> None:
             test_writing_starts_in_write(page, base, created)
             test_reading_on_a_laptop(page, base, created)
             test_reading_on_a_system_at_a_time(page, base, created)
+            test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
             test_inspector(page, base, arguments.shots, created)
             test_command_palette(page, base, created)

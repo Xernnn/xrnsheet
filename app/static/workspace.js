@@ -91,6 +91,21 @@ function drawPartSwitch() {
   $("partKind").innerHTML = icon(KINDS[kind].icon);
   $("partName").textContent = partLabel(part);
   $("partSwitch").dataset.kind = kind;
+  $("partSwitch").setAttribute("aria-label", `Instrument: ${partLabel(part)}`);
+  $("partSwitch").title = `${partLabel(part)} · ${KINDS[kind].label.toLowerCase()}: the instrument the panel below shows, and practice follows`;
+  fitTopBar();
+}
+
+// Short of room, as in a window tiled to half a laptop's screen, the switcher shows only its
+// instrument's icon, the part named in its tooltip, before the title is cut short: a name cut to
+// its first letter says nothing. The title then ends in an ellipsis, and its tooltip has it whole.
+// The title's own limit on a wide window isn't for the switcher to make room for.
+function fitTopBar() {
+  const holder = $("partSwitch"), title = $("scoreName");
+  holder.classList.remove("iconOnly");
+  const cut = element => element.scrollWidth > element.clientWidth + 1;
+  const squeezed = cut(title) && title.offsetWidth < parseFloat(getComputedStyle(title).maxWidth) - 1;
+  holder.classList.toggle("iconOnly", cut($("partName")) || squeezed);
 }
 
 let shownKinds = "";
@@ -452,6 +467,7 @@ function setUpWorkspace() {
   $("desk").addEventListener("scroll", drawPageCount, { passive: true });
   $("desk").addEventListener("scroll", () => { if ((score?.view ?? "page") === "horizontal") drawStickyStart(); }, { passive: true });
   window.addEventListener("resize", drawStickyStart);
+  window.addEventListener("resize", fitTopBar);
   $("welcomeNew")?.addEventListener("click", openNewScore);
   $("libraryToggle").setAttribute("aria-pressed", String(libraryShown()));
   for (const id of ["topBar", "dockHead"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());

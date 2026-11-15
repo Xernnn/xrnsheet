@@ -445,6 +445,8 @@ function drawBarChecks() {
 
 function drawTitle() {
   $("scoreName").textContent = score.title || "Untitled score";
+  $("scoreName").title = `${[score.title || "Untitled score", score.composer].filter(Boolean).join(", ")}. Click to change the title and composer`;
+  fitTopBar();
   document.title = score.title ? `${score.title} - xrnsheet` : "xrnsheet";
   const tile = document.querySelector(`#historyList a[data-score="${scoreId}"] .name`);
   if (tile) tile.textContent = score.title || "Untitled score";
