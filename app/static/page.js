@@ -143,6 +143,9 @@ function openScore(id) {
   // notes in this one, and letters typed straight away would be written there.
   setInput(false);
   select(null);
+  // It opens at its beginning, with its title in sight. The desk would otherwise keep the scroll it
+  // had in the last score, as far down as this one goes, cutting its first system under the top bar.
+  $("desk").scrollTop = $("desk").scrollLeft = 0;
   foldLibrary();
   scoreId = id;
   score = null;

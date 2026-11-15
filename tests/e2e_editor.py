@@ -3168,6 +3168,39 @@ def test_another_score_opened_while_writing(page, base: str, created: list[str])
     check("and the first score kept what was written in it", pitched(read_notes(base, first)) == ["C5", "D5", "E5"], pitched(read_notes(base, first)))
 
 
+def test_a_score_opens_at_its_start(page, base: str, created: list[str]) -> None:
+    """Another score opened while one is read far down shows its own beginning, not the same depth of it."""
+    short = written_melody(page, base, created, tune="cdef")
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.keyboard.press("Alt+w")
+    far_down = "() => { const desk = document.getElementById('desk'); desk.scrollTop = desk.scrollHeight; return desk.scrollTop; }"
+    check("the long score is read far down", page.evaluate(far_down) > 2000)
+    page.click("#libraryToggle")
+    page.click(f'#historyList a[data-score="{short}"]')
+    page.wait_for_function("id => scoreId === id && score !== null", arg=short)
+    page.wait_for_timeout(200)
+    top = "() => [document.getElementById('desk').scrollTop, document.querySelector('#pages g.staff').getBoundingClientRect().top - document.getElementById('desk').getBoundingClientRect().top]"
+    scrolled, staff = page.evaluate(top)
+    check("a score opened from the library beside it starts at its beginning, its first staff in sight", scrolled == 0 and staff > 0, (scrolled, staff))
+    page.click("#libraryToggle")
+    page.click(f'#historyList a[data-score="{created[-1]}"]')
+    page.wait_for_function("id => scoreId === id && score !== null", arg=created[-1])
+    page.evaluate(far_down)
+    page.click("#libraryToggle")
+    page.click("#blankOpen")
+    page.click('#quickStart [data-quick="piano"] .start')
+    page.wait_for_function("id => scoreId !== id && score !== null && editor.on", arg=created[-1])
+    created.append(page.evaluate("() => scoreId"))
+    page.wait_for_timeout(200)
+    scrolled, staff = page.evaluate(top)
+    check("and so does a new score, with the cursor's staff whole", scrolled == 0 and staff > 0, (scrolled, staff))
+    page.keyboard.press("Escape")
+
+
 def test_inspector(page, base: str, shots: Path | None, created: list[str]) -> None:
     score_id = open_blank(page, base, created, bars=4, staff="piano")
     page.keyboard.press("5")
@@ -5013,6 +5046,7 @@ def main() -> None:
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
             test_another_score_opened_while_writing(page, base, created)
+            test_a_score_opens_at_its_start(page, base, created)
             test_inspector(page, base, arguments.shots, created)
             test_a_rest_in_the_instrument_box(page, base, created)
             test_command_palette(page, base, created)
