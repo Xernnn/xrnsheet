@@ -67,7 +67,7 @@
 
     <div id="workspace" hidden>
       <div id="noteBar" role="toolbar" aria-label="Note input">
-        <button id="inputToggle" class="flat" title="Note input (N)" aria-label="Note input" aria-pressed="false"><span data-icon="pen"></span></button>
+        <button id="inputToggle" class="flat" title="Write notes: click the staff, type A to G, or play the instrument below (N)" aria-label="Note input" aria-pressed="false"><span data-icon="pen"></span><span id="inputLabel">Write notes</span></button>
         <span id="lengths" role="group" aria-label="Duration"></span>
         <button id="dotButton" class="flat" title="Augmentation dot (.)" aria-label="Augmentation dot" aria-pressed="false"><span data-glyph="E1E7" data-space="7"></span></button>
         <button id="restButton" class="flat" data-needs="note" title="Rest (0)" aria-label="Rest"><span data-glyph="E4E5" data-space="4.5"></span></button>
@@ -96,6 +96,7 @@
             <div id="pages"></div>
             <div id="caret" hidden></div>
             <div id="ghost" hidden></div>
+            <div id="playhead" hidden></div>
             <input id="lyricInput" aria-label="Lyric" hidden autocomplete="off" spellcheck="false">
           </div>
         </div>
@@ -155,6 +156,13 @@
       <section id="propNote" hidden>
         <h3 id="propKind">Note</h3>
         <p id="propWhat" class="sub"></p>
+        <!-- The instrument's own tools come first. Duration, accidental, voice and tie are in the note input bar. -->
+        <div id="propInstrument" class="instrumentMarks" hidden>
+          <h4 id="propInstrumentName"></h4>
+          <div id="instrumentCells" class="cells"></div>
+          <!-- A guitar's string and fret, and each player's techniques, fingers, strings and hands (technique.js). -->
+          <div id="instrumentSlots"></div>
+        </div>
         <div class="field"><span class="label">Pitch</span><div class="row tight" id="pitchRow">
           <button class="flat" data-action="semitoneDown" data-needs="note" title="Down a semitone (↓)" aria-label="Down a semitone"><span data-icon="down"></span></button>
           <button class="flat" data-action="semitoneUp" data-needs="note" title="Up a semitone (↑)" aria-label="Up a semitone"><span data-icon="up"></span></button>
@@ -162,11 +170,7 @@
           <button data-action="octaveUp" data-needs="note" title="Up an octave (Ctrl+↑)">+8ve</button>
           <button data-action="respell" data-needs="note" title="Write the same note under its other name (J)">Respell</button>
         </div></div>
-        <div class="field"><span class="label">Duration</span><div class="row tight" id="lengthRow"></div></div>
-        <div class="field"><span class="label">Accidental</span><div class="row tight" id="accidentalRow"></div></div>
-        <div class="field"><span class="label">Voice</span><div class="row tight" id="voiceRow"></div></div>
         <div class="field"><span class="label">Note</span><div class="row tight">
-          <button data-action="tie" data-needs="note" title="Tie to the next note (T)">Tie</button>
           <button data-action="flip" data-needs="note" title="Flip the stem (X)">Flip stem</button>
           <button id="graceButton" data-needs="note" title="A grace note before this one (/)">Grace note</button>
           <button data-action="clear" data-needs="note" title="Remove a fermata, ornament or articulation from this note">Clear marks</button>
@@ -176,12 +180,6 @@
           <button id="lyricButton" data-needs="note" title="Lyrics (Ctrl+L)">Lyrics</button>
           <button id="staffTextButton" data-needs="note" title="Staff text (Ctrl+T)">Text</button>
         </div></div>
-        <div id="propInstrument" class="instrumentMarks" hidden>
-          <h4 id="propInstrumentName"></h4>
-          <div id="instrumentCells" class="cells"></div>
-          <!-- A guitar's string and fret, and each player's techniques, fingers, strings and hands (technique.js). -->
-          <div id="instrumentSlots"></div>
-        </div>
         <div id="noteGroups" class="groups"></div>
       </section>
       <section id="propMeasure" hidden>
@@ -288,8 +286,9 @@
     <h2 id="newTitle">New score</h2>
     <div class="content" id="newInstruments">
       <div id="quickStart" class="quickStart"></div>
-      <p class="quickHint">One click starts writing for it. Or choose instruments below, several at once, then the key, the time and the rest.</p>
-      <div class="columns" id="newChooser"></div>
+      <div class="quickFoot"><p class="quickHint" id="quickHint"></p>
+        <button type="button" id="newMore" aria-expanded="false" aria-controls="newChooser">More instruments, key and time…</button></div>
+      <div class="columns" id="newChooser" hidden></div>
     </div>
     <div class="content" id="newDetails" hidden>
       <div class="pair">

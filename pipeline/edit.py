@@ -969,6 +969,35 @@ def set_step(root: ET.Element, note_id: str, step: str) -> dict:
     return {}
 
 
+def set_pitch(root: ET.Element, note_id: str, midi: int) -> dict:
+    """Make a selected note this key of a keyboard, a fret or a place on a string, keeping its length.
+
+    It's spelled as a MIDI key is, the way the key signature leans. A rest becomes a note of its own
+    length, as a letter typed on one makes it. A note of a chord can't become another of its notes.
+    """
+    note = find_note(root, note_id)
+    pitch = note.find("pitch")
+    if pitch is None:
+        try:
+            name, dots = type_of(locate(root, note_id).event.nominal)
+        except EditError:
+            name = None
+        if name not in ENTERED_LENGTHS:
+            raise EditError("Choose a duration for this rest first, or press N to enter notes.")
+        written = write_note(root, note_id, name, dots, None, midi=midi)["written"]
+        return {"written": written, "cursor": written}
+    spot = locate(root, note_id)
+    step, alter, octave = pitch_of_key(midi, spot.context.fifths)
+    if any(other is not note and height_of(other) == diatonic(step, octave) for other in spot.event.notes):
+        raise EditError("That note is already in this chord.")
+    pitch.find("step").text = step
+    pitch.find("octave").text = str(octave)
+    write_alter(pitch, alter)
+    respell(spot.context)
+    repair_ties(spot.part, spot.context.index)
+    return {"written": note_id, "cursor": note_id}
+
+
 LENGTH_ORDER = ["64th", "32nd", "16th", "eighth", "quarter", "half", "whole"]
 
 

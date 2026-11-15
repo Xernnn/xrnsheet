@@ -28,6 +28,7 @@ function showInspector(on, pane = null) {
   $("inspectorToggle").setAttribute("aria-pressed", String(on));
   if (pane) inspector.pane = pane;
   if (on && !writing()) setMode("write");
+  if (fittedZoom()) setZoom(zoom); // The page fits the room it now has.
   drawInspector();
   drawCursor();
 }
@@ -138,29 +139,6 @@ function buildGroups() {
   for (const [context, holder] of [["note", "noteGroups"], ["measure", "measureGroups"], ["score", "scoreGroups"]]) {
     $(holder).replaceChildren(...catalogue().filter(palette => palette.contexts.includes(context)).map(groupElement));
   }
-  const glyphButton = (label, glyph, run, extra = {}) => {
-    const button = document.createElement("button");
-    button.className = "glyph";
-    button.title = label;
-    button.setAttribute("aria-label", label.replace(/ \(.*\)$/, ""));
-    button.innerHTML = glyphIcon(glyph, 5.5);
-    Object.entries(extra).forEach(([name, value]) => { button.dataset[name] = value; });
-    button.addEventListener("click", () => { button.blur(); run(); });
-    return button;
-  };
-  $("lengthRow").replaceChildren(...LENGTHS.map(({ key, type, label, glyph }) => glyphButton(`${label} (${key})`, glyph, () => chooseLength(type), { length: type, needs: "note" })),
-    glyphButton("Dotted (.)", "E1E7", chooseDot, { needs: "note" }));
-  $("accidentalRow").replaceChildren(...ACCIDENTAL_ACTIONS.map(([action, label, glyph]) => glyphButton(label, glyph, () => noteAction(action), { needs: "note" })));
-  $("voiceRow").replaceChildren(...Array.from({ length: VOICES }, (_, index) => {
-    const button = document.createElement("button");
-    button.dataset.voice = index + 1;
-    button.dataset.needs = "note";
-    button.innerHTML = `${glyphIcon("E1D5", 4.4)}<sup>${index + 1}</sup>`;
-    button.title = `Move to voice ${index + 1} (Ctrl+Alt+${index + 1})`;
-    button.setAttribute("aria-label", `Voice ${index + 1}`);
-    button.addEventListener("click", () => chooseVoice(index + 1));
-    return button;
-  }));
 }
 
 // The instruments in the score, each with its kind. Choosing one is choosing the instrument below.
@@ -174,7 +152,7 @@ function drawParts() {
     row.dataset.part = index;
     row.innerHTML = `<span class="kind">${icon(KINDS[kindOfPart(index)].icon)}</span><span class="name"></span>`;
     row.querySelector(".name").textContent = partLabel(index);
-    row.addEventListener("click", () => choosePart(index));
+    row.addEventListener("click", () => switchPart(index));
     return row;
   }));
   $("partRemove").disabled = chosenPart === null || names.length < 2;
@@ -254,9 +232,6 @@ function drawSelection(element) {
   $("propMeasureName").textContent = `Measure ${facts.number}`;
   const current = { keys: facts.key ? `${facts.key} major` : "", times: facts.time, tempo: facts.tempo, barlines: facts.barline };
   document.querySelectorAll("#measureGroups .group").forEach(holder => { holder.querySelector(".current").textContent = current[holder.dataset.group] ?? ""; });
-  const typeNow = score.notes?.[element.id]?.[3];
-  document.querySelectorAll("#lengthRow [data-length]").forEach(button => button.setAttribute("aria-pressed", String(!range && button.dataset.length === typeNow)));
-  document.querySelectorAll("#voiceRow button").forEach(button => button.setAttribute("aria-pressed", String(!range && Number(button.dataset.voice) === layerNumber(element) + 1)));
   drawInstrumentMarks(element);
 }
 

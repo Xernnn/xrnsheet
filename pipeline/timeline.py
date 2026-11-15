@@ -7,9 +7,10 @@ keeps them.
 """
 
 import xml.etree.ElementTree as ET
+from fractions import Fraction
 
 from pipeline.marks import direction_kind, direction_label
-from pipeline.rhythm import contexts
+from pipeline.rhythm import contexts, octave_lines, read_measure
 from pipeline.structure import BAR_STYLES, TIME_SYMBOLS, is_final, time_symbol
 
 KEY_NAMES = ["C♭", "G♭", "D♭", "A♭", "E♭", "B♭", "F", "C", "G", "D", "A", "E", "B", "F♯", "C♯"]
@@ -63,3 +64,33 @@ def timeline(root: ET.Element) -> dict:
     # Each instrument's own key, measure by measure: a transposing one's is written in another key.
     keys = [[context.fifths for context in contexts(part)] for part in parts]
     return {"measures": measures, "parts": [[has_notes(measure) for measure in part.findall("measure")] for part in parts], "keys": keys}
+
+
+def places(root: ET.Element) -> dict[str, list]:
+    """Say where each note and rest is, and what a place on its staff means there, by its id.
+
+    Each has its bar's index and its place in the bar in quarter notes, then the height of its
+    staff's top line (as rhythm.diatonic numbers a pitch), how many octaves above where they're
+    drawn its notes sound, under an 8va or the like, and the beat it's on, counted from 1 as a player
+    counts, in dotted beats in 6/8, 9/8 and 12/8, and a pickup's beats as the last of its bar. The
+    page names the note a click would write and when it falls from these, before it's written, as
+    edit.pitch_on_line works it out once it is.
+    """
+    found: dict[str, list] = {}
+    for part in root.findall("part"):
+        lines = octave_lines(part)
+        for context in contexts(part):
+            timeline = read_measure(context.measure, context.divisions)
+            compound = context.beat_type == 8 and context.beats % 3 == 0 and context.beats > 3
+            unit = Fraction(4 * (3 if compound else 1), context.beat_type)
+            filled = max((event.end for event in timeline.events()), default=context.length)
+            begins = filled - context.length if context.is_pickup and filled < context.length else Fraction(0)
+            for (staff, _), line in timeline.lines.items():
+                for event in line:
+                    octaves = next((shift.octaves for shift in lines if shift.covers(staff, (context.index, event.onset))), 0)
+                    top = context.tops.get(staff)
+                    beat = float((event.onset - begins) / unit + 1)
+                    for note in event.notes:
+                        if note.get("id"):
+                            found[note.get("id")] = [context.index, float(event.onset), top, octaves, round(beat, 4)]
+    return found

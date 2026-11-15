@@ -48,9 +48,11 @@ function drawDock() {
 function trayNote() {
   const part = partLabel(activePart());
   if (practice.follower) return `${part}: play the lit notes`;
-  if (editor.on) return `${part}: what you play is written. Shift adds to the chord`;
+  if (editor.on) return `✎ Writing: what you play on the ${KINDS[activeKind()].label.toLowerCase()} is written at the cursor. Shift adds to the chord`;
   if (currentMode() === "practice") return `${part}: the notes light as they sound`;
-  return `${part}: shows the selected notes. Press N to write with it`;
+  if (range) return `${part}: select one note to change it from here, or press N to write`;
+  if (actionTarget()) return `${part}: what you play becomes the selected note. Shift adds to its chord`;
+  return `${part}: click to hear a note. Select one to change it, or press N to write`;
 }
 
 function showDock(name) {

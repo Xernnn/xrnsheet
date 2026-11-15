@@ -39,13 +39,13 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords.fonts import ROOT
 from pipeline import concert, diagrams, edit, fretted, layout, marks, mixer, structure, technique, transpose
-from pipeline.engrave import VIEWS, export_pdf, glyph_script, page_size, render_pages
+from pipeline.engrave import VIEWS, export_pdf, glyph_script, keep_lines, page_size, render_pages, system_starts
 from pipeline.merge import merge_pages
 from pipeline.midi_file import midi_bytes
 from pipeline.musicxml import UnreadableScore, read_score_file, to_text
 from pipeline.playback import playback
 from pipeline.rhythm import fit_divisions, indexed
-from pipeline.timeline import timeline
+from pipeline.timeline import places, timeline
 
 JOB_DIR = ROOT / "data" / "jobs"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -627,6 +627,66 @@ def drawn_pages(musicxml: str, view: str) -> tuple[str, ...]:
     return tuple(render_pages(musicxml, view=view))
 
 
+LINES_FILE = "lines.json"
+
+
+def lines_asked_for(root: ET.Element) -> str:
+    """What a score's lines are laid out under. A new page, spacing, measures per line or line break lays them out afresh."""
+    first = root.find("part")
+    asked = [measure.get("id") for measure in (first.findall("measure") if first is not None else []) if any(found.get("new-system") == "yes" and (found.get("id") or "").startswith(structure.BREAK_PREFIX) for found in measure.findall("print"))]
+    return json.dumps([layout.layout_of(root), structure.bars_per_line(root), asked], sort_keys=True)
+
+
+def kept_lines(folder: Path) -> dict:
+    try:
+        found = json.loads((folder / LINES_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def remembered_starts(folder: Path, shown: ET.Element, view: str) -> list[str]:
+    """The measures the lines started with when the score was last drawn this way, if they still count."""
+    if view == "horizontal" or structure.bars_per_line(shown):
+        return []
+    memory = kept_lines(folder).get(view)
+    if not isinstance(memory, dict) or memory.get("asked") != lines_asked_for(shown):
+        return []
+    there = {measure.get("id") for measure in shown.find("part").findall("measure")}
+    return [start for start in memory.get("starts", []) if start in there]
+
+
+def with_lines(text: str, starts: list[str]) -> str:
+    if not starts:
+        return text
+    kept = ET.fromstring(text)
+    keep_lines(kept, starts)
+    return to_text(kept)
+
+
+def laid_out(folder: Path, shown: ET.Element, text: str, view: str) -> list[str]:
+    """Draw a score's pages with each line holding the measures it held when last drawn.
+
+    Left to itself the engraver fits as many measures on a line as it can, so a note written in one
+    measure moved every measure after it from line to line, and whatever was aimed at next had gone.
+    A line now keeps its measures until one of them no longer fits, and from there on the lines are
+    laid out afresh. They're laid out afresh too when the page, the spacing, the measures per line or
+    a line break asked for change. Which measures start each line is kept beside the score, as how
+    it was last drawn, so it's no edit to undo.
+    """
+    starts = remembered_starts(folder, shown, view)
+    pages = list(drawn_pages(with_lines(text, starts), view))
+    forced = [start for start in system_starts(pages)[1:] if start not in starts] if starts else []
+    if forced:
+        # A measure no longer fits its line: the lines from there on are laid out afresh.
+        order = {measure.get("id"): index for index, measure in enumerate(shown.find("part").findall("measure"))}
+        first = min(order.get(start, len(order)) for start in forced)
+        pages = list(drawn_pages(with_lines(text, [start for start in starts if order[start] < first]), view))
+    if view != "horizontal":
+        write_whole(folder / LINES_FILE, json.dumps(kept_lines(folder) | {view: {"asked": lines_asked_for(shown), "starts": system_starts(pages)[1:]}}))
+    return pages
+
+
 def note_details(root: ET.Element) -> dict[str, list]:
     """Say what each note and rest is, by its id, for the inspector to name it as it's shown.
 
@@ -675,7 +735,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
             "diagram": shapes[chord["index"]] if chord["index"] < len(shapes) else None,
         })
     view = view_of(folder)
-    pages = list(drawn_pages(text if text is not None and shown is root else to_text(shown), view))
+    pages = laid_out(folder, shown, text if text is not None and shown is root else to_text(shown), view)
     return status | {
         "chords": chords,
         "canUndo": len(versions(folder)) > 1,
@@ -698,6 +758,8 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
         "mixer": mixer_of(folder, root),
         "transposing": concert.is_transposing(root),
         "notes": note_details(shown),
+        "places": places(shown),
+        "ties": [note.get("id") for note in shown.iter("note") if note.get("id") and any(tie.get("type") == "start" for tie in note.findall("tie"))],
         "fretted": [board.describe() if board is not None else None for board in fretted.boards(root)],
         "strings": [list(technique.string_names(root, part)) or None for part in root.findall("part")],
         # How far each part's first bar sounds from how it's written, known before playback is fetched.
@@ -852,6 +914,7 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
         "semitoneUp": lambda root: edit.move_semitone(root, note_id, 1),
         "semitoneDown": lambda root: edit.move_semitone(root, note_id, -1),
         "repitch": lambda root: edit.set_step(root, note_id, body.step or ""),
+        "pitch": lambda root: edit.set_pitch(root, note_id, body.midi if body.midi is not None else -1),
         "double": lambda root: edit.scale_length(root, note_id, True),
         "halve": lambda root: edit.scale_length(root, note_id, False),
         "dotLonger": lambda root: edit.scale_length(root, note_id, True, by_dot=True),
@@ -875,7 +938,7 @@ def change_note(score_id: str, note_id: str, body: NoteEdit) -> dict:
     if body.action == "fret":
         # The note has its new pitch once the tablature has caught up, and is then put on its string.
         return apply_edit(score_id, actions["fret"], lambda root, extra: fretted.choose_string(root, note_id, extra.pop("onString")))
-    on_string = body.string if body.action in ("write", "stack") and body.string else None
+    on_string = body.string if body.action in ("write", "stack", "pitch") and body.string else None
     return apply_edit(score_id, actions[body.action], (lambda root, extra: play_on_string(root, extra, on_string)) if on_string else None)
 
 
@@ -1284,7 +1347,9 @@ def download_pdf(score_id: str, part: int | None = None) -> FileResponse:
             raise HTTPException(404, str(error)) from error
         name = f"part_{part + 1}.pdf"
     path = folder / name
-    export_pdf(to_text(concert.shown(root)), path)  # Printed as it's shown, at concert pitch if that's chosen.
+    shown = concert.shown(root)
+    # Printed as it's shown, at concert pitch if that's chosen, and with the lines the page has.
+    export_pdf(with_lines(to_text(shown), remembered_starts(folder, shown, "page") if part is None else []), path)
     # Shown where it opens, as Print and Parts open it in a window of its own to print from. As an
     # attachment, Chromium and the desktop app would only offer to save it. Export PDF still saves
     # it, as its link says to.
@@ -1304,7 +1369,8 @@ def get_thumbnail(score_id: str) -> FileResponse:
         if not path.exists():
             for old in folder.glob("thumbnail_*.svg"):
                 old.unlink(missing_ok=True)
-            write_whole(path, drawn_pages(to_text(concert.shown(ET.parse(saved[-1]).getroot())), "page")[0])
+            shown = concert.shown(ET.parse(saved[-1]).getroot())
+            write_whole(path, drawn_pages(with_lines(to_text(shown), remembered_starts(folder, shown, "page")), "page")[0])
     return FileResponse(path, media_type="image/svg+xml")
 
 

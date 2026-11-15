@@ -1252,3 +1252,84 @@ def test_a_drawing_just_made_is_kept_for_the_next_time_it_is_asked_for(client):
     after = server.drawn_pages.cache_info()
     assert after.hits - before.hits == 2 and after.misses == before.misses
     assert client.get(f"/api/scores/{score_id}").json()["pages"] != written["pages"], "the drawing undone to is the earlier one"
+
+
+def line_starts(data):
+    """The measure each drawn line starts with, as the page has them."""
+    return [re.search(r'<g id="([^"]+)" class="measure', system).group(1) for page in data["pages"] for system in re.split(r'<g [^>]*class="system"', page)[1:]]
+
+
+def fill_measure(client, score_id, index, length, count):
+    """Write a run of notes into a measure, a note at a time, as someone entering them would."""
+    measure = saved(client, score_id).find("part").findall("measure")[index]
+    at = next(measure.iter("note")).get("id")
+    for number in range(count):
+        data = write(client, score_id, at, "CDEFGAB"[number % 7], length)
+        at = data["cursor"]
+    return data
+
+
+def test_lines_keep_their_measures_while_notes_are_written(client):
+    score_id = blank(client, clef="piano", measures=32)
+    first = line_starts(client.get(f"/api/scores/{score_id}").json())
+    # A few notes in the third measure leave it room enough, so no line changes.
+    data = fill_measure(client, score_id, 2, "quarter", 4)
+    assert line_starts(data) == first
+    # Undoing them, which makes the measure narrow again, doesn't pull measures back up either.
+    assert line_starts(client.post(f"/api/scores/{score_id}/undo").json()) == first
+    # Once a measure no longer fits, the lines from there on are laid out afresh, with no line left short.
+    data = fill_measure(client, score_id, 3, "16th", 16)
+    data = fill_measure(client, score_id, 4, "16th", 16)
+    after = line_starts(data)
+    assert after != first and after[0] == first[0]
+    counts = [b - a for a, b in zip([int(start[1:]) for start in after], [int(start[1:]) for start in after[1:]] + [32])]
+    assert min(counts[:-1]) >= 3, counts
+    # The PDF has the lines the page has.
+    assert client.get(f"/api/scores/{score_id}/score.pdf").status_code == 200
+
+
+def test_lines_are_laid_out_afresh_when_the_page_changes(client):
+    score_id = blank(client, clef="piano", measures=32)
+    first = line_starts(client.get(f"/api/scores/{score_id}").json())
+    crowded = line_starts(fill_measure(client, score_id, 2, "eighth", 8))
+    assert crowded != first  # Eight eighths no longer fit the first line.
+    for _ in range(8):
+        narrow = line_starts(client.post(f"/api/scores/{score_id}/undo").json())
+    assert narrow == crowded  # Kept, though the measure is empty and narrow again.
+    layout = client.get(f"/api/scores/{score_id}").json()["layout"]
+    data = client.post(f"/api/scores/{score_id}/layout", json=layout | {"left": 50}).json()
+    assert line_starts(data) != narrow and len(line_starts(data)) >= len(first)  # A narrower page: the lines were laid out for it.
+    data = client.post(f"/api/scores/{score_id}/undo").json()
+    assert line_starts(data) == first  # Back on the old page, laid out afresh: the narrow measure is room enough again.
+
+
+def test_the_page_is_told_what_a_place_on_each_staff_means(client):
+    score_id = blank(client, clef="piano", measures=2)
+    data = client.get(f"/api/scores/{score_id}").json()
+    rests = [note for note in notes_of(client, score_id)]
+    treble, bass = rests[0].get("id"), next(note.get("id") for note in rests if note.findtext("staff") == "2")
+    # The treble staff's top line is F5 and the bass staff's A3, as rhythm.diatonic numbers them.
+    assert data["places"][treble] == [0, 0.0, 3 + 7 * 5, 0, 1] and data["places"][bass] == [0, 0.0, 5 + 7 * 3, 0, 1]
+    # The beat as a player counts it: the third quarter of a bar is beat 3, and in 6/8 the fourth eighth is beat 2.
+    data = write(client, score_id, treble, "C", "half")
+    assert data["places"][data["cursor"]][4] == 3
+    six = blank(client, beats=6, beat_type=8, measures=1)
+    data = write(client, six, first_id(client, six), "C", "eighth")
+    data = write(client, six, data["cursor"], "D", "eighth")
+    data = write(client, six, data["cursor"], "E", "eighth")
+    assert data["places"][data["cursor"]][4] == 2
+
+
+def test_a_key_pressed_with_a_note_selected_sets_its_pitch(client):
+    score_id = blank(client, fifths=-1)
+    data = write(client, score_id, first_id(client, score_id), "G", "half")
+    note = data["written"]
+    data = client.post(f"/api/scores/{score_id}/notes/{note}", json={"action": "pitch", "midi": 70}).json()
+    played = notes_of(client, score_id)[0]
+    assert (played.findtext("pitch/step"), played.findtext("pitch/alter"), played.findtext("type")) == ("B", "-1", "half")
+    assert data["cursor"] == note  # Still the one selected.
+    # A rest becomes a note of its own length.
+    rest = next(item.get("id") for item in notes_of(client, score_id) if item.find("rest") is not None)
+    data = client.post(f"/api/scores/{score_id}/notes/{rest}", json={"action": "pitch", "midi": 60}).json()
+    made = next(item for item in notes_of(client, score_id) if item.get("id") == data["cursor"])
+    assert made.findtext("pitch/step") == "C" and made.findtext("type") == "half"

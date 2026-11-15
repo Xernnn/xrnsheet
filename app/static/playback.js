@@ -279,8 +279,11 @@ function showSounding(data, note, at, until) {
   clearPlaying();
   const element = document.getElementById(note.id);
   element?.classList.add("playing");
-  followNote(element);
+  // Lit for as long as it sounds: through a rest after it, only the playhead moves on.
+  const ends = (at(Math.min(note.start + note.length, until)) - at(note.start)) * 1000;
   const timers = player?.timers ?? practice.follower?.timers;
+  timers?.push(setTimeout(() => element?.classList.remove("playing"), Math.max(ends, 50)));
+  followNote(element);
   if (timers && instrumentShown() && (note.part ?? 0) === activePart()) timers.push(soundKey(note.midi, at(Math.min(note.start + note.length, until)) - at(note.start), note.id));
 }
 
@@ -310,8 +313,66 @@ function playCycle(from, until, zero) {
 
 function followPlaying() {
   if (!player) return;
-  drawPosition(playingPlace());
+  const place = playingPlace();
+  drawPosition(place);
+  drawPlayhead(place);
   player.frame = requestAnimationFrame(followPlaying);
+}
+
+// The playhead: a line across the system that moves through each bar as it plays, through rests
+// and held notes too, and the page follows it. Between the notes of a bar it moves at an even pace
+// from one to the next, as the beats pass.
+const playhead = { bar: null, anchors: [], box: null };
+
+function barAnchors(data, bar) {
+  const measure = document.querySelectorAll("#pages g.measure")[bar.index];
+  if (!measure) return null;
+  const staves = [...measure.children].filter(child => child.classList.contains("staff") && child.querySelector(":scope > path"));
+  if (!staves.length) return null;
+  const top = staffLines(staves[0]), bottom = staffLines(staves.at(-1));
+  // Where the bar's music begins, after a clef, key or time signature that starts it.
+  const signs = [...measure.querySelectorAll(":scope > g.staff > g.clef, :scope > g.staff > g.keySig, :scope > g.staff > g.meterSig")];
+  const begins = Math.max(top.left, ...signs.map(sign => sign.getBoundingClientRect().right)) + top.step * 2;
+  const onsets = new Map();
+  // A whole bar's rest is drawn in the middle of its bar, so it says nothing of where its beats are.
+  for (const element of measure.querySelectorAll("g.note, g.rest")) {
+    const found = data.events?.[ownId(element.id)];
+    if (!found || found[0] !== bar.index) continue;
+    onsets.set(found[1], Math.min(onsets.get(found[1]) ?? Infinity, headBox(element).left));
+  }
+  const anchors = [...onsets].sort((first, second) => first[0] - second[0]).map(([onset, x]) => ({ onset, x }));
+  if (!anchors.length || anchors[0].onset > EARLY) anchors.unshift({ onset: 0, x: Math.min(begins, anchors[0]?.x ?? begins) });
+  anchors.push({ onset: bar.length, x: top.right - top.step });
+  return { anchors, top: top.top - top.step * 3, bottom: bottom.bottom + bottom.step * 3, measure };
+}
+
+function drawPlayhead(place) {
+  const line = $("playhead");
+  const data = player?.data ?? practice.follower?.data;
+  const bar = data?.bars?.findLast(item => item.start <= place + EARLY);
+  if (!bar) { line.hidden = true; return; }
+  if (playhead.bar !== bar) {
+    playhead.bar = bar;
+    playhead.box = barAnchors(data, bar);
+    if (playhead.box) followNote(playhead.box.measure);
+  }
+  const box = playhead.box;
+  if (!box) { line.hidden = true; return; }
+  const onset = place - bar.start;
+  const after = box.anchors.findIndex(anchor => anchor.onset > onset + EARLY);
+  const from = box.anchors[Math.max(0, (after < 0 ? box.anchors.length : after) - 1)], to = box.anchors[after < 0 ? box.anchors.length - 1 : after];
+  const share = to.onset > from.onset ? Math.min(1, Math.max(0, (onset - from.onset) / (to.onset - from.onset))) : 0;
+  const frame = $("pagesFrame").getBoundingClientRect();
+  line.hidden = false;
+  line.style.left = `${from.x + (to.x - from.x) * share - frame.left}px`;
+  line.style.top = `${box.top - frame.top}px`;
+  line.style.height = `${box.bottom - box.top}px`;
+}
+
+function hidePlayhead() {
+  $("playhead").hidden = true;
+  playhead.bar = null;
+  playhead.box = null;
 }
 
 // The playback position follows whatever was done last: selecting a note or rest puts it there, and
@@ -358,6 +419,7 @@ function stopPlaying(finished = false) {
   player.audio.close();
   player = null;
   clearPlaying();
+  hidePlayhead();
   quietKeys();
   showPlaying(false);
   showWait("");
@@ -481,7 +543,9 @@ function refreshPosition() {
     const data = await fetchPlayback();
     if (data && !player && !practice.follower) {
       playState.place = Math.min(playState.place, data.total);
-      drawPosition(playState.place);
+      // A note selected since the last play is where the position is, as it's where Play starts.
+      const chosen = playState.chosen && placeOf(data, playState.chosen);
+      drawPosition(chosen ? chosen.start : playState.place);
       refreshKinds();
       lightKeys();
       // A transposing instrument's sound is only known now, and the inspector's strings follow it.

@@ -38,8 +38,7 @@ function setMode(mode, remember = true) {
   document.body.dataset.mode = mode;
   if (remember) keepSetting("mode", mode);
   for (const button of document.querySelectorAll("#modeSwitch button")) button.setAttribute("aria-checked", String(button.dataset.mode === mode));
-  zoom = readSetting(zoomSetting(), usualZoom());
-  setZoom(zoom);
+  restoreZoom();
   drawDock();
   if (score) updateTools();
   drawMidiState();
@@ -60,16 +59,20 @@ function toggleLibrary() {
   if (document.body.classList.contains("atHome")) return;
   const on = !libraryShown();
   if (on && reading()) setMode("write"); // The library is shown beside the score, as in Write.
-  if (innerWidth > 1180) {
-    document.body.classList.toggle("libraryHidden", !on);
-    keepSetting("library", on ? "shown" : "hidden");
-  } else {
-    document.body.classList.toggle("libraryOpen", on);
-  }
+  if (innerWidth > 1180) document.body.classList.toggle("libraryHidden", !on);
+  else document.body.classList.toggle("libraryOpen", on);
   $("libraryToggle").setAttribute("aria-pressed", String(on));
   if (on) drawHistory();
   if (fittedZoom()) setZoom(zoom);
   drawCursor();
+}
+
+// A score that opens has the window to itself: the library folds away, and its button or F6 brings
+// it back. With no score open the library is the window.
+function foldLibrary() {
+  document.body.classList.add("libraryHidden");
+  document.body.classList.remove("libraryOpen");
+  $("libraryToggle").setAttribute("aria-pressed", String(libraryShown()));
 }
 
 // A drawer over the score closes once it has done its job.
@@ -104,7 +107,7 @@ function refreshKinds() {
 
 function partItems() {
   return [
-    ...(score?.parts ?? []).map((_, index) => ({ label: `${partLabel(index)} · ${KINDS[kindOfPart(index)].label.toLowerCase()}`, checked: index === activePart(), run: () => choosePart(index) })),
+    ...(score?.parts ?? []).map((_, index) => ({ label: `${partLabel(index)} · ${KINDS[kindOfPart(index)].label.toLowerCase()}`, checked: index === activePart(), run: () => switchPart(index) })),
     null,
     { label: "Add an instrument…", keys: "I", run: openAddPart },
   ];
@@ -116,11 +119,17 @@ function pageElements() {
   return [...document.querySelectorAll("#pages .page")];
 }
 
+// The pages in sight: those whose middle is in the window, across the desk or, with the pages one
+// below the other, down it.
 function pagesInView() {
   const desk = $("desk");
   const pages = pageElements();
-  const left = desk.scrollLeft, right = left + desk.clientWidth;
-  const shown = pages.map((page, index) => ({ page, index })).filter(({ page }) => page.offsetLeft + page.offsetWidth / 2 > left && page.offsetLeft + page.offsetWidth / 2 < right);
+  const down = fittedToWidth();
+  const from = down ? desk.scrollTop : desk.scrollLeft, to = from + (down ? desk.clientHeight : desk.clientWidth);
+  const middle = page => (down ? page.offsetTop + page.offsetHeight / 2 : page.offsetLeft + page.offsetWidth / 2);
+  let shown = pages.map((page, index) => ({ page, index })).filter(({ page }) => middle(page) > from && middle(page) < to);
+  // A page taller than the window is in sight while any of it is.
+  if (!shown.length && down) shown = pages.map((page, index) => ({ page, index })).filter(({ page }) => page.offsetTop < to && page.offsetTop + page.offsetHeight > from).slice(0, 1);
   return { pages, shown: shown.length ? shown.map(item => item.index) : [0] };
 }
 
@@ -131,6 +140,21 @@ function turnPage(by) {
   if (view === "horizontal") { desk.scrollLeft += by * desk.clientWidth * TURN_SHARE; drawPageCount(); return; }
   const { pages, shown } = pagesInView();
   if (!pages.length) return;
+  const padding = parseFloat(getComputedStyle($("pagesFrame")).paddingTop);
+  if (fittedToWidth()) {
+    // One below the other: a page is read down, then the next one's top is brought up.
+    const page = pages[shown[0]];
+    const top = page.offsetTop - padding, bottom = page.offsetTop + page.offsetHeight;
+    if (by > 0 && desk.scrollTop + desk.clientHeight < bottom - 4) desk.scrollTop = Math.min(desk.scrollTop + desk.clientHeight * TURN_SHARE, bottom - desk.clientHeight + padding);
+    else if (by < 0 && desk.scrollTop > top + 4) desk.scrollTop = Math.max(top, desk.scrollTop - desk.clientHeight * TURN_SHARE);
+    else {
+      const target = shown[0] + by;
+      if (target < 0 || target >= pages.length) return;
+      desk.scrollTop = by > 0 ? pages[target].offsetTop - padding : Math.max(pages[target].offsetTop - padding, pages[target].offsetTop + pages[target].offsetHeight - desk.clientHeight + padding);
+    }
+    drawPageCount();
+    return;
+  }
   const page = pages[shown[0]];
   const bottom = page.offsetTop + page.offsetHeight;
   if (by > 0 && desk.scrollTop + desk.clientHeight < bottom - 4) { desk.scrollTop += desk.clientHeight * TURN_SHARE; drawPageCount(); return; }
@@ -145,6 +169,11 @@ function turnPage(by) {
 function turnToEnd(last) {
   const pages = pageElements();
   if (!pages.length) return;
+  if (fittedToWidth()) {
+    $("desk").scrollTop = last ? pages.at(-1).offsetTop - parseFloat(getComputedStyle($("pagesFrame")).paddingTop) : 0;
+    drawPageCount();
+    return;
+  }
   $("desk").scrollLeft = last ? pages.at(-1).offsetLeft : 0;
   $("desk").scrollTop = last && (score?.view ?? "page") !== "page" ? $("desk").scrollHeight : 0;
   drawPageCount();
@@ -168,6 +197,12 @@ function followNote(element) {
   const desk = $("desk"), room = desk.getBoundingClientRect(), box = element.getBoundingClientRect();
   if (box.left >= room.left && box.right <= room.right && box.top >= room.top && box.bottom <= room.bottom) return;
   const page = element.closest(".page");
+  if (fittedToWidth()) {
+    // One below the other, the window moves down to the line being played, near its top.
+    desk.scrollTop += box.top - room.top - room.height * 0.15;
+    drawPageCount();
+    return;
+  }
   if (box.left < room.left || box.right > room.right) desk.scrollLeft = page.offsetLeft - parseFloat(getComputedStyle($("pagesFrame")).paddingLeft);
   const again = element.getBoundingClientRect();
   if (again.top < room.top || again.bottom > room.bottom) desk.scrollTop += again.top - room.top - room.height * 0.15;
@@ -268,7 +303,7 @@ function practiceCommands() {
 
 function allCommands() {
   const modes = Object.entries(MODES).map(([name, mode]) => ({ label: `${mode.label} mode`, where: "Mode", keys: mode.keys, enabled: Boolean(score), checked: currentMode() === name, run: () => setMode(name) }));
-  const parts = score ? (score.parts ?? []).map((_, index) => ({ label: `Work with ${partLabel(index)}`, where: "Instrument", keys: "", enabled: true, checked: index === activePart(), run: () => choosePart(index) })) : [];
+  const parts = score ? (score.parts ?? []).map((_, index) => ({ label: `Work with ${partLabel(index)}`, where: "Instrument", keys: "", enabled: true, checked: index === activePart(), run: () => switchPart(index) })) : [];
   const scores = sheets.map(sheet => ({ label: `Open ${sheet.title || "Untitled score"}`, where: "Library", keys: "", enabled: true, run: () => openScore(sheet.id) }));
   const inspectorItems = [
     { label: "Inspector on the score", where: "View", keys: "F7", enabled: Boolean(score), run: () => showInspector(true, "score") },
@@ -381,7 +416,6 @@ function setUpWorkspace() {
   $("desk").addEventListener("scroll", () => { if ((score?.view ?? "page") === "horizontal") drawStickyStart(); }, { passive: true });
   window.addEventListener("resize", drawStickyStart);
   $("welcomeNew")?.addEventListener("click", openNewScore);
-  if (readSetting("library", "shown") === "hidden") document.body.classList.add("libraryHidden");
   $("libraryToggle").setAttribute("aria-pressed", String(libraryShown()));
   for (const id of ["topBar", "dockHead"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
   setUpCommands();

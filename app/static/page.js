@@ -52,7 +52,7 @@ function show(view) {
   if (view === "workspace") {
     $("original").hidden = score.blank || originalHidden();
     // A zoom that fits the page depends on how much room the pages have, which is only known now.
-    if (fittedZoom()) setZoom(zoom);
+    restoreZoom();
     drawCursor();
   } else {
     stopPlaying();
@@ -91,6 +91,27 @@ function tileFor(sheet) {
   return link;
 }
 
+// The library's picture of the open score follows its edits, a moment after the last one, and so
+// does when it was saved. Hidden, the library is listed afresh when it's shown.
+let tileTimer = 0;
+const TILE_DELAY_MS = 1200;
+
+function refreshTile() {
+  clearTimeout(tileTimer);
+  const id = scoreId;
+  tileTimer = setTimeout(() => {
+    if (id !== scoreId || !libraryShown()) return;
+    const tile = document.querySelector(`#historyList a[data-score="${id}"]`);
+    if (!tile) { drawHistory(); return; }
+    const now = Date.now() / 1000;
+    tile.querySelector("img").src = `/api/scores/${id}/thumbnail.svg?${now}`;
+    const sheet = sheets.find(item => item.id === id);
+    if (sheet) { sheet.saved = now; sheet.title = score?.title ?? sheet.title; }
+    const state = tile.querySelector(".state");
+    if (sheet && state) state.textContent = tileFor(sheet).querySelector(".state").textContent;
+  }, TILE_DELAY_MS);
+}
+
 function drawTiles() {
   const wanted = $("homeSearch").value.trim().toLowerCase();
   const create = document.createElement("button");
@@ -117,6 +138,7 @@ function message(text) {
 
 function openScore(id) {
   forgetPlayback();
+  foldLibrary();
   scoreId = id;
   score = null;
   selected = null;
@@ -261,6 +283,8 @@ function draw() {
   drawStickyStart();
   updateTools();
   refreshPosition();
+  // The page under the pointer has changed, and so has what a click there would write.
+  if (pointer) drawGhost(pointer.x, pointer.y, pointer.shift);
 }
 
 function drawOriginals() {
@@ -271,10 +295,24 @@ function drawOriginals() {
     const image = new Image();
     image.alt = `Page ${number} of your sheet`;
     image.addEventListener("load", drawBoxes);
+    image.addEventListener("load", () => { if (number === score?.sourcePages?.[0]) layOutOriginal(image); });
     image.src = `/api/scores/${scoreId}/source/${number}.jpg`;
     frame.append(image);
     return frame;
   }));
+}
+
+// A sheet wider than it's tall, such as a lead sheet, is shown across the top of the score, where it
+// can be read at a size, and the score keeps the window's width. A page taller than it's wide is
+// shown beside the score, as it reads best down its height.
+const ACROSS_ABOVE = 1.25; // How much wider than tall a sheet is to go across the top.
+
+function layOutOriginal(image) {
+  const across = image.naturalWidth / image.naturalHeight > ACROSS_ABOVE;
+  if ($("original").classList.contains("across") === across) return;
+  $("original").classList.toggle("across", across);
+  if (fittedZoom()) setZoom(zoom);
+  drawCursor();
 }
 
 function drawBoxes() {
@@ -425,8 +463,12 @@ function clickPages(event) {
   if (reading()) return;
   if (dragged) { dragged = false; return; }
   if (editor.on) {
-    const spot = placeUnder(event.clientX, event.clientY);
     closeEditor();
+    // A note already written is selected, to fix it, not written over. Empty staff is where notes
+    // go, and Shift adds the note to the chord there.
+    const head = event.shiftKey ? null : noteheadAt(event.clientX, event.clientY);
+    if (head) { pickWhileWriting(head); return; }
+    const spot = placeUnder(event.clientX, event.clientY);
     if (spot) placeNote(spot, event.shiftKey);
     return;
   }
@@ -441,13 +483,13 @@ function clickPages(event) {
     openEditor(chord.getBoundingClientRect(), index, score.chords[index].text);
     return;
   }
-  const note = event.target.closest("g.note, g.rest, g.mRest") || nearest("#pages g.note, #pages g.rest, #pages g.mRest", event.clientX, event.clientY, 14);
+  const note = noteheadAt(event.clientX, event.clientY) || event.target.closest("g.note, g.rest, g.mRest") || nearest("#pages g.note, #pages g.rest, #pages g.mRest", event.clientX, event.clientY, 14);
   const staff = note ? null : staffUnder(event.clientX, event.clientY);
   const extend = event.shiftKey;
   closeEditor();
   enqueue(async () => {
     if (note && extend && selected) await growRange(note.id);
-    else if (note) select(note.id);
+    else if (note) { select(note.id); hearNote(note); }
     else if (staff) await selectMeasure(staff, extend);
     else select(null);
   });

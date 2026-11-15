@@ -42,11 +42,73 @@ let lyricVerse = 1;
 let hint = "";
 let dragged = false;
 let drag = null;
+let pointer = null; // Where the mouse is over the pages, so the ghost note is drawn again when they are.
 let lastMidiKey = 0;
 let midiAsked = false;
 
 function plainId(id) {
   return id?.startsWith(AFTER) ? id.slice(AFTER.length) : id;
+}
+
+// Naming a note before it's written, as the server will: the staff's top line, the key, an 8va
+// over it and any sharp or flat earlier in the bar (see places in pipeline/timeline.py).
+const STEP_LETTERS = "CDEFGAB";
+const SHARPS_IN_ORDER = "FCGDAEB";
+const STEP_SEMITONES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+
+function keyAlter(step, fifths) {
+  const at = SHARPS_IN_ORDER.indexOf(step);
+  if (at < 0) return 0;
+  return fifths > 0 && at < fifths ? 1 : fifths < 0 && at >= 7 + fifths ? -1 : 0;
+}
+
+function fifthsAt(element) {
+  const part = partOfStaff(staffNumber(element)) ?? 0;
+  const index = score?.places?.[ownId(element.id)]?.[0] ?? measureIndexOf(element);
+  return score?.timeline?.keys?.[part]?.[index] ?? 0;
+}
+
+function pitchText(step, alter, octave) {
+  return `${step}${ALTERATIONS[alter] ?? ""}${octave}`;
+}
+
+// What a plain note means at an event: the key's sharp or flat, or one written earlier in the bar.
+function alterInForce(element, step, octave) {
+  let alter = keyAlter(step, fifthsAt(element));
+  const places = score?.places ?? {};
+  const at = places[element.id]?.[1] ?? Infinity;
+  const staff = staffNumber(element);
+  const earlier = [...(element.closest("g.measure")?.querySelectorAll("g.note") ?? [])]
+    .filter(note => staffNumber(note) === staff && (places[note.id]?.[1] ?? Infinity) < at)
+    .sort((first, second) => places[first.id][1] - places[second.id][1]);
+  for (const note of earlier) {
+    const [noteStep, noteAlter, noteOctave] = score.notes?.[note.id] ?? [];
+    if (noteStep === step && noteOctave === octave) alter = noteAlter;
+  }
+  return alter;
+}
+
+// The note a place on the staff is at an event, counted in steps down from the top line.
+function pitchAtLine(element, line) {
+  const place = score?.places?.[element?.id];
+  if (!place || place[2] === null || place[2] === undefined) return null;
+  const height = place[2] - line + 7 * place[3];
+  const step = STEP_LETTERS[((height % 7) + 7) % 7], octave = Math.floor(height / 7);
+  const alter = alterInForce(element, step, octave);
+  return { step, alter, octave, name: pitchText(step, alter, octave), midi: 12 * (octave + 1) + STEP_SEMITONES[step] + alter };
+}
+
+const BEAT_FRACTIONS = { 0.25: "¼", 0.5: "½", 0.75: "¾" };
+
+// Where an event is in time, as a player counts it: its bar and beat.
+function whenOf(element) {
+  const place = score?.places?.[ownId(element?.id)];
+  if (!place) return "";
+  const number = measureFacts(place[0]).number;
+  const beat = place[4];
+  if (!beat) return `bar ${number}`;
+  const whole = Math.floor(beat + EARLY), part = Math.round((beat - whole) * 100) / 100;
+  return `bar ${number}, beat ${whole}${part ? BEAT_FRACTIONS[part] ?? `.${String(part).slice(2)}` : ""}`;
 }
 
 // What an action applies to: the note just written while entering notes, otherwise the selection.
@@ -103,6 +165,16 @@ function receive(data) {
   }
   message(data.message);
   draw();
+  // The playback position stays with the selection, or the cursor, through every edit and undo.
+  const at = positionTarget();
+  if (at) playFromNote(at);
+  refreshTile();
+}
+
+// Where the playback position follows: the cursor while writing, otherwise the selection.
+function positionTarget() {
+  if (editor.on) return plainId(editor.cursor);
+  return ownId(range?.first ?? selected) ?? null;
 }
 
 // Switch off what needs a note while there's none to act on. Palettes call this when they're redrawn.
@@ -112,30 +184,68 @@ function enableTools() {
   document.querySelectorAll("#voices button").forEach(button => { button.disabled = !editor.on && !target; });
 }
 
+// What the note input bar shows pressed: while writing, what the next note will be; otherwise what
+// the selected notes are, so the bar and the inspector always say the same.
+function toolState() {
+  const ids = range ? range.ids : [actionTarget()].filter(Boolean);
+  const elements = ids.map(id => document.getElementById(id)).filter(Boolean);
+  const details = elements.map(element => score?.notes?.[ownId(element.id)] ?? []);
+  const same = values => (values.length && values.every(value => value === values[0]) ? values[0] : undefined);
+  const notes = elements.filter(element => element.matches("g.note"));
+  const ties = new Set(score?.ties ?? []);
+  return {
+    type: editor.on ? editor.type : same(details.map(found => found[3] || null)),
+    dots: editor.on ? editor.dots : same(details.map(found => found[4] ?? 0)),
+    voice: editor.on ? editor.voice : same(elements.map(element => layerNumber(element) + 1)),
+    accidental: notes.length === elements.length ? same(notes.map(element => {
+      const [step, alter] = score?.notes?.[ownId(element.id)] ?? [];
+      return alter || (keyAlter(step, fifthsAt(element)) ? 0 : null); // A natural only where the key would have it otherwise.
+    })) : undefined,
+    rest: elements.length > 0 && notes.length === 0,
+    tie: notes.length > 0 && notes.every(element => ties.has(ownId(element.id))),
+    tuplet: elements.length > 0 && elements.every(element => element.closest("g.tuplet")),
+  };
+}
+
+const ACCIDENTAL_ALTERS = { doubleFlat: -2, flat: -1, natural: 0, sharp: 1, doubleSharp: 2 };
+
 function updateTools() {
   enableTools();
+  const state = toolState();
   document.querySelectorAll("#lengths button").forEach(button => {
-    button.setAttribute("aria-pressed", String(editor.on && button.dataset.type === editor.type));
+    button.setAttribute("aria-pressed", String(button.dataset.type === state.type));
   });
-  $("dotButton").setAttribute("aria-pressed", String(editor.on && editor.dots > 0));
+  $("dotButton").setAttribute("aria-pressed", String(state.dots > 0));
   document.querySelectorAll("#voices button").forEach(button => {
-    button.setAttribute("aria-pressed", String(editor.on && Number(button.dataset.voice) === editor.voice));
+    button.setAttribute("aria-pressed", String(Number(button.dataset.voice) === state.voice));
   });
+  document.querySelectorAll("#noteBar [data-action]").forEach(button => {
+    const pressed = button.dataset.action in ACCIDENTAL_ALTERS ? state.accidental === ACCIDENTAL_ALTERS[button.dataset.action] : button.dataset.action === "tie" ? state.tie : false;
+    button.setAttribute("aria-pressed", String(pressed));
+  });
+  $("restButton").setAttribute("aria-pressed", String(!editor.on && state.rest));
+  $("tripletButton").setAttribute("aria-pressed", String(!editor.on && state.tuplet));
   $("inputToggle").setAttribute("aria-pressed", String(editor.on));
+  $("inputLabel").textContent = editor.on ? "Writing" : "Write notes";
   $("caret").dataset.voice = editor.voice;
-  const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : tabSelected() ? "Selected on the tablature. Type a fret, Ctrl+↑ ↓ for another string, or Shift and a digit for a length." : selected ? "Selected. Choose a duration or an action. Shift-click selects a stretch." : "Click a note or rest, or press N to enter notes.";
+  const under = editor.on && !editor.cursor?.startsWith(AFTER) ? document.getElementById(plainId(editor.cursor) ?? "") : null;
+  const over = under?.matches("g.note") ? (under.closest("g.chord") ? [...under.closest("g.chord").querySelectorAll("g.note")] : [under]).map(spelledName).join(" ") : "";
+  $("caret").classList.toggle("over", Boolean(over));
+  $("caret").dataset.over = over ? `writes over ${over}` : "";
+  const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : tabSelected() ? "Selected on the tablature. Type a fret, Ctrl+↑ ↓ for another string, or Shift and a digit for a length." : selected ? "Selected. Drag it up or down, press a key below, or choose a duration. Shift-click selects a stretch." : "Click a note or rest, or press N to write notes.";
   const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
   const said = mark?.text ? `: ${mark.text}`.replace(/\.$/, "") : "";
   const chord = selectedChord !== null && score?.chords?.[selectedChord];
   const chosen = mark ? `${markName(mark)}${said}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : chord ? `Chord ${chord.text}. Type another, or change how it's played in the inspector.` : selection;
   const practising = currentMode() === "practice" ? "Space plays from the selected note. A and B set the loop's ends there, and Hear and Wait for choose a part or a hand." : null;
-  const entering = tabInput() ? "Note input on the tablature. Type a fret for the string the cursor is on, ↑ ↓ for another string, Shift and a digit for a length, or click a string." : "Note input. Press A to G, 0 for a rest, or click the staff.";
+  const entering = tabInput() ? "Writing on the tablature. Type a fret for the string the cursor is on, ↑ ↓ for another string, Shift and a digit for a length, or click a string. Esc stops." : over ? `Writing over ${over} and what follows it, from the cursor on. Click the staff, type A to G or play below. Click a note to select it. Esc stops.` : "Writing. Click the staff, type A to G, 0 for a rest, or play below. Click a note to select it. Esc stops.";
   $("toolLabel").textContent = hint || (editor.on ? entering : practising ?? chosen);
   hint = "";
   drawInspector();
   lightKeys();
   markTimeline();
   if (dockOpen("instrument")) $("trayNote").textContent = trayNote();
+  $("trayNote").classList.toggle("writing", editor.on && !practice.follower);
 }
 
 function staffLines(staff) {
@@ -182,10 +292,15 @@ function drawRangeBoxes() {
 }
 
 function drawCursor() {
+  forgetStaves(); // Called whenever the pages are drawn or move on the desk.
   drawRangeBoxes();
   drawLoopMarkers();
   const caret = $("caret");
   if (!editor.on) { caret.hidden = true; return; }
+  // While writing, the note just written, or one clicked, is the selection the tools act on.
+  document.querySelectorAll("#pages g.selected").forEach(element => element.classList.remove("selected"));
+  const last = editor.last && document.getElementById(editor.last);
+  if (last) markSelected(last);
   if (!document.getElementById(plainId(editor.cursor))) {
     const kept = editor.last && document.getElementById(editor.last);
     editor.cursor = kept ? editor.last : allEvents()[0]?.id ?? null;
@@ -346,6 +461,36 @@ function moveCursor(id) {
   updateTools();
 }
 
+// The place after an event in its voice, or past the end of the staff after the last one.
+function placeAfter(id) {
+  const element = stepOf(document.getElementById(plainId(id) ?? ""));
+  if (!element) return null;
+  const list = eventsInVoice(staffNumber(element), layerNumber(element));
+  const next = list[list.indexOf(element) + 1];
+  return next ? next.id : AFTER + list.at(-1).id;
+}
+
+// Where writing starts. On a selected rest, which is where the note goes. After a selected note or
+// stretch that ends the music in its voice, so writing carries on from it rather than writing over
+// it. On one in the middle of the music, as MuseScore does, to write the passage again from there or
+// a second voice under it: the cursor is drawn there as writing over that note, and the hint says
+// so. With nothing selected, after the last note of the instrument's staff.
+function startingPlace() {
+  const chosen = stepOf(document.getElementById(plainId(range?.first ?? selected) ?? ""));
+  if (chosen) {
+    if (chosen.matches("g.rest, g.mRest")) return chosen.id;
+    const last = stepOf(document.getElementById(range?.last ?? chosen.id)) ?? chosen;
+    const list = eventsInVoice(staffNumber(last), layerNumber(last));
+    const more = list.slice(list.indexOf(last) + 1).some(element => element.matches("g.note"));
+    return more ? chosen.id : placeAfter(last.id);
+  }
+  const staff = firstStaffOf(activePart());
+  const list = eventsInVoice(staff, 0);
+  const last = list.findLastIndex(element => element.matches("g.note"));
+  if (last < 0) return list[0]?.id ?? allEvents()[0]?.id ?? null;
+  return list[last + 1]?.id ?? AFTER + list[last].id;
+}
+
 function setInput(on) {
   if (on === editor.on) return;
   editor.on = on;
@@ -355,16 +500,18 @@ function setInput(on) {
     // A note selected on the tablature starts note input there, on its string.
     editor.tab = onTab(document.getElementById(selected ?? ""));
     editor.string = (editor.tab && playedAs(selected).string) || editor.string;
-    editor.cursor = plainId(selected && editor.tab ? ownId(selected) : selected) ?? allEvents()[0]?.id ?? null;
-    editor.voice = editor.cursor ? layerNumber(document.getElementById(editor.cursor)) + 1 : 1;
+    if (editor.tab) selected = ownId(selected);
+    editor.cursor = startingPlace();
+    editor.voice = editor.cursor ? layerNumber(document.getElementById(plainId(editor.cursor))) + 1 : 1;
     editor.last = null;
     editor.trail = [];
     editor.future = [];
     select(null);
+    playFromNote(plainId(editor.cursor));
   } else {
     const keep = editor.last ?? plainId(editor.cursor);
     editor.cursor = editor.last = null;
-    $("ghost").hidden = true;
+    hideGhost();
     select(keep && document.getElementById(keep) ? keep : null);
   }
   drawCursor();
@@ -386,12 +533,36 @@ function writeAt(step) {
 // The staff and place a click lands on, while entering notes. A tablature staff's lines are strings,
 // not pitches, so a click there is a string, and its place in time is read from the notes and rests
 // of the staff it's linked under.
+// Where each staff's lines are, measured once a drawing, a zoom or the window changes rather than at
+// every move of the mouse: a long score has hundreds of staves, and the ghost note is drawn at each
+// move. They're kept from the pages' own corner, which scrolling doesn't move.
+let staffCache = null;
+
+function forgetStaves() {
+  staffCache = null;
+}
+
+// The staves whose lines are within some steps of a point, with their lines where they are now.
+function stavesNear(x, y, steps) {
+  const frame = $("pagesFrame").getBoundingClientRect();
+  staffCache ??= [...document.querySelectorAll("#pages g.staff")].filter(staff => [...staff.children].some(child => child.tagName === "path")).map(staff => {
+    const lines = staffLines(staff);
+    return { staff, left: lines.left - frame.left, right: lines.right - frame.left, top: lines.top - frame.top, bottom: lines.bottom - frame.top, step: lines.step };
+  });
+  const found = [];
+  for (const known of staffCache) {
+    const left = known.left + frame.left, right = known.right + frame.left, top = known.top + frame.top, bottom = known.bottom + frame.top;
+    if (x < left - HEAD_REACH_PX || x > right + HEAD_REACH_PX || y < top - known.step * steps || y > bottom + known.step * steps) continue;
+    found.push({ staff: known.staff, lines: { left, right, top, bottom, step: known.step } });
+  }
+  return found;
+}
+
 function placeUnder(x, y) {
   let found = null;
   let smallest = Infinity;
-  for (const staff of document.querySelectorAll("#pages g.staff")) {
+  for (const { staff, lines } of stavesNear(x, y, REACH_IN_STEPS)) {
     const tab = isTabStaff(staffNumber(staff));
-    const lines = staffLines(staff);
     if (x < lines.left || x > lines.right) continue;
     const gap = Math.max(lines.top - y, y - lines.bottom, 0);
     if (gap <= lines.step * (tab ? 2 : REACH_IN_STEPS) && gap < smallest) { found = { staff, lines, tab }; smallest = gap; }
@@ -414,19 +585,141 @@ function placeUnder(x, y) {
   return { ...spot, tab: true, string, part: strings.part, gap: strings.gap, y: strings.top + (string - 1) * strings.gap };
 }
 
-function drawGhost(x, y) {
-  const spot = editor.on ? placeUnder(x, y) : null;
+// A ghost note is drawn from the music font's own pieces: its notehead, a stem and a flag, up or down
+// as the staff would have it, as the engraved page has them.
+const GHOST_HEADS = { whole: "E0A2", half: "E0A3", other: "E0A4" };
+const GHOST_FLAGS = { eighth: ["E240", "E241"], "16th": ["E242", "E243"], "32nd": ["E244", "E245"], "64th": ["E246", "E247"] };
+const STEM_UNITS = 875, STEM_WIDTH_UNITS = 30, STEM_FROM_UNITS = 42; // 3.5 spaces long, as the font counts them.
+
+// The note's outline in the font's units, with y going down as SVG has it, and its box.
+function ghostNote(type, up) {
+  const head = setGlyphs(GHOST_HEADS[type] ?? GHOST_HEADS.other);
+  const box = { left: head.left, right: head.right, top: head.top, bottom: head.bottom };
+  let paths = head.paths;
+  if (type !== "whole") {
+    const x = up ? head.right - STEM_WIDTH_UNITS : head.left;
+    paths += up ? `<rect x="${x}" y="${-STEM_UNITS}" width="${STEM_WIDTH_UNITS}" height="${STEM_UNITS - STEM_FROM_UNITS}"/>` : `<rect x="${x}" y="${STEM_FROM_UNITS}" width="${STEM_WIDTH_UNITS}" height="${STEM_UNITS - STEM_FROM_UNITS}"/>`;
+    box.top = Math.max(box.top, up ? STEM_UNITS : 0);
+    box.bottom = Math.min(box.bottom, up ? 0 : -STEM_UNITS);
+    const flag = GHOST_FLAGS[type] && setGlyphs(GHOST_FLAGS[type][up ? 0 : 1]);
+    if (flag) {
+      const at = up ? STEM_UNITS : -STEM_UNITS;
+      paths += `<g transform="translate(${x} ${-at})">${flag.paths}</g>`;
+      box.right = Math.max(box.right, x + flag.right);
+      box.top = Math.max(box.top, at + flag.top);
+      box.bottom = Math.min(box.bottom, at + flag.bottom);
+    }
+  }
+  return { paths, ...box };
+}
+const HEAD_REACH_PX = 3; // A press this near a notehead is on it.
+
+// The notehead under the pointer, or very near it: a click there selects the note, and a drag moves it.
+function noteheadAt(x, y) {
+  let found = null, nearest = Infinity;
+  for (const { staff } of stavesNear(x, y, 14)) {
+    for (const note of staff.querySelectorAll("g.note")) {
+      const box = headBox(note);
+      if (x < box.left - HEAD_REACH_PX || x > box.right + HEAD_REACH_PX || y < box.top - HEAD_REACH_PX || y > box.bottom + HEAD_REACH_PX) continue;
+      const away = Math.hypot(x - (box.left + box.right) / 2, y - (box.top + box.bottom) / 2);
+      if (away < nearest) { found = note; nearest = away; }
+    }
+  }
+  return found;
+}
+
+function hideGhost() {
+  $("ghost").hidden = true;
+  document.querySelectorAll("#pages .replacing, #pages .picked").forEach(element => element.classList.remove("replacing", "picked"));
+}
+
+// Draw a note that isn't written yet: where a click will write it, or where a dragged note is going.
+// It's in the length and the voice's colour it will have, with the ledger lines it needs, and says
+// its name, when it falls in time and what it replaces.
+function paintGhost({ lines, line, x, type, dots = 0, voice, label, band = null }) {
   const ghost = $("ghost");
-  ghost.hidden = !spot;
-  if (!spot) return;
   const frame = $("pagesFrame").getBoundingClientRect();
-  ghost.classList.toggle("onTab", Boolean(spot.tab));
-  const width = spot.tab ? spot.gap * 1.3 : spot.lines.step * 2.8;
-  const height = spot.tab ? spot.gap * 1.1 : spot.lines.step * 2;
-  ghost.style.width = `${width}px`;
-  ghost.style.height = `${height}px`;
-  ghost.style.left = `${spot.x - width / 2 - frame.left + $("pagesFrame").scrollLeft}px`;
-  ghost.style.top = `${(spot.tab ? spot.y - height / 2 : spot.lines.top + (spot.line - 1) * spot.lines.step) - frame.top}px`;
+  const space = lines.step * 2, scale = space / UNITS_PER_SPACE;
+  const head = GLYPHS[GHOST_HEADS[type] ?? GHOST_HEADS.other];
+  const headWidth = (head ? head[3] : 295) * scale;
+  const glyph = ghostNote(type, line >= 4);
+  const originX = x - headWidth / 2, originY = lines.top + line * lines.step;
+  ghost.className = "";
+  ghost.dataset.voice = voice;
+  ghost.style.left = `${originX - frame.left}px`;
+  ghost.style.top = `${originY - space / 2 - frame.top}px`;
+  ghost.style.width = `${headWidth}px`;
+  ghost.style.height = `${space}px`;
+  const ledgers = [];
+  for (let at = -2; at >= line; at -= 2) ledgers.push(at);
+  for (let at = 10; at <= line; at += 2) ledgers.push(at);
+  const thick = Math.max(1, space * 0.16);
+  const dotted = dots ? `<span class="dot" style="left:${headWidth + space * 0.3}px;top:${space / 2 - (line % 2 === 0 ? lines.step : 0) - space * 0.2}px;width:${space * 0.4}px;height:${space * 0.4}px"></span>` : "";
+  const width = (glyph.right - glyph.left) * scale, height = (glyph.top - glyph.bottom) * scale;
+  ghost.innerHTML = `${band ? `<span class="band" style="left:${band.left - originX}px;width:${band.width}px;top:${lines.top - lines.step * 3 - (originY - space / 2)}px;height:${lines.bottom - lines.top + lines.step * 6}px"></span>` : ""}`
+    + ledgers.map(at => `<span class="ledger" style="left:${-space * 0.35}px;width:${headWidth + space * 0.7}px;top:${space / 2 + (at - line) * lines.step - thick / 2}px;height:${thick}px"></span>`).join("")
+    + `<svg class="glyphs" style="left:${glyph.left * scale}px;top:${space / 2 - glyph.top * scale}px" width="${width}" height="${height}" viewBox="${glyph.left} ${-glyph.top} ${glyph.right - glyph.left} ${glyph.top - glyph.bottom}" aria-hidden="true">${glyph.paths}</svg>`
+    + dotted
+    + (label ? `<span class="tag" style="left:${Math.max(glyph.right * scale, headWidth) + space * 0.9}px;top:${space / 2}px"></span>` : "");
+  if (label) ghost.querySelector(".tag").textContent = label;
+  ghost.hidden = false;
+}
+
+function drawGhost(x, y, shift = false) {
+  if (drag) return; // A note being dragged has the ghost.
+  hideGhost();
+  if (!editor.on || pan?.moved) return;
+  // Over a note, a click selects it, so no note is offered to write there.
+  const head = shift ? null : noteheadAt(x, y);
+  if (head) { head.classList.add("picked"); return; }
+  const spot = placeUnder(x, y);
+  if (!spot) return;
+  const ghost = $("ghost");
+  const target = document.getElementById(spot.id);
+  if (spot.tab) {
+    const frame = $("pagesFrame").getBoundingClientRect();
+    const width = spot.gap * 1.3, height = spot.gap * 1.1;
+    ghost.className = "onTab";
+    ghost.dataset.voice = editor.voice;
+    ghost.innerHTML = `<span class="tag" style="left:${width + 6}px;top:${height / 2}px"></span>`;
+    ghost.querySelector(".tag").textContent = [`${noteName(pitchAtFret(spot.part, spot.string, 0))}, string ${spot.string} open: type its fret`, whenOf(target)].filter(Boolean).join(" · ");
+    Object.assign(ghost.style, { width: `${width}px`, height: `${height}px`, left: `${spot.x - width / 2 - frame.left}px`, top: `${spot.y - height / 2 - frame.top}px` });
+    ghost.hidden = false;
+    return;
+  }
+  const pitch = pitchAtLine(target, spot.line);
+  const stacking = shift && spot.isNote;
+  const voiceHere = target && layerNumber(target) + 1 === editor.voice;
+  const replaced = !stacking && voiceHere && target.matches("g.note") ? (target.closest("g.chord") ? [...target.closest("g.chord").querySelectorAll("g.note")] : [target]) : [];
+  replaced.forEach(note => note.classList.add("replacing"));
+  const names = replaced.map(note => spelledName(note)).filter(Boolean);
+  const when = whenOf(target);
+  const label = [stacking ? `+ ${pitch?.name ?? ""} to the chord` : pitch?.name, when, names.length ? `replaces ${names.join(" ")}` : ""].filter(Boolean).join(" · ");
+  const box = headBox(target);
+  paintGhost({ lines: spot.lines, line: spot.line, x: spot.x, type: editor.type, dots: editor.dots, voice: editor.voice, label, band: { left: box.left - 3, width: box.width + 6 } });
+}
+
+// A note clicked while writing becomes the one the tools act on, as a note just written is: the
+// arrows, a key below, a duration or Delete change it, and a drag moves it. The cursor stays where
+// writing goes on.
+function pickWhileWriting(note) {
+  return enqueue(async () => {
+    editor.last = note.id;
+    hearNote(note);
+    drawCursor();
+    updateTools();
+  });
+}
+
+// Sound a note or chord that's been chosen, so it can be heard as well as seen, as MuseScore does.
+function hearNote(element) {
+  if (!element?.matches("g.note")) return;
+  const notes = element.closest("g.chord") ? [...element.closest("g.chord").querySelectorAll("g.note")] : [element];
+  const part = partOfStaff(staffNumber(element)) ?? 0;
+  for (const note of notes) {
+    const [step, alter, octave] = score?.notes?.[ownId(note.id)] ?? [];
+    if (step) hearKey(soundingPitch(12 * (octave + 1) + STEP_SEMITONES[step] + alter, part));
+  }
 }
 
 // A click on a staff writes the note there. On tablature it's the open string clicked, and the
@@ -672,7 +965,8 @@ function openContextMenu(event) {
 function startPan(event) {
   // A drag that ended off the pages got no click to swallow, and mustn't swallow the next one.
   if (!drag) dragged = false;
-  if (event.button !== 0 || editor.on || event.target.closest("g.note, input, button")) return;
+  // A press on a note moves the note. Anywhere else on the paper it moves the pages, while writing too.
+  if (event.button !== 0 || drag || event.target.closest("input, button")) return;
   const desk = $("desk");
   pan = { x: event.clientX, y: event.clientY, left: desk.scrollLeft, top: desk.scrollTop, inPages: Boolean(event.target.closest("#pages")), moved: false };
 }
@@ -983,31 +1277,63 @@ function markAt(event) {
     ?? nearest("#pages g[data-mark], #pages g.hairpin", event.clientX, event.clientY, 4);
 }
 
+// A note pressed and dragged goes up or down the staff, a step at a time, with its new name shown
+// where it's going and heard as it gets there, as in MuseScore. It's selected as it's pressed, so
+// it's the one that moves, while writing too. Only empty paper drags the pages about.
 function startDrag(event) {
-  if (event.button !== 0 || editor.on || event.shiftKey) return;
-  const note = event.target.closest("g.note");
-  if (!note || note.id !== selected) return;
-  const staff = note.closest("g.staff");
-  drag = { id: note.id, y: event.clientY, step: staffLines(staff).step, note, steps: 0 };
+  if (event.button !== 0 || event.shiftKey || reading()) return;
+  const note = noteheadAt(event.clientX, event.clientY);
+  if (!note || onTab(note)) return;
+  const lines = staffLines(note.closest("g.staff"));
+  const box = headBox(note);
+  const [step, alter, octave] = score?.notes?.[note.id] ?? [];
+  if (!step) return;
+  drag = { id: note.id, y: event.clientY, lines, note, steps: 0, moved: false, line: Math.round(((box.top + box.bottom) / 2 - lines.top) / lines.step), x: (box.left + box.right) / 2, pitch: { step, alter, octave }, heard: null };
+}
+
+// The note a drag has reached: moved by steps of the scale, with the key's sharps and flats, as
+// edit.move_note moves it, keeping its own accidental when it moves by whole octaves.
+function draggedPitch(steps) {
+  const { step, alter, octave } = drag.pitch;
+  const height = STEP_LETTERS.indexOf(step) + 7 * octave + steps;
+  const newStep = STEP_LETTERS[((height % 7) + 7) % 7], newOctave = Math.floor(height / 7);
+  const newAlter = steps % 7 ? keyAlter(newStep, fifthsAt(drag.note)) : alter;
+  return { name: pitchText(newStep, newAlter, newOctave), midi: 12 * (newOctave + 1) + STEP_SEMITONES[newStep] + newAlter };
 }
 
 function moveDrag(event) {
   if (!drag) return;
   const distance = drag.y - event.clientY;
   if (!drag.moved && Math.abs(distance) < DRAG_START_PX) return;
-  drag.moved = true;
-  drag.steps = Math.round(distance / drag.step);
-  drag.note.style.transform = `translateY(${-drag.steps * drag.step}px)`;
+  if (!drag.moved) {
+    drag.moved = true;
+    drag.note.classList.add("dragging");
+    hideGhost();
+  }
+  drag.steps = Math.round(distance / drag.lines.step);
+  const pitch = draggedPitch(drag.steps);
+  const [, , , type, dots] = score.notes?.[drag.note.id] ?? [];
+  paintGhost({ lines: drag.lines, line: drag.line - drag.steps, x: drag.x, type: type || "quarter", dots, voice: layerNumber(drag.note) + 1, label: drag.steps ? pitch.name : `${pitch.name}, as it was` });
+  if (drag.heard !== pitch.midi) {
+    drag.heard = pitch.midi;
+    hearKey(soundingPitch(pitch.midi, partOfStaff(staffNumber(drag.note)) ?? 0));
+  }
 }
 
 function endDrag() {
   if (!drag) return;
   const { id, steps, moved, note } = drag;
   drag = null;
-  note.style.transform = "";
+  note.classList.remove("dragging");
+  hideGhost();
   if (!moved) return;
   dragged = true;
-  if (steps) enqueue(() => send(`notes/${id}`, { action: "moveBy", steps }));
+  enqueue(async () => {
+    // The note dragged is the one selected afterwards, while writing too.
+    if (editor.on) editor.last = id; else if (selected !== id || range) select(id);
+    if (steps) await send(`notes/${id}`, { action: "moveBy", steps });
+    else updateTools();
+  });
 }
 
 // Keys pressed together stack into a chord, the way they would on paper.
@@ -1131,8 +1457,16 @@ function setUpToolbar() {
   for (const id of ["noteBar", "viewTools", "pitches", "playPopup", "speedPopup", "library"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
   $("redo").addEventListener("click", redoEdit);
   window.addEventListener("resize", drawCursor);
-  $("pages").addEventListener("mousemove", event => drawGhost(event.clientX, event.clientY));
-  $("pages").addEventListener("mouseleave", () => { $("ghost").hidden = true; });
+  $("pages").addEventListener("mousemove", event => { pointer = { x: event.clientX, y: event.clientY, shift: event.shiftKey }; drawGhost(pointer.x, pointer.y, pointer.shift); });
+  $("pages").addEventListener("mouseleave", () => { pointer = null; hideGhost(); });
+  // Shift pressed or let go over the staff changes what a click there does: add to the chord, or write.
+  for (const name of ["keydown", "keyup"]) {
+    window.addEventListener(name, event => {
+      if (event.key !== "Shift" || !pointer || pointer.shift === event.shiftKey) return;
+      pointer.shift = event.shiftKey;
+      drawGhost(pointer.x, pointer.y, pointer.shift);
+    });
+  }
   $("lyricInput").addEventListener("keydown", event => {
     if (event.key === " ") { event.preventDefault(); saveLyric(false, true, " "); }
     else if (event.key === "-") { event.preventDefault(); saveLyric(true, true, "-"); }
@@ -1284,6 +1618,8 @@ document.addEventListener("keydown", event => {
   if (editor.on) {
     if (key === "0") { handled(); writeAt(null); return; }
     if (key === "Backspace") { handled(); undoEdit(); return; }
+    // The note just written, or one clicked while writing, becomes a rest.
+    if (key === "Delete") { handled(); if (editor.last) noteAction("delete"); return; }
     if (/^[a-gA-G]$/.test(key)) {
       handled();
       if (event.shiftKey) noteAction("stack", { step: key.toUpperCase() }); else writeAt(key.toUpperCase());
@@ -1306,5 +1642,5 @@ setUpTechnique();
 setUpToolbar();
 setUpWorkspace();
 updateTools();
-if (location.hash.length > 1) { scoreId = location.hash.slice(1); poll(); }
+if (location.hash.length > 1) { scoreId = location.hash.slice(1); foldLibrary(); poll(); }
 drawHistory();
