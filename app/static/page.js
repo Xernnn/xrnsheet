@@ -64,15 +64,41 @@ function show(view) {
   if (view === "start") drawHistory();
 }
 
+// A tile in the library: the score as a link to open it, and a ⋮ button, or a right-click, for
+// what else can be done with it, such as Delete.
 function tileFor(sheet) {
-  if (sheet.status && sheet.status !== "ready") return jobTile(sheet);
+  const holder = document.createElement("div");
+  holder.className = "tileBox";
+  holder.setAttribute("role", "listitem");
   const link = document.createElement("a");
   link.className = "tile";
   link.href = `#${sheet.id}`;
   link.dataset.score = sheet.id;
-  link.setAttribute("role", "listitem");
   if (sheet.id === scoreId) link.setAttribute("aria-current", "true");
   link.addEventListener("click", event => { event.preventDefault(); if (sheet.id !== scoreId) openScore(sheet.id); closeDrawers(); });
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "tileMenu flat";
+  more.setAttribute("aria-haspopup", "menu");
+  more.innerHTML = icon("dots");
+  more.addEventListener("click", () => { if (more.getAttribute("aria-expanded") === "true") closeMenus(); else openMenu(more, tileItems(sheet)); });
+  holder.addEventListener("contextmenu", event => { event.preventDefault(); openMenuAt(event.clientX, event.clientY, tileItems(sheet)); });
+  holder.append(link, more);
+  if (sheet.status && sheet.status !== "ready") jobTile(sheet, holder, link);
+  else drawScoreTile(sheet, link);
+  more.setAttribute("aria-label", `More for ${link.querySelector(".name").textContent}`);
+  more.title = "More: open or delete";
+  return holder;
+}
+
+function tileItems(sheet) {
+  const open = { label: "Open", run: () => { if (sheet.id !== scoreId) openScore(sheet.id); closeDrawers(); } };
+  if (sheet.status === "processing") return [open, null, { label: "Cancel reading", run: () => removeSheet(sheet.id) }];
+  if (sheet.status === "failed") return [open, { label: "Try again", run: () => readAgain(sheet.id) }, null, { label: "Remove", run: () => removeSheet(sheet.id) }];
+  return [open, null, { label: "Delete", run: () => removeSheet(sheet.id) }];
+}
+
+function drawScoreTile(sheet, link) {
   const picture = document.createElement("span");
   picture.className = "sheet";
   const image = new Image();
@@ -91,7 +117,6 @@ function tileFor(sheet) {
   state.textContent = `${when} · ${made}`;
   link.title = `${name.textContent}${sheet.composer ? `, by ${sheet.composer}` : ""}, ${state.textContent}`;
   link.append(picture, name, state);
-  return link;
 }
 
 // The name a sheet goes by until it's read: the file it came from.
@@ -119,18 +144,10 @@ function readingState(sheet) {
 
 // A sheet that isn't a score yet: waiting its turn or being read, with Cancel, or one that couldn't be
 // read, saying why, with Try again and Remove. It opens like a score, into how it's getting on.
-function jobTile(sheet) {
-  const holder = document.createElement("div");
-  holder.className = "jobTile";
-  holder.setAttribute("role", "listitem");
+function jobTile(sheet, holder, link) {
   const failed = sheet.status === "failed";
+  holder.classList.add("jobTile");
   holder.dataset.state = failed ? "failed" : sheet.ahead > 0 ? "waiting" : "reading";
-  const link = document.createElement("a");
-  link.className = "tile";
-  link.href = `#${sheet.id}`;
-  link.dataset.score = sheet.id;
-  if (sheet.id === scoreId) link.setAttribute("aria-current", "true");
-  link.addEventListener("click", event => { event.preventDefault(); if (sheet.id !== scoreId) openScore(sheet.id); closeDrawers(); });
   const picture = document.createElement("span");
   picture.className = "sheet";
   picture.innerHTML = failed ? icon("alert") : sheet.ahead > 0 ? icon("clock") : `<span class="spinner"></span>`;
@@ -154,8 +171,7 @@ function jobTile(sheet) {
   };
   if (failed) actions.append(button("Try again", "Read this sheet again", readAgain), button("Remove", "Remove it from the library", removeSheet));
   else actions.append(button("Cancel", "Stop reading this sheet and remove it", removeSheet));
-  holder.append(link, actions);
-  return holder;
+  holder.append(actions);
 }
 
 // The library's picture of the open score follows its edits, a moment after the last one, and so
@@ -348,19 +364,33 @@ function drawReadingTime() {
   $("readingTime").textContent = time === null ? "" : `${clock(time)} so far. A page usually takes under a minute.`;
 }
 
-// Stop reading a sheet and remove it, or remove one that couldn't be read. The server stops its reader.
+// The one way anything leaves the library: Delete on a score, Remove on a sheet that couldn't be
+// read, Cancel on one being read, whose reader the server stops. Nothing asks first: a score or a
+// failed sheet goes to the server's trash, and Undo brings it back, open again if it was open.
 async function removeSheet(id) {
+  const sheet = sheets.find(item => item.id === id);
+  const named = !sheet || sheet.status === "ready" ? `“${(sheet ?? score)?.title || "Untitled score"}”` : sheetName(sheet);
+  const open = id === scoreId && Boolean(score);
   const response = await fetch(`/api/scores/${id}`, { method: "DELETE" });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    message(typeof data.detail === "string" ? data.detail : "That sheet couldn't be removed.");
+    message(typeof data.detail === "string" ? data.detail : "That couldn't be removed.");
     drawHistory();
     return;
   }
   if (id === scoreId) closeScore();
-  sheets = sheets.filter(sheet => sheet.id !== id);
+  sheets = sheets.filter(item => item.id !== id);
   drawTiles();
   drawHistory();
+  if (data.undo) toast(`${named} ${sheet?.status === "failed" ? "removed" : "deleted"}.`, { label: "Undo", run: () => restoreSheet(id, open) });
+}
+
+async function restoreSheet(id, reopen) {
+  const response = await fetch(`/api/scores/${id}/restore`, { method: "POST" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) { message(typeof data.detail === "string" ? data.detail : "That couldn't be brought back."); return; }
+  await drawHistory();
+  if (reopen) openScore(id);
 }
 
 async function readAgain(id) {

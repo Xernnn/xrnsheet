@@ -265,6 +265,7 @@ function menuList() {
       { label: "New…", run: openNewScore },
       { label: "Open…", run: () => $("file").click() },
       { label: "Close", enabled: open, run: closeScore },
+      { label: "Delete", enabled: open, run: () => removeSheet(scoreId) },
       null,
       { label: "Title and composer…", enabled: open, run: openProject },
       { label: "Checked, for retraining", checked: open && Boolean(score.checked), enabled: open && !score.blank, run: markChecked },

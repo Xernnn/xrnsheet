@@ -67,6 +67,8 @@ NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
 SOURCE_FILE = "source.json"  # The name of the file a sheet is read from, to call it by until it has a title.
 CANCEL_WAIT_SECONDS = 10  # How long a cancel waits for the page being read to stop, which is usually at once.
+TRASH = ".trash"  # In the folder of scores: those deleted, kept a while so a delete can be undone.
+TRASH_SECONDS = 7 * 24 * 60 * 60
 OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
 ONLY_READS = {"GET", "HEAD", "OPTIONS"}
 OPENED_FILE = "opened.json"  # Beside a score opened from a MusicXML file.
@@ -78,6 +80,7 @@ FIRST_VERSION_HEAD = 8192  # Where a file names the program that wrote it, near 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     fail_interrupted_jobs()
+    empty_trash()
     yield
     stop_reading()
 
@@ -957,13 +960,28 @@ def get_score(score_id: str) -> dict:
     return describe(folder, status) if status["status"] == "ready" else unfinished(folder, status)
 
 
+def empty_trash() -> None:
+    """Delete for good the scores deleted more than a week ago."""
+    for folder in (JOB_DIR / TRASH).glob("*") if (JOB_DIR / TRASH).is_dir() else []:
+        try:
+            if time.time() - folder.stat().st_mtime > TRASH_SECONDS:
+                shutil.rmtree(folder)
+        except OSError as error:
+            print(f"couldn't empty {folder.name} from the trash: {error!r}", file=sys.stderr)
+
+
 @app.delete("/api/scores/{score_id}")
 def remove_sheet(score_id: str) -> dict:
-    """Stop reading a sheet and remove it, or remove one that couldn't be read.
+    """Delete a score, remove a sheet that couldn't be read, or stop reading one and remove it.
+
+    The one way anything leaves the library. A score or a failed sheet goes to the trash, a folder
+    beside the scores, where nothing lists it, and comes back from there if the delete is undone;
+    it's deleted for good a week later. Deleting only once the page's Undo had gone would lose the
+    delete if the window closed first, and would need the page to stay open to finish it.
 
     A sheet waiting its turn just leaves the line. The one being read has its reader stopped, not
     merely hidden, as it would otherwise hold its memory, and the sheets behind it, for minutes more.
-    A score that has been read is kept: it may have finished just as Cancel was pressed.
+    Neither is kept: there's no reading half done to come back to, and the file is where it was.
     """
     folder = job_folder(score_id)
     with line_changed:
@@ -972,7 +990,7 @@ def remove_sheet(score_id: str) -> dict:
                 line.remove(score_id)
                 line_changed.notify_all()
                 shutil.rmtree(folder, ignore_errors=True)
-                return {"removed": score_id}
+                return {"removed": score_id, "undo": False}
             cancelled.add(score_id)
             with reading_lock:
                 for process, out_dir in reading.items():
@@ -981,11 +999,28 @@ def remove_sheet(score_id: str) -> dict:
             # Its reader stops at once and removes the folder as it leaves the line. A PDF still
             # being turned into pictures stops after that, and is listed as gone meanwhile.
             line_changed.wait_for(lambda: score_id not in line, timeout=CANCEL_WAIT_SECONDS)
-            return {"removed": score_id}
-    if read_status(folder)["status"] == "ready":
-        raise HTTPException(409, "This sheet has been read, so it's kept in your library.")
-    shutil.rmtree(folder)
-    return {"removed": score_id}
+            return {"removed": score_id, "undo": False}
+        with edit_lock:  # An edit to it can't land halfway through its going.
+            trash = JOB_DIR / TRASH
+            trash.mkdir(exist_ok=True)
+            shutil.rmtree(trash / score_id, ignore_errors=True)
+            os.replace(folder, trash / score_id)
+            os.utime(trash / score_id)  # When it was deleted, which the trash is emptied by.
+    empty_trash()
+    return {"removed": score_id, "undo": True}
+
+
+@app.post("/api/scores/{score_id}/restore")
+def restore_sheet(score_id: str) -> dict:
+    """Bring a deleted score back from the trash, as it was."""
+    kept = JOB_DIR / TRASH / score_id
+    if re.fullmatch(r"[0-9a-f]{32}", score_id) is None or not kept.is_dir():
+        raise HTTPException(404, "That score is no longer in the trash.")
+    with edit_lock:
+        if (JOB_DIR / score_id).exists():
+            raise HTTPException(409, "That score is in the library already.")
+        os.replace(kept, JOB_DIR / score_id)
+    return {"id": score_id}
 
 
 @app.post("/api/scores/{score_id}/retry")

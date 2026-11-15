@@ -5231,6 +5231,44 @@ def test_marking_checked_with_things_still_listed(page, base: str, created: list
     check("and it can be un-marked later with the same button", checked() is False and "No longer marked" in page.inner_text("#toastText"))
 
 
+def test_deleting_a_score(page, base: str, created: list[str]) -> None:
+    """There was no way to delete a score: no menu on a tile, no right-click, nothing in the File menu."""
+    keep = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Keep me"})["id"]
+    doomed = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Delete me"})["id"]
+    created.extend([keep, doomed])
+    page.goto(base)
+    tile = page.locator(f'#historyList a[data-score="{doomed}"]')
+    tile.wait_for()
+    there = lambda: doomed in listed(base)
+    tile.hover()
+    more = page.locator(f'.tileBox:has(a[data-score="{doomed}"]) .tileMenu')
+    check("a tile has a menu", more.count() == 1 and more.is_visible())
+    if not more.count():
+        return
+    more.click()
+    page.locator(".menu button", has_text="Delete").click()
+    page.wait_for_selector(f'#historyList a[data-score="{doomed}"]', state="detached")
+    check("Delete there takes the score out of the library at once, asking nothing", not there() and page.is_hidden("dialog[open]") and page.locator(f'#historyList a[data-score="{keep}"]').count() == 1)
+    check("and says so, with Undo", "“Delete me” deleted" in page.inner_text("#toastText") and page.inner_text("#toastAction") == "Undo", page.inner_text("#toastText"))
+    page.click("#toastAction")
+    tile.wait_for()
+    check("Undo brings it back", there())
+    tile.click(button="right")
+    page.locator(".menu button", has_text="Delete").click()
+    page.wait_for_selector(f'#historyList a[data-score="{doomed}"]', state="detached")
+    check("so does a right-click on its tile", not there())
+    page.click("#toastAction")
+    tile.wait_for()
+    tile.click()
+    page.wait_for_selector("#pages svg")
+    menu(page, "File", "Delete")
+    page.wait_for_function("() => document.body.classList.contains('atHome')")
+    check("File ▸ Delete deletes the open score and goes back to the library", not there() and page.locator(f'#historyList a[data-score="{doomed}"]').count() == 0)
+    page.click("#toastAction")
+    page.wait_for_function("id => scoreId === id && score !== null", arg=doomed)
+    check("and Undo brings it back open", there() and page.is_visible("#pages svg") and page.inner_text("#scoreName") == "Delete me")
+
+
 def head_point(page, element_id: str) -> tuple[float, float]:
     """The middle of a note's head, where a mouse aims."""
     box = page.evaluate("""id => {
@@ -5500,6 +5538,7 @@ def main() -> None:
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
             test_library_search_by_composer(page, base, created)
+            test_deleting_a_score(page, base, created)
             test_another_score_opened_while_writing(page, base, created)
             test_a_score_opens_at_its_start(page, base, created)
             test_inspector(page, base, arguments.shots, created)

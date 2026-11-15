@@ -179,8 +179,13 @@ body.atHome #centre { display: none; }
 #readingIcon.failed svg.icon { color: var(--bad); }
 body.busy #inspector, body.busy #dock { display: none !important; }
 body.busy #libraryToggle { display: inline-flex !important; }
+/* A tile, with its ⋮ menu, shown when the tile is pointed at or has the focus. */
+.tileBox { position: relative; display: grid; align-content: start; gap: 2px; }
+.tileMenu { position: absolute; top: 4px; right: 4px; min-width: 28px !important; min-height: 28px; padding: 2px !important; border-radius: 999px; background: color-mix(in srgb, var(--raised) 88%, transparent) !important; opacity: 0; }
+body.atHome .tileMenu { top: 6px; right: 6px; box-shadow: 0 1px 3px var(--shadow); }
+.tileBox:hover .tileMenu, .tileBox:focus-within .tileMenu, .tileMenu[aria-expanded="true"] { opacity: 1; }
+@media (hover: none) { .tileMenu { opacity: 1; } }
 /* What the library shows of a sheet that isn't a score yet: waiting, being read, or failed. */
-.jobTile { display: grid; align-content: start; gap: 2px; }
 .jobTile .actions { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 60px; }
 .jobTile .actions button { min-height: 26px; padding: 1px 9px; font-size: 12px; }
 body.atHome .jobTile .actions { padding-left: 0; }

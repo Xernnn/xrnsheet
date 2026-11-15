@@ -968,7 +968,7 @@ def test_cancelling_a_sheet_waiting_its_turn_removes_it_unread(client, monkeypat
     second = upload_photo(client, "second.png")
     try:
         assert until(lambda: read == [first])
-        assert client.delete(f"/api/scores/{second}").json() == {"removed": second}
+        assert client.delete(f"/api/scores/{second}").json() == {"removed": second, "undo": False}
         assert not (server.JOB_DIR / second).exists() and [sheet["id"] for sheet in client.get("/api/scores").json()] == [first]
     finally:
         finish.set()
@@ -987,7 +987,7 @@ def test_cancelling_the_sheet_being_read_stops_its_reader_and_starts_the_next(cl
     try:
         assert until(lambda: started.exists() and started.read_text())
         readers.append(int(started.read_text()))
-        assert client.delete(f"/api/scores/{first}").json() == {"removed": first}
+        assert client.delete(f"/api/scores/{first}").json() == {"removed": first, "undo": False}
         with pytest.raises(ProcessLookupError):
             os.kill(readers[0], 0)
         assert not (server.JOB_DIR / first).exists()
@@ -995,7 +995,7 @@ def test_cancelling_the_sheet_being_read_stops_its_reader_and_starts_the_next(cl
         assert until(lambda: started.read_text() != str(readers[0]))  # The next sheet's turn has come.
         readers.append(int(started.read_text()))
         assert [(sheet["id"], sheet["ahead"]) for sheet in client.get("/api/scores").json()] == [(second, 0)]
-        assert client.delete(f"/api/scores/{second}").json() == {"removed": second}
+        assert client.delete(f"/api/scores/{second}").json() == {"removed": second, "undo": False}
         assert until(lambda: not server.line) and not (server.JOB_DIR / second).exists()
     finally:
         for reader in readers:
@@ -1026,8 +1026,36 @@ def test_a_sheet_that_could_not_be_read_stays_listed_with_why_to_read_again_or_r
     monkeypatch.setattr(server, "recognize_job", lambda folder, upload: server.write_status(folder, "failed", server.NO_STAVES))
     other = upload_photo(client, "dark.jpg")
     assert until(lambda: not server.line)
-    assert client.delete(f"/api/scores/{other}").json() == {"removed": other} and not (server.JOB_DIR / other).exists()
-    assert client.delete(f"/api/scores/{ready_score}").status_code == 409 and (server.JOB_DIR / ready_score).exists()
+    assert client.delete(f"/api/scores/{other}").json() == {"removed": other, "undo": True} and not (server.JOB_DIR / other).exists()
+    assert client.post(f"/api/scores/{other}/restore").json() == {"id": other}
+    assert {sheet["id"]: sheet["status"] for sheet in client.get("/api/scores").json()}[other] == "failed"  # Back as it was.
+
+
+def test_a_deleted_score_leaves_the_library_and_comes_back_if_undone(client, ready_score):
+    """There was no way to delete a score at all."""
+    url = f"/api/scores/{ready_score}"
+    client.post(f"{url}/chords/0", json={"text": "Bb7"})
+    client.post(f"{url}/checked", json={"checked": True})
+    assert client.delete(url).json() == {"removed": ready_score, "undo": True}
+    assert client.get(url).status_code == 404 and client.get("/api/scores").json() == []
+    assert server.corrections.checked_sheets(server.JOB_DIR) == []  # Nor is it learnt from.
+    assert client.post(f"{url}/chords/0", json={"text": "C"}).status_code == 404
+    assert client.post(f"{url}/restore").json() == {"id": ready_score}
+    back = client.get(url).json()
+    assert back["chords"][0]["text"] == "Bb7" and back["canUndo"] is True and back["checked"] is True  # As it was.
+    assert [sheet["id"] for sheet in client.get("/api/scores").json()] == [ready_score]
+    assert client.post(f"{url}/restore").status_code == 404  # Nothing left to bring back.
+
+
+def test_the_trash_is_emptied_a_week_after_a_delete(client, ready_score):
+    client.delete(f"/api/scores/{ready_score}")
+    kept = server.JOB_DIR / server.TRASH / ready_score
+    week = time.time() - server.TRASH_SECONDS - 60
+    os.utime(kept, (week, week))
+    other = blank(client)
+    client.delete(f"/api/scores/{other}")  # Deleting empties what's old.
+    assert not kept.exists() and (server.JOB_DIR / server.TRASH / other).exists()
+    assert client.post(f"/api/scores/{ready_score}/restore").status_code == 404
 
 
 def long_score(name):
