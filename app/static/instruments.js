@@ -529,8 +529,8 @@ function stringToKeep(part, sounding, where) {
 
 // The sound a part's keys, frets and strings make: its instrument's recordings, a piano's or a
 // guitar's, or for any other part the plain triangle every key had before.
-function keySound(part) {
-  const samples = samplesOf(playState.data ?? {}, part);
+function keySound(part, midi) {
+  const samples = samplesOf(playState.data ?? {}, part, midi);
   return samples ? { ...USUAL_SOUND, samples } : USUAL_SOUND;
 }
 
@@ -543,13 +543,13 @@ function holdKey(key, midi, part = activePart(), volume = HELD_VOLUME) {
   held.voices.set(key, voice);
   try {
     keyPreview ??= new (window.AudioContext || window.webkitAudioContext)();
-    const sound = keySound(part);
+    const sound = keySound(part, midi);
     const begin = () => {
       if (held.voices.get(key) !== voice && !voice.released) return; // Pressed again meanwhile.
       voice.letGo = heldVoice(keyPreview, sound, midi, volume);
       if (voice.released) voice.letGo();
     };
-    if (sound.samples) loadRecording(recordingOf(sound.samples, midi).url).then(begin);
+    if (sound.samples) loadRecording(recordingOf(sound.samples, midi).url, sound.samples).then(begin);
     else begin();
   } catch {
     // Without sound the key still writes its note.
@@ -603,8 +603,8 @@ function hearKey(midi, part = activePart()) {
   };
   try {
     keyPreview ??= new (window.AudioContext || window.webkitAudioContext)();
-    const sound = keySound(part);
-    if (sound.samples) loadRecording(recordingOf(sound.samples, midi).url).then(() => sounded(sound));
+    const sound = keySound(part, midi);
+    if (sound.samples) loadRecording(recordingOf(sound.samples, midi).url, sound.samples).then(() => sounded(sound));
     else sounded(sound);
   } catch {
     // Without sound the key still writes its note.

@@ -2410,6 +2410,53 @@ def test_guitar_sound(context, base: str, created: list[str]) -> None:
     page.close()
 
 
+# Recordings started from here on, and how many of them have come to their end, by themselves or stopped.
+TRACK_ENDS = """() => {
+    window.ends = { started: 0, ended: 0 };
+    if (window.trackingEnds) return;
+    window.trackingEnds = true;
+    const start = AudioBufferSourceNode.prototype.start;
+    AudioBufferSourceNode.prototype.start = function (...args) {
+        ends.started += 1;
+        this.addEventListener("ended", () => { ends.ended += 1; });
+        return start.apply(this, args);
+    };
+}"""
+
+
+def test_bowed_sound(context, base: str, created: list[str]) -> None:
+    page = context.new_page()
+    for staff, name, letter, spot in [
+        ("violin", "violin", "a", '#fingerboard .spot[data-string="2"][data-stop="3"]'),
+        ("cello", "cello", "c", '#fingerboard .spot[data-string="3"][data-stop="2"]'),
+    ]:
+        score_id = held_note(page, base, created, staff, letter)
+        data = json.loads(fetch_text(base, f"/api/scores/{score_id}/playback"))
+        check(f"a {name} score of one held note, played slowly", [note["length"] for note in data["notes"]] == [4.0] and data["tempo"] == 40, (data["notes"], data["tempo"]))
+        rate, samples = exported(page)
+        bowing, later, last = loudness(samples, rate, 0.5, 1.5), loudness(samples, rate, 4.5, 5.5), loudness(samples, rate, 5.7, 5.95)
+        check(f"exported, the {name} can be heard", max(abs(sample) for sample in samples[: int(rate * 1.5) * 2]) > 3000)
+        # Its recordings last a second and a half; a plucked or struck one would be dying away by now.
+        check(f"and its held note keeps sounding for as long as it's bowed, past the end of its recording", later > 0.6 * bowing and last > 0.6 * bowing, (round(bowing), round(later), round(last)))
+        check("then the bow leaves the string, quieting it rather than cutting it off", max(abs(sample) for sample in samples[int(rate * 6.35) * 2 :]) == 0 and loudness(samples, rate, 6.05, 6.15) > 0)
+        made = played(page)
+        check(f"Play sounds the {name}'s notes from its recordings, with no oscillator", made["recordings"] >= 1 and made["oscillators"] == 0, made)
+        made = pressed(page, spot)
+        check(f"and so does a place on the fingerboard below, from a recording it hadn't needed yet", made == {"oscillators": 0, "recordings": 1}, made)
+        page.wait_for_timeout(500)
+        page.evaluate(TRACK_ENDS)
+        box = page.locator(spot).bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.wait_for_timeout(2500)
+        held = page.evaluate("() => ends")
+        check(f"a place on the {name}'s fingerboard held down keeps sounding past its recording's end", held == {"started": 1, "ended": 0}, held)
+        page.mouse.up()
+        page.wait_for_timeout(500)
+        check("and let go, it stops", page.evaluate("() => ends.ended") == held["started"], page.evaluate("() => ends"))
+    page.close()
+
+
 def mixer_strip(page, name: str):
     return page.locator(f'#mixerStrips .strip:has(.name:text-is("{name}"))')
 
@@ -5047,6 +5094,7 @@ def main() -> None:
             test_audio_file(page, base, created)
             test_piano_sound(context, base, created)
             test_guitar_sound(context, base, created)
+            test_bowed_sound(context, base, created)
             test_held_keys(context, base, created)
             test_mixer(page, base, arguments.shots, created)
             test_piano_keyboard(page, base, arguments.shots, created)
