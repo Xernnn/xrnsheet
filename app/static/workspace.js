@@ -178,7 +178,11 @@ function readDown(by) {
   desk.scrollTop += top - room.top;
 }
 
+// Pages turned are where the reader now is, even when the turn lands where an earlier zoom left the
+// desk, as Home does after a spread on: the music kept from that zoom, on the page turned away from,
+// would otherwise be what the next zoom or mode brought back.
 function turnPage(by) {
+  keptMusic = null;
   const desk = $("desk");
   const view = score?.view ?? "page";
   if (view === "vertical") { readDown(by); drawPageCount(); return; }
@@ -214,6 +218,7 @@ function turnPage(by) {
 }
 
 function turnToEnd(last) {
+  keptMusic = null;
   const pages = pageElements();
   if (!pages.length) return;
   if (fittedToWidth() || wholePages()) {

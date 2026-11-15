@@ -3096,6 +3096,35 @@ def test_zooming_keeps_the_music_in_sight(page, base: str, created: list[str]) -
     page.set_viewport_size(size)
 
 
+def test_pages_turned_back_to_are_the_ones_kept(page, base: str, created: list[str]) -> None:
+    """After turning the pages in Whole page, another zoom or mode shows the pages turned to, not those of an older zoom."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    size = page.viewport_size
+    page.set_viewport_size({"width": 1886, "height": 1080})
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "width")
+    page.keyboard.press("Home")
+    on_page = lambda: page.evaluate("index => pageElements().indexOf(document.querySelectorAll('#pages g.system')[index].closest('.page'))", music_at_the_top(page))
+    for _ in range(10):
+        if on_page() == 1:
+            break
+        page.keyboard.press(" ")
+    page.select_option("#zoomChoice", "page")
+    page.keyboard.press(" ")
+    page.keyboard.press("Home")
+    check("reading the second page at Fit width, then Whole page, a spread on and Home, shows the first spread", shown_pages(page) == [0, 1], shown_pages(page))
+    page.keyboard.press("Alt+p")
+    top = page.evaluate("() => pageElements()[0].getBoundingClientRect().top - $('desk').getBoundingClientRect().top")
+    check("Practice at Fit width then starts from the top of the first page, not the second page read before", 0 <= top < 30, (top, music_at_the_top(page)))
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "width")
+    page.set_viewport_size(size)
+
+
 def test_the_zoom_menu_reads_in_full(page, base: str, created: list[str]) -> None:
     """Every zoom in the menu at the bottom right reads in full, and the bar keeps its width whichever is chosen."""
     open_blank(page, base, created)
@@ -5145,6 +5174,7 @@ def main() -> None:
             test_reading_on_a_laptop(page, base, created)
             test_reading_on_a_system_at_a_time(page, base, created)
             test_zooming_keeps_the_music_in_sight(page, base, created)
+            test_pages_turned_back_to_are_the_ones_kept(page, base, created)
             test_the_zoom_menu_reads_in_full(page, base, created)
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
