@@ -109,19 +109,24 @@ def test_the_metronome_counts_a_pickup_as_the_end_of_a_bar_and_six_eight_in_two(
 def test_the_counters_read_and_write_a_time_and_a_measure_and_beat():
     bars = [{"start": 0, "length": 2, "full": 4, "index": 0, "beats": 4, "beatType": 4}, {"start": 2, "length": 4, "full": 4, "index": 1, "beats": 4, "beatType": 4}]
     body = f"""
+        let score = {{ timeline: {{ measures: [{{ number: "0" }}, {{ number: "1" }}] }} }};
         const data = {{ bars: {json.dumps(bars)}, tempo: 120, tempos: [{{ start: 0, bpm: 120 }}, {{ start: 2, bpm: 60 }}] }};
         const clock = clockFor(data, 1);
+        const numbered = [beatAt(data, 0), beatAt(data, 1), beatAt(data, 3.5), placeAtBeat(data, 1, 3), placeAtBeat(data, 0, 1), placeAtBeat(data, 9, 1)];
+        score = null;
         console.log(JSON.stringify([
             timeText(0), timeText(3725.43), secondsIn("01:02:05.5"), secondsIn("1:30"), secondsIn("x"),
-            beatAt(data, 0), beatAt(data, 1), beatAt(data, 3.5), placeAtBeat(data, 2, 3), placeAtBeat(data, 1, 1), placeAtBeat(data, 9, 1),
+            ...numbered,
             clock(4), clock.place(clock(4)), clock.place(2.5),
+            beatAt(data, 3.5), placeAtBeat(data, 2, 3),
         ]));
     """
     found = run_script(playback_program(body))
     assert found[:5] == ["00:00:00.0", "01:02:05.4", 3725.5, 90, None]
-    assert found[5:8] == [{"measure": 1, "beat": 3}, {"measure": 1, "beat": 4}, {"measure": 2, "beat": 2}], "a pickup of two beats starts on the third"
+    assert found[5:8] == [{"measure": "0", "beat": 3}, {"measure": "0", "beat": 4}, {"measure": "1", "beat": 2}], "a pickup of two beats starts on the third, in measure 0 as the page numbers it"
     assert found[8:11] == [4, 0, None], "a pickup's first beat is where it starts, not before"
-    assert found[11:] == [3, 4, 3.5], "two beats at 120 take a second, and a beat and a half at 60 the rest"
+    assert found[11:14] == [3, 4, 3.5], "two beats at 120 take a second, and a beat and a half at 60 the rest"
+    assert found[14:] == [{"measure": "2", "beat": 2}, 4], "with no numbers from the score, measures are counted from 1"
 
 
 def test_a_loop_goes_round_the_selection_wherever_it_is_first_played():
