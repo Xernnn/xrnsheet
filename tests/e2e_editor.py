@@ -3414,6 +3414,28 @@ def test_command_palette(page, base: str, created: list[str]) -> None:
     page.keyboard.press("Escape")
 
 
+def test_dynamics_found_by_name(page, base: str, created: list[str]) -> None:
+    """The command palette finds a dynamic by its word, as a musician says it, not only by its letters."""
+    score_id = written_melody(page, base, created, tune="cdef")
+    select_notes(page, 0)
+    page.keyboard.press("Control+Shift+P")
+    page.fill("#commandInput", "forte")
+    first = page.locator("#commandList li").first.inner_text()
+    check("forte finds the dynamic f first", first.startswith("f,") and "forte" in first, first)
+    page.keyboard.press("Enter")
+    settle(page)
+    select_notes(page, 2)
+    command(page, "mezzo forte")
+    settle(page)
+    marks = [next(iter(found)).tag for found in saved_score(base, score_id).iter("dynamics")]
+    check("and mezzo forte finds mf, each put on the note chosen", marks == ["f", "mf"], marks)
+    page.keyboard.press("Control+Shift+P")
+    page.fill("#commandInput", "mf")
+    first = page.locator("#commandList li").first.inner_text()
+    check("the letters still find it first", first.startswith("mf,"), first)
+    page.keyboard.press("Escape")
+
+
 def neck_spots(page, holder: str, kind: str) -> list[list[int]]:
     return page.evaluate("([holder, kind]) => [...document.querySelectorAll(`#${holder} .spot.${kind}`)].map(spot => [Number(spot.dataset.string), Number(spot.dataset.stop)])", [holder, kind])
 
@@ -5132,6 +5154,7 @@ def main() -> None:
             test_inspector(page, base, arguments.shots, created)
             test_a_rest_in_the_instrument_box(page, base, created)
             test_command_palette(page, base, created)
+            test_dynamics_found_by_name(page, base, created)
             test_fretboard(page, base, arguments.shots, created)
             test_fingerboard_and_switcher(page, base, arguments.shots, created)
             test_cello_and_double_bass_fingerboards(page, base, arguments.shots, created)
