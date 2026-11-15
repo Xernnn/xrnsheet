@@ -997,7 +997,9 @@ function setUpPage() {
   $("desk").addEventListener("scroll", () => { if (!$("editor").hidden && document.activeElement !== $("chordInput")) closeEditor(); });
   $("undo").addEventListener("click", () => undoEdit());
   $("checked").addEventListener("click", markChecked);
-  $("checkedDialog").addEventListener("close", () => { if ($("checkedDialog").returnValue === "mark") setChecked(true); });
+  // Marked as the button is pressed, not once the dialog has closed, which comes a moment later, so an
+  // edit made straight after can't overtake it.
+  $("checkedAnyway").addEventListener("click", () => setChecked(true));
   for (const id of ["file", "camera"]) {
     // Cleared afterwards, so choosing the same file again still counts as a choice.
     $(id).addEventListener("change", event => { upload(event.target.files[0]); event.target.value = ""; });
@@ -1036,7 +1038,6 @@ function markChecked() {
   const listed = stillListed();
   if (!listed) { setChecked(true); return; }
   $("checkedWhat").textContent = listed;
-  $("checkedDialog").returnValue = "";
   $("checkedDialog").showModal();
 }
 
