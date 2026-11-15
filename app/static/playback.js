@@ -21,6 +21,10 @@ const SAMPLE_SETS = {
   piano: { name: "piano", folder: "sounds/piano", lowest: 21, highest: 108, every: 3, level: 4.7 }, // The Salamander Grand Piano, A0 to C8 (see its README).
 };
 const SAMPLED_FAMILIES = { 0: SAMPLE_SETS.piano }; // The piano family, General MIDI's first eight sounds.
+// Chord symbols are played softly under the music on the piano, the usual accompaniment, or on the
+// sine wave they had if its recordings can't be had.
+const CHORD_SOUND = { wave: "sine", level: 1, samples: SAMPLE_SETS.piano };
+const CHORD_VOLUME = 0.045;
 const FILE_NAMES = ["C", "Cs", "D", "Ds", "E", "F", "Fs", "G", "Gs", "A", "As", "B"]; // A recording's name, as in "Fs3.mp3".
 // A key let go: the damper comes down on the string and quiets it over this long, rather than cutting it off.
 const DAMPER_SECONDS = 0.3;
@@ -126,10 +130,9 @@ function play(audio, sound, midi, at, length, volume, destination = audio.destin
 async function readySamples(data) {
   if (!data) return data;
   const wanted = new Set(), names = new Set();
-  for (const note of data.notes) {
-    const set = soundOf(data, note).samples;
-    if (set) { wanted.add(recordingOf(set, note.midi).url); names.add(set.name); }
-  }
+  const want = (set, midi) => { if (set) { wanted.add(recordingOf(set, midi).url); names.add(set.name); } };
+  for (const note of data.notes) want(soundOf(data, note).samples, note.midi);
+  if (playState.chords) for (const chord of data.chords) chord.midi.forEach(midi => want(CHORD_SOUND.samples, midi));
   if (!wanted.size) return data;
   const words = `Getting the ${[...names].join(" and ")} ready…`;
   const slow = setTimeout(() => message(words), SLOW_LOADING_MS);
@@ -275,7 +278,7 @@ function schedule(audio, data, from, zero, speed = 1, until = Infinity, options 
   for (const chord of chords) {
     const begins = Math.max(chord.start, from);
     const ends = Math.min(chord.start + chord.length, until);
-    for (const midi of chord.midi) tone(audio, midi, at(begins), at(ends) - at(begins), 0.045, "sine", nodes.chords.gain);
+    for (const midi of chord.midi) play(audio, CHORD_SOUND, midi, at(begins), at(ends) - at(begins), CHORD_VOLUME, nodes.chords.gain);
   }
   const beats = options.metronome ? beatsBetween(data, from, Math.min(until, data.total)) : [];
   for (const beat of beats) tick(audio, at(beat.place), beat.strong, nodes.metronome.gain);
