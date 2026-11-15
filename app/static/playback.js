@@ -14,13 +14,21 @@ const FAMILY_SOUNDS = {
 };
 const USUAL_SOUND = { wave: "triangle", level: 1 };
 // Instruments recorded from the real thing: a note every few semitones, each played a little faster
-// or slower for the notes between, as a sampler does. The level makes a middle C's first fifth of a
-// second as loud as the triangle it replaces, so the mix and the metronome keep their balance.
+// or slower for the notes between, as a sampler does. The level makes a note's first fifth of a
+// second as loud as the stand-in it replaces, so the mix and the metronome keep their balance.
 // Another instrument is one more set, and one more family below, with a folder of its own notes.
+// A set that isn't a note every so many semitones lists its notes: each one's pitch, how many
+// cents sharp it was recorded, and how many decibels it's turned up or down to match the rest, as
+// a sampler's mapping evens out a recording session.
 const SAMPLE_SETS = {
   piano: { name: "piano", folder: "sounds/piano", lowest: 21, highest: 108, every: 3, level: 4.7 }, // The Salamander Grand Piano, A0 to C8 (see its README).
+  // FreePats' classical guitar, E2 to C6, and Karoryfer's Growlybass, E1 to D♯4 (see their READMEs).
+  guitar: { name: "guitar", folder: "sounds/guitar", type: "flac", level: 1.8, notes: [[40, 0, -1], [43, 11], [47, 8, 1], [50, 5], [53, 5, -1], [56, 8, -4], [59, 15, -2], [62, 8], [65], [69, 0, -4], [72, 11, 4], [75, 0, 3], [78, 0, 2], [81, 9, -1], [84, 7, 5]] },
+  bassGuitar: { name: "bass guitar", folder: "sounds/bass-guitar", type: "flac", level: 4.4, notes: [[28, 28], [30, 6, 4], [33, 0, 2], [36, -6, 2], [39, 0, -1], [42, 0, 3], [45, 0, -1], [51, 6], [57, 0, -3], [63, 8, -6]] },
 };
-const SAMPLED_FAMILIES = { 0: SAMPLE_SETS.piano }; // The piano family, General MIDI's first eight sounds.
+// General MIDI's families by their first sound: the pianos (1 to 8), the guitars (25 to 32) and the
+// basses (33 to 40).
+const SAMPLED_FAMILIES = { 0: SAMPLE_SETS.piano, 3: SAMPLE_SETS.guitar, 4: SAMPLE_SETS.bassGuitar };
 // Chord symbols are played softly under the music on the piano, the usual accompaniment, or on the
 // sine wave they had if its recordings can't be had.
 const CHORD_SOUND = { wave: "sine", level: 1, samples: SAMPLE_SETS.piano };
@@ -69,11 +77,30 @@ function tone(audio, midi, at, length, volume, wave, destination = audio.destina
   oscillator.stop(end + 0.02);
 }
 
-// The recording nearest a pitch: the note it was recorded at, and where its file is.
+// The recording nearest a pitch: the note it was recorded at, where its file is, how much faster or
+// slower it's played to sound the pitch, its tuning allowed for, and how much louder or softer.
 function recordingOf(set, midi) {
   const count = Math.floor((set.highest - set.lowest) / set.every);
-  const recorded = set.lowest + Math.min(count, Math.max(0, Math.round((midi - set.lowest) / set.every))) * set.every;
-  return { midi: recorded, url: `${set.folder}/${FILE_NAMES[recorded % 12]}${Math.floor(recorded / 12) - 1}.mp3` };
+  const [recorded, cents = 0, decibels = 0] = set.notes
+    ? set.notes.reduce((nearest, note) => (Math.abs(note[0] - midi) < Math.abs(nearest[0] - midi) ? note : nearest))
+    : [set.lowest + Math.min(count, Math.max(0, Math.round((midi - set.lowest) / set.every))) * set.every];
+  return {
+    midi: recorded,
+    url: `${set.folder}/${FILE_NAMES[recorded % 12]}${Math.floor(recorded / 12) - 1}.${set.type ?? "mp3"}`,
+    rate: 2 ** ((midi - recorded - cents / 100) / 12),
+    gain: 10 ** (decibels / 20),
+  };
+}
+
+// A recording cut short of its natural end, as the bass's are, is damped over its last moments, so
+// a note held past it dies away instead of stopping with a click. One that ends in silence, as
+// the piano's do, is the same with it.
+function shapeRecording(buffer) {
+  const fade = Math.min(buffer.length, Math.round(DAMPER_SECONDS * buffer.sampleRate));
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const samples = buffer.getChannelData(channel);
+    for (let index = 0; index < fade; index++) samples[buffer.length - fade + index] *= 1000 ** (-index / fade);
+  }
 }
 
 // Fetched and decoded the first time it's asked for. One that can't be had is null, and the
@@ -85,6 +112,7 @@ function loadRecording(url) {
       if (!response.ok) throw new Error(`${url} answered ${response.status}`);
       recordings.decoder ??= new OfflineAudioContext(2, 1, AUDIO_RATE);
       const buffer = await recordings.decoder.decodeAudioData(await response.arrayBuffer());
+      shapeRecording(buffer);
       recordings.buffers.set(url, buffer);
       return buffer;
     })().catch(error => {
@@ -96,6 +124,12 @@ function loadRecording(url) {
   return recordings.loading.get(url);
 }
 
+// How loud a recording is played. A stereo recording goes through the mixer's pan whole, so it
+// isn't given back what a pan in the middle takes from a sound in one channel.
+function levelOf(set, recording, buffer, volume) {
+  return Math.max(volume * set.level * recording.gain / (buffer.numberOfChannels > 1 ? PAN_LAW : 1), 1e-6);
+}
+
 // A recorded note: the string is struck, rings for as long as the key is held, and is damped when
 // it's let go. Between two recordings it's the nearer one played faster or slower.
 function sampled(audio, set, midi, at, length, volume, destination) {
@@ -105,11 +139,9 @@ function sampled(audio, set, midi, at, length, volume, destination) {
   const source = audio.createBufferSource();
   const gain = audio.createGain();
   const end = at + Math.max(length, 0.05);
-  // A stereo recording goes through the mixer's pan whole, so it isn't given back what a pan in the
-  // middle takes from a sound in one channel.
-  const level = Math.max(volume * set.level / (buffer.numberOfChannels > 1 ? PAN_LAW : 1), 1e-6);
+  const level = levelOf(set, recording, buffer, volume);
   source.buffer = buffer;
-  source.playbackRate.value = 2 ** ((midi - recording.midi) / 12);
+  source.playbackRate.value = recording.rate;
   gain.gain.setValueAtTime(level, at);
   gain.gain.setValueAtTime(level, end);
   gain.gain.exponentialRampToValueAtTime(level / 1000, end + DAMPER_SECONDS);
@@ -134,8 +166,8 @@ function heldVoice(audio, sound, midi, volume, destination = audio.destination) 
   if (buffer) {
     voice = audio.createBufferSource();
     voice.buffer = buffer;
-    voice.playbackRate.value = 2 ** ((midi - recording.midi) / 12);
-    gain.gain.setValueAtTime(Math.max(volume * sound.samples.level / (buffer.numberOfChannels > 1 ? PAN_LAW : 1), 1e-6), at);
+    voice.playbackRate.value = recording.rate;
+    gain.gain.setValueAtTime(levelOf(sound.samples, recording, buffer, volume), at);
   } else {
     voice = audio.createOscillator();
     voice.type = sound.wave;

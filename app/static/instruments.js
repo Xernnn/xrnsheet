@@ -527,15 +527,15 @@ function stringToKeep(part, sounding, where) {
   return {};
 }
 
-// The sound a part's keys make: a piano's recordings, or for any other part the plain triangle every
-// key had before.
+// The sound a part's keys, frets and strings make: its instrument's recordings, a piano's or a
+// guitar's, or for any other part the plain triangle every key had before.
 function keySound(part) {
   const samples = samplesOf(playState.data ?? {}, part);
   return samples ? { ...USUAL_SOUND, samples } : USUAL_SOUND;
 }
 
 // A key pressed, by [key] ("pointer", or "midi:60" for a MIDI keyboard's): it sounds until letGo. A
-// key pressed again is damped first, as a piano's hammer stops the string it strikes again. A piano's
+// key pressed again is damped first, as a piano's hammer stops the string it strikes again. A
 // recording is fetched the first time a key needs it; one let go before it came is heard briefly.
 function holdKey(key, midi, part = activePart(), volume = HELD_VOLUME) {
   letGo(key, true);

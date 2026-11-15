@@ -2338,6 +2338,78 @@ def test_piano_sound(context, base: str, created: list[str]) -> None:
     page.close()
 
 
+def held_note(page, base: str, created: list[str], staff: str, letter: str = "c") -> str:
+    """A score of one bar for an instrument: one whole note, typed, at 40 a minute, six seconds long."""
+    score_id = open_blank(page, base, created, bars=1, staff=staff)
+    page.keyboard.press("Escape")
+    show_instrument(page)
+    page.keyboard.press("n")
+    page.keyboard.press("7")
+    page.keyboard.press(letter)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    select_notes(page, 0)
+    menu(page, "Add", "Text", "Tempo marking")
+    page.fill("#chordInput", "40")
+    page.keyboard.press("Enter")
+    settle(page)
+    page.keyboard.press("Escape")
+    if page.evaluate("() => playState.metronome"):
+        page.click("#metronome")
+    return score_id
+
+
+def exported(page) -> tuple[int, array.array]:
+    """The score's audio as exported: its rate and its stereo samples, left and right in turn."""
+    with page.expect_download() as download:
+        menu(page, "File", "Export", "Audio (WAV)")
+    with wave.open(str(download.value.path())) as sound:
+        return sound.getframerate(), array.array("h", sound.readframes(sound.getnframes()))
+
+
+def played(page) -> dict:
+    """What Play makes its sounds with, from the start of the score."""
+    page.evaluate(COUNT_SOUNDS)
+    page.click("#rewind")
+    page.click("#play")
+    wait_playing(page, True)
+    made = page.evaluate("() => made")
+    page.click("#play")
+    wait_playing(page, False)
+    return made
+
+
+def pressed(page, spot: str) -> dict:
+    """What a key, fret or place on a string below makes its sound with, pressed and let go."""
+    page.evaluate(COUNT_SOUNDS)
+    page.locator(spot).click()
+    page.wait_for_function("() => made.recordings + made.oscillators > 0")
+    return page.evaluate("() => made")
+
+
+def test_guitar_sound(context, base: str, created: list[str]) -> None:
+    page = context.new_page()
+    for staff, name, spot, decays in [
+        ("guitar", "guitar", '#fretboard .spot[data-string="1"][data-stop="5"]', 4),
+        ("bass-guitar", "bass guitar", '#fretboard .spot[data-string="2"][data-stop="5"]', 2),
+    ]:
+        score_id = held_note(page, base, created, staff)
+        data = json.loads(fetch_text(base, f"/api/scores/{score_id}/playback"))
+        check(f"a {name} score of one held note, played slowly", [note["length"] for note in data["notes"]] == [4.0] and data["tempo"] == 40, (data["notes"], data["tempo"]))
+        rate, samples = exported(page)
+        struck, later = loudness(samples, rate, 0, 0.2), loudness(samples, rate, 2, 2.5)
+        check(f"exported, the {name} can be heard", max(abs(sample) for sample in samples[: int(rate * 0.2) * 2]) > 3000)
+        # The triangle it was given held on six seconds at nine tenths of its first loudness.
+        check(f"and its held note dies away, as a plucked string does", struck > decays * later, (round(struck), round(later)))
+        check("let go, it's damped rather than left ringing", max(abs(sample) for sample in samples[int(rate * 6.35) * 2 :]) == 0)
+        made = played(page)
+        check(f"Play sounds the {name}'s notes from its recordings, with no oscillator", made["recordings"] >= 1 and made["oscillators"] == 0, made)
+        made = pressed(page, spot)
+        check(f"and so does a fret of the fretboard below, from a recording it hadn't needed yet", made == {"oscillators": 0, "recordings": 1}, made)
+    page.close()
+
+
 def mixer_strip(page, name: str):
     return page.locator(f'#mixerStrips .strip:has(.name:text-is("{name}"))')
 
@@ -4974,6 +5046,7 @@ def main() -> None:
             test_pickup(page, base, created)
             test_audio_file(page, base, created)
             test_piano_sound(context, base, created)
+            test_guitar_sound(context, base, created)
             test_held_keys(context, base, created)
             test_mixer(page, base, arguments.shots, created)
             test_piano_keyboard(page, base, arguments.shots, created)
