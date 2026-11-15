@@ -2389,6 +2389,207 @@ def test_piano_sound(context, base: str, created: list[str]) -> None:
     page.close()
 
 
+def held_note(page, base: str, created: list[str], staff: str, letter: str = "c") -> str:
+    """A score of one bar for an instrument: one whole note, typed, at 40 a minute, six seconds long."""
+    score_id = open_blank(page, base, created, bars=1, staff=staff)
+    page.keyboard.press("Escape")
+    show_instrument(page)
+    page.keyboard.press("n")
+    page.keyboard.press("7")
+    page.keyboard.press(letter)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    select_notes(page, 0)
+    menu(page, "Add", "Text", "Tempo marking")
+    page.fill("#chordInput", "40")
+    page.keyboard.press("Enter")
+    settle(page)
+    page.keyboard.press("Escape")
+    if page.evaluate("() => playState.metronome"):
+        page.click("#metronome")
+    return score_id
+
+
+def exported(page) -> tuple[int, array.array]:
+    """The score's audio as exported: its rate and its stereo samples, left and right in turn."""
+    with page.expect_download() as download:
+        menu(page, "File", "Export", "Audio (WAV)")
+    with wave.open(str(download.value.path())) as sound:
+        return sound.getframerate(), array.array("h", sound.readframes(sound.getnframes()))
+
+
+def played(page) -> dict:
+    """What Play makes its sounds with, from the start of the score."""
+    page.evaluate(COUNT_SOUNDS)
+    page.click("#rewind")
+    page.click("#play")
+    wait_playing(page, True)
+    made = page.evaluate("() => made")
+    page.click("#play")
+    wait_playing(page, False)
+    return made
+
+
+def pressed(page, spot: str) -> dict:
+    """What a key, fret or place on a string below makes its sound with, pressed and let go."""
+    page.evaluate(COUNT_SOUNDS)
+    page.locator(spot).click()
+    page.wait_for_function("() => made.recordings + made.oscillators > 0")
+    return page.evaluate("() => made")
+
+
+def test_guitar_sound(context, base: str, created: list[str]) -> None:
+    page = context.new_page()
+    for staff, name, spot, decays in [
+        ("guitar", "guitar", '#fretboard .spot[data-string="1"][data-stop="5"]', 4),
+        ("bass-guitar", "bass guitar", '#fretboard .spot[data-string="2"][data-stop="5"]', 2),
+    ]:
+        score_id = held_note(page, base, created, staff)
+        data = json.loads(fetch_text(base, f"/api/scores/{score_id}/playback"))
+        check(f"a {name} score of one held note, played slowly", [note["length"] for note in data["notes"]] == [4.0] and data["tempo"] == 40, (data["notes"], data["tempo"]))
+        rate, samples = exported(page)
+        struck, later = loudness(samples, rate, 0, 0.2), loudness(samples, rate, 2, 2.5)
+        check(f"exported, the {name} can be heard", max(abs(sample) for sample in samples[: int(rate * 0.2) * 2]) > 3000)
+        # The triangle it was given held on six seconds at nine tenths of its first loudness.
+        check(f"and its held note dies away, as a plucked string does", struck > decays * later, (round(struck), round(later)))
+        check("let go, it's damped rather than left ringing", max(abs(sample) for sample in samples[int(rate * 6.35) * 2 :]) == 0)
+        made = played(page)
+        check(f"Play sounds the {name}'s notes from its recordings, with no oscillator", made["recordings"] >= 1 and made["oscillators"] == 0, made)
+        made = pressed(page, spot)
+        check(f"and so does a fret of the fretboard below, from a recording it hadn't needed yet", made == {"oscillators": 0, "recordings": 1}, made)
+    page.close()
+
+
+# Recordings started from here on, and how many of them have come to their end, by themselves or stopped.
+TRACK_ENDS = """() => {
+    window.ends = { started: 0, ended: 0 };
+    if (window.trackingEnds) return;
+    window.trackingEnds = true;
+    const start = AudioBufferSourceNode.prototype.start;
+    AudioBufferSourceNode.prototype.start = function (...args) {
+        ends.started += 1;
+        this.addEventListener("ended", () => { ends.ended += 1; });
+        return start.apply(this, args);
+    };
+}"""
+
+
+def test_bowed_sound(context, base: str, created: list[str]) -> None:
+    page = context.new_page()
+    for staff, name, letter, spot in [
+        ("violin", "violin", "a", '#fingerboard .spot[data-string="2"][data-stop="3"]'),
+        ("cello", "cello", "c", '#fingerboard .spot[data-string="3"][data-stop="2"]'),
+    ]:
+        score_id = held_note(page, base, created, staff, letter)
+        data = json.loads(fetch_text(base, f"/api/scores/{score_id}/playback"))
+        check(f"a {name} score of one held note, played slowly", [note["length"] for note in data["notes"]] == [4.0] and data["tempo"] == 40, (data["notes"], data["tempo"]))
+        rate, samples = exported(page)
+        bowing, later, last = loudness(samples, rate, 0.5, 1.5), loudness(samples, rate, 4.5, 5.5), loudness(samples, rate, 5.7, 5.95)
+        check(f"exported, the {name} can be heard", max(abs(sample) for sample in samples[: int(rate * 1.5) * 2]) > 3000)
+        # Its recordings last a second and a half; a plucked or struck one would be dying away by now.
+        check(f"and its held note keeps sounding for as long as it's bowed, past the end of its recording", later > 0.6 * bowing and last > 0.6 * bowing, (round(bowing), round(later), round(last)))
+        check("then the bow leaves the string, quieting it rather than cutting it off", max(abs(sample) for sample in samples[int(rate * 6.35) * 2 :]) == 0 and loudness(samples, rate, 6.05, 6.15) > 0)
+        made = played(page)
+        check(f"Play sounds the {name}'s notes from its recordings, with no oscillator", made["recordings"] >= 1 and made["oscillators"] == 0, made)
+        made = pressed(page, spot)
+        check(f"and so does a place on the fingerboard below, from a recording it hadn't needed yet", made == {"oscillators": 0, "recordings": 1}, made)
+        page.wait_for_timeout(500)
+        page.evaluate(TRACK_ENDS)
+        box = page.locator(spot).bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.wait_for_timeout(2500)
+        held = page.evaluate("() => ends")
+        check(f"a place on the {name}'s fingerboard held down keeps sounding past its recording's end", held == {"started": 1, "ended": 0}, held)
+        page.mouse.up()
+        page.wait_for_timeout(500)
+        check("and let go, it stops", page.evaluate("() => ends.ended") == held["started"], page.evaluate("() => ends"))
+    page.close()
+
+    broken = context.new_page()
+    warned: list[str] = []
+    broken.on("console", lambda item: warned.append(item.text) if item.type == "warning" else None)
+    broken.route("**/sounds/cello/*", lambda route: route.fulfill(status=404, body=""))
+    broken.goto(f"{base}/#{score_id}")
+    broken.wait_for_selector("#pages svg")
+    broken.evaluate("() => { const make = AudioContext.prototype.createOscillator; window.waves = []; AudioContext.prototype.createOscillator = function () { const made = make.call(this); queueMicrotask(() => waves.push(made.type)); return made; }; }")
+    made = played(broken)
+    said = [text for text in warned if "couldn't be loaded" in text]
+    waves = broken.evaluate("() => waves")
+    check("without its recordings a cello still plays, on the sawtooth it had, and says why once", made["oscillators"] >= 1 and made["recordings"] == 0 and set(waves) == {"sawtooth"} and len(said) == 1, (made, waves, said))
+    broken.close()
+
+
+def test_pizzicato_sound(context, base: str, created: list[str]) -> None:
+    """A violin's half note plucked, pizz., then one bowed again, arco, at 40 a minute."""
+    page = context.new_page()
+    score_id = open_blank(page, base, created, bars=1, staff="violin")
+    page.keyboard.press("6")
+    page.keyboard.type("aa", delay=0)
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    select_notes(page, 0)
+    menu(page, "Add", "Text", "Tempo marking")
+    page.fill("#chordInput", "40")
+    page.keyboard.press("Enter")
+    settle(page)
+    notes = [note.get("id") for note in own_notes(saved_score(base, score_id))]
+    marks_api(base, score_id, {"action": "pizzicato", "notes": notes[:1], "on": True})
+    marks_api(base, score_id, {"action": "pizzicato", "notes": notes[1:], "on": False})
+    page.reload()
+    page.wait_for_selector("#pages svg")
+    if page.evaluate("() => playState.metronome"):
+        page.click("#metronome")
+    data = json.loads(fetch_text(base, f"/api/scores/{score_id}/playback"))
+    check("the first note is plucked and the second bowed", [note.get("program") for note in data["notes"]] == [46, None], data["notes"])
+    rate, samples = exported(page)
+    plucked, after = loudness(samples, rate, 0, 0.2), loudness(samples, rate, 0.45, 0.7)
+    # The sawtooth it had was still seven tenths as loud as it ended.
+    check("exported, the pizz. note is plucked: it dies away at once", max(abs(sample) for sample in samples[: int(rate * 0.2) * 2]) > 3000 and plucked > 4 * after, (round(plucked), round(after)))
+    bowing, held = loudness(samples, rate, 3.5, 4.0), loudness(samples, rate, 5.0, 5.9)
+    check("and the arco note after it is bowed, held to its end", held > 0.6 * bowing, (round(bowing), round(held)))
+    made = played(page)
+    check("Play sounds both from recordings, with no oscillator", made["recordings"] >= 2 and made["oscillators"] == 0, made)
+    heard = page.evaluate("() => [...recordings.buffers.keys()].filter(url => url.includes('violin')).map(url => url.includes('/pizzicato/') ? 'plucked' : 'bowed').sort()")
+    check("the violin's plucked recordings for pizz. and its bowed ones for arco", heard == ["bowed", "plucked"], heard)
+    page.close()
+
+
+# A violin, a viola and a cello, named as a quartet's parts are, and a guitar and a bass guitar: each
+# part's name, clef and the octave of the A it holds for a bar.
+STRING_TRIO = [("Violin I", "G", 2, 4), ("Viola", "C", 3, 4), ("Violoncello", "F", 4, 3)]
+GUITARS = [("Guitar", "G", 2, 4), ("Bass Guitar", "F", 4, 2)]
+
+
+def named_parts(parts: list[tuple], program: int | None) -> bytes:
+    """A MusicXML score of the parts, each an A held for a bar, all with one General MIDI sound or none."""
+    sound = lambda number: f'<score-instrument id="P{number}-I1"><instrument-name>Strings</instrument-name></score-instrument><midi-instrument id="P{number}-I1"><midi-program>{program}</midi-program></midi-instrument>' if program else ""
+    listed = "".join(f'<score-part id="P{number}"><part-name>{name}</part-name>{sound(number)}</score-part>' for number, (name, *_rest) in enumerate(parts, start=1))
+    music = "".join(
+        f'<part id="P{number}"><measure number="1"><attributes><divisions>1</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time>'
+        f"<clef><sign>{sign}</sign><line>{line}</line></clef></attributes><note><pitch><step>A</step><octave>{octave}</octave></pitch><duration>4</duration><type>whole</type></note></measure></part>"
+        for number, (_name, sign, line, octave) in enumerate(parts, start=1)
+    )
+    return f'<?xml version="1.0" encoding="UTF-8"?><score-partwise version="4.0"><part-list>{listed}</part-list>{music}</score-partwise>'.encode()
+
+
+def test_string_parts_by_their_names(page, base: str, created: list[str]) -> None:
+    for parts, program, where in [(STRING_TRIO + GUITARS, None, "with no sound named, as many files' quartets are"), (STRING_TRIO, 49, "given a string section's sound, as Mozart's in music21's corpus are")]:
+        page.goto(base)
+        page.set_input_files("#file", files=[{"name": "parts.musicxml", "mimeType": "application/xml", "buffer": named_parts(parts, program)}])
+        page.wait_for_selector("#pages svg")
+        created.append(page.evaluate("() => scoreId"))
+        page.wait_for_function("() => playState.data !== null")
+        # Each part's A is above a violin's lowest note, so only its name says it isn't a violin.
+        played_on = page.evaluate("() => playState.data.notes.map(note => [note.part, note.midi, soundOf(playState.data, note).samples?.name ?? null]).sort()")
+        wanted = [[0, 69, "violin"], [1, 69, "viola"], [2, 57, "cello"], [3, 69, "guitar"], [4, 45, "bass guitar"]][: len(parts)]
+        check(f"a violin, viola and cello{' and two guitars' if len(parts) > 3 else ''} {where} play their own recordings", played_on == wanted, played_on)
+        made = played(page)
+        check("so Play sounds no oscillator", made["recordings"] == len(parts) and made["oscillators"] == 0, made)
+
+
 def mixer_strip(page, name: str):
     return page.locator(f'#mixerStrips .strip:has(.name:text-is("{name}"))')
 
@@ -5208,6 +5409,10 @@ def main() -> None:
             test_audio_file(page, base, created)
             test_files_saved_are_named_after_the_score(page, base, created)
             test_piano_sound(context, base, created)
+            test_guitar_sound(context, base, created)
+            test_bowed_sound(context, base, created)
+            test_pizzicato_sound(context, base, created)
+            test_string_parts_by_their_names(page, base, created)
             test_held_keys(context, base, created)
             test_mixer(page, base, arguments.shots, created)
             test_piano_keyboard(page, base, arguments.shots, created)
