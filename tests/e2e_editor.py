@@ -2456,6 +2456,19 @@ def test_bowed_sound(context, base: str, created: list[str]) -> None:
         check("and let go, it stops", page.evaluate("() => ends.ended") == held["started"], page.evaluate("() => ends"))
     page.close()
 
+    broken = context.new_page()
+    warned: list[str] = []
+    broken.on("console", lambda item: warned.append(item.text) if item.type == "warning" else None)
+    broken.route("**/sounds/cello/*", lambda route: route.fulfill(status=404, body=""))
+    broken.goto(f"{base}/#{score_id}")
+    broken.wait_for_selector("#pages svg")
+    broken.evaluate("() => { const make = AudioContext.prototype.createOscillator; window.waves = []; AudioContext.prototype.createOscillator = function () { const made = make.call(this); queueMicrotask(() => waves.push(made.type)); return made; }; }")
+    made = played(broken)
+    said = [text for text in warned if "couldn't be loaded" in text]
+    waves = broken.evaluate("() => waves")
+    check("without its recordings a cello still plays, on the sawtooth it had, and says why once", made["oscillators"] >= 1 and made["recordings"] == 0 and set(waves) == {"sawtooth"} and len(said) == 1, (made, waves, said))
+    broken.close()
+
 
 def test_pizzicato_sound(context, base: str, created: list[str]) -> None:
     """A violin's half note plucked, pizz., then one bowed again, arco, at 40 a minute."""
