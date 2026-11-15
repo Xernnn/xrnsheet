@@ -493,6 +493,10 @@ function startingPlace() {
 
 function setInput(on) {
   if (on === editor.on) return;
+  // Note input is only of use in Write, where the staff takes clicks and letters. Turned on from
+  // Read or Practice, by a new score, the menu or the command palette, it goes there too, as N does,
+  // or it would show its blue edge and ghost note while nothing could be written.
+  if (on && !writing()) setMode("write");
   editor.on = on;
   document.body.classList.toggle("inputting", on);
   if (on) {

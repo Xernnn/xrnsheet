@@ -2557,6 +2557,34 @@ def test_modes(page, base: str, shots: Path | None, created: list[str]) -> None:
     check("and Alt+W keeps to Write", page.get_attribute("body", "data-mode") == "write" and page.input_value("#zoomChoice") != "page")
 
 
+def test_writing_starts_in_write(page, base: str, created: list[str]) -> None:
+    """Note input belongs to Write: whatever turns it on from Read or Practice goes there too."""
+    first = open_blank(page, base, created)
+    page.keyboard.press("Escape")
+    page.keyboard.press("Alt+r")
+    menu(page, "File", "New…")
+    page.click('#quickStart [data-quick="piano"] .start')
+    page.wait_for_function("id => scoreId !== id && score !== null && editor.on", arg=first)
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    check("a new score opens in Write with note input on, though Read was the last mode", page.get_attribute("body", "data-mode") == "write" and page.get_attribute("#inputToggle", "aria-pressed") == "true" and page.is_visible("#noteBar"), page.get_attribute("body", "data-mode"))
+    page.keyboard.press("c")
+    settle(page)
+    written = pitched(read_notes(base, score_id))
+    check("and a letter typed straight away is written", len(written) == 1 and written[0].startswith("C"), written)
+    page.keyboard.press("Escape")
+    page.keyboard.press("Alt+p")
+    menu(page, "Add", "Notes", "Note input")
+    settle(page)
+    check("Add ▸ Note input in Practice goes to Write", page.get_attribute("body", "data-mode") == "write" and page.evaluate("() => editor.on"), page.get_attribute("body", "data-mode"))
+    page.keyboard.press("Escape")
+    page.keyboard.press("Alt+r")
+    command(page, "note input")
+    settle(page)
+    check("and so does Note input from the command palette in Read", page.get_attribute("body", "data-mode") == "write" and page.evaluate("() => editor.on"), page.get_attribute("body", "data-mode"))
+    page.keyboard.press("Escape")
+
+
 def test_library(page, base: str, created: list[str]) -> None:
     first = written_melody(page, base, created, tune="cdef")
     menu(page, "File", "Title and composer…")
@@ -4369,6 +4397,7 @@ def main() -> None:
             test_sound_of_marks(page, base, created)
             test_playback_toolbar(page, base, arguments.shots, created)
             test_modes(page, base, arguments.shots, created)
+            test_writing_starts_in_write(page, base, created)
             test_library(page, base, created)
             test_inspector(page, base, arguments.shots, created)
             test_command_palette(page, base, created)
