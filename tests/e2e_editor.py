@@ -2793,6 +2793,91 @@ def test_reading_on_a_system_at_a_time(page, base: str, created: list[str]) -> N
     page.keyboard.press("Alt+w")
 
 
+def music_at_the_top(page, kind: str = "g.system") -> list[int]:
+    """The first system, or bar, any of which is in the window, counted from 0."""
+    return page.evaluate("""kind => {
+        const room = $("desk").getBoundingClientRect();
+        return [...document.querySelectorAll(`#pages ${kind}`)].map(element => element.getBoundingClientRect())
+            .findIndex(box => box.bottom > room.top + 1 && box.top < room.bottom - 1 && box.right > room.left + 1 && box.left < room.right - 1);
+    }""", kind)
+
+
+def place_in_window(page, index: int, kind: str = "g.system") -> list[int]:
+    """How far below the window's top a system, or bar, begins, how far right of its left edge, and how far left of its right edge it ends."""
+    return page.evaluate("""([index, kind]) => {
+        const room = $("desk").getBoundingClientRect(), box = document.querySelectorAll(`#pages ${kind}`)[index].getBoundingClientRect();
+        return [Math.round(box.top - room.top), Math.round(box.left - room.left), Math.round(room.right - box.right)];
+    }""", [index, kind])
+
+
+def at_the_top(place: list[int]) -> bool:
+    """Whether a system is at the top of the window, whole across it, as reading on brings one."""
+    return 0 <= place[0] < 30 and place[1] >= 0 and place[2] >= 0
+
+
+def test_zooming_keeps_the_music_in_sight(page, base: str, created: list[str]) -> None:
+    """A new zoom keeps the music that was at the top of the window there, however the zoom is changed."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    size = page.viewport_size
+    page.set_viewport_size({"width": 1886, "height": 1080})
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "width")
+    page.keyboard.press("Home")
+    page.keyboard.press(" ")
+    system = music_at_the_top(page)
+    on_page = page.evaluate("index => pageElements().indexOf(document.querySelectorAll('#pages g.system')[index].closest('.page'))", system)
+    page.select_option("#zoomChoice", "page")
+    check("Whole page after reading on shows the row with the page being read", on_page in shown_pages(page), (system, on_page, shown_pages(page)))
+    page.select_option("#zoomChoice", "width")
+    check("and Fit width again the system being read", at_the_top(place_in_window(page, system)), place_in_window(page, system))
+    page.select_option("#zoomChoice", "page")
+    page.keyboard.press(" ")
+    turned = shown_pages(page)
+    page.select_option("#zoomChoice", "width")
+    top = page.evaluate("index => pageElements()[index].getBoundingClientRect().top - $('desk').getBoundingClientRect().top", turned[0])
+    check("Fit width after turning a spread shows its first page from the top", 0 <= top < 30, (turned, top))
+    for _ in range(2):
+        page.keyboard.press(" ")
+    system = music_at_the_top(page)
+    kept = []
+    for change in ("Control+=", "Control+-", "Control+-", "100"):
+        if change.isdigit():
+            page.select_option("#zoomChoice", change)
+        else:
+            page.keyboard.press(change)
+        kept.append((change, round(zoom_factor(page), 2), place_in_window(page, system)))
+    check("zooming in or out, by the keys or the menu, keeps the system being read at the top", all(at_the_top(place) for *_, place in kept), (system, kept))
+    page.keyboard.press("Alt+w")
+    writing = place_in_window(page, system)
+    page.keyboard.press("Alt+r")
+    back = place_in_window(page, system)
+    check("and so does going to Write and back, each at its own zoom", at_the_top(writing) and at_the_top(back), (system, writing, back))
+    page.select_option("#zoomChoice", "width")
+    page.keyboard.press("Home")
+    page.keyboard.press(" ")
+    system = music_at_the_top(page)
+    page.set_viewport_size({"width": 960, "height": 1080})
+    page.wait_for_timeout(200)
+    check("and a narrower window, at a zoom fitted to it", at_the_top(place_in_window(page, system)) and zoom_factor(page) < 1.4, (system, place_in_window(page, system), zoom_factor(page)))
+    page.set_viewport_size({"width": 1886, "height": 1080})
+    page.select_option("#viewMode", "horizontal")
+    settle(page)
+    page.select_option("#zoomChoice", "100")
+    page.evaluate("() => { const bar = document.querySelectorAll('#pages g.measure')[20].getBoundingClientRect(); $('desk').scrollLeft += bar.left - $('desk').getBoundingClientRect().left - 40; }")
+    along = place_in_window(page, 20, "g.measure")
+    page.keyboard.press("Control+=")
+    zoomed = place_in_window(page, 20, "g.measure")
+    check("in the one-line view, the bar at the left of the window stays there", abs(zoomed[1] - along[1]) < 2, (along, zoomed))
+    page.select_option("#viewMode", "page")
+    settle(page)
+    page.keyboard.press("Alt+w")
+    page.set_viewport_size(size)
+
+
 def test_top_bar_at_half_a_screen(page, base: str, created: list[str]) -> None:
     """A window tiled to half a laptop's screen keeps the title and the instrument readable."""
     open_blank(page, base, created, staff="piano")
@@ -4685,6 +4770,7 @@ def main() -> None:
             test_writing_starts_in_write(page, base, created)
             test_reading_on_a_laptop(page, base, created)
             test_reading_on_a_system_at_a_time(page, base, created)
+            test_zooming_keeps_the_music_in_sight(page, base, created)
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
             test_inspector(page, base, arguments.shots, created)

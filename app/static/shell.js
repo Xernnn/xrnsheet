@@ -427,6 +427,61 @@ function centreDesk() {
   desk.scrollLeft = Math.max(0, (desk.scrollWidth - desk.clientWidth) / 2);
 }
 
+// A new zoom keeps the music that was at the top of the window at the top. Left alone, the desk
+// would keep its scroll in pixels while the pages changed size under it, and show other music: at
+// Fit width with bar 10's system at the top of page 1, Whole page went to pages 3 and 4. What's kept
+// is the first system any of which is in sight, or in the one-line view the first bar, and the top
+// of its page too when that's in sight, as it is at the start of the score. Pages side by side may
+// show the edge of the page before the one being read, so a system whose middle is in sight across
+// the window comes first. Zoomed again before anything has scrolled, the same music is kept, even
+// where the last zoom couldn't put it quite where it was, as near the end of the score: otherwise
+// zooming in and back out could wander to other music.
+let keptMusic = null;
+
+function musicAtTop() {
+  const desk = $("desk");
+  if (keptMusic?.element.isConnected && keptMusic.scrolled === `${desk.scrollLeft} ${desk.scrollTop}`) return { ...keptMusic, drawn: drawnSize() };
+  const room = desk.getBoundingClientRect();
+  const inSight = box => box.bottom > room.top + 1 && box.top < room.bottom - 1 && box.right > room.left + 1 && box.left < room.right - 1;
+  const across = box => (box.left + box.right) / 2 > room.left && (box.left + box.right) / 2 < room.right;
+  const kind = (score?.view ?? "page") === "horizontal" ? "g.measure" : "g.system";
+  const shown = [...document.querySelectorAll(`#pages ${kind}`)].filter(found => inSight(found.getBoundingClientRect()));
+  const element = shown.find(found => across(found.getBoundingClientRect())) ?? shown[0];
+  if (!element) return null;
+  const box = element.getBoundingClientRect(), page = element.closest(".page");
+  const pageTop = page.getBoundingClientRect().top - room.top;
+  return { element, page, top: box.top - room.top, left: box.left - room.left, pageTop: pageTop >= 0 ? pageTop : null, zoom: drawnZoom(), drawn: drawnSize() };
+}
+
+function drawnZoom() {
+  return Number(document.documentElement.style.getPropertyValue("--zoom")) || 1;
+}
+
+// How the pages are drawn: their size, and how they're laid out on the desk.
+function drawnSize() {
+  const style = document.documentElement.style, classes = document.body.classList;
+  return [style.getPropertyValue("--zoom"), style.getPropertyValue("--across"), classes.contains("fitWidth"), classes.contains("wholePages")].join(" ");
+}
+
+// The music kept goes back where it was in the window. Whole page turns to the row with its page,
+// as a page turn there would, and pages side by side bring its page to the left, unless the page is
+// wider than the window: then the music keeps its place across, as it does in the one-line view.
+// Of a system or bar the window's edge cut through, as much is cut off as before, at the new size.
+function keepInSight(kept) {
+  if (!kept?.element.isConnected || drawnSize() === kept.drawn) return;
+  const desk = $("desk"), room = desk.getBoundingClientRect(), box = kept.element.getBoundingClientRect();
+  const frame = getComputedStyle($("pagesFrame"));
+  const at = offset => (offset < 0 ? (offset * drawnZoom()) / kept.zoom : offset);
+  if (wholePages()) desk.scrollTop = kept.page.offsetTop - parseFloat(frame.paddingTop);
+  else if (kept.pageTop !== null) desk.scrollTop += kept.page.getBoundingClientRect().top - room.top - kept.pageTop;
+  else desk.scrollTop += box.top - room.top - at(kept.top);
+  if (!fittedToWidth() && !wholePages()) { // Those are centred across the desk.
+    const turned = (score?.view ?? "page") === "page" && kept.page.offsetWidth <= desk.clientWidth;
+    desk.scrollLeft = turned ? kept.page.offsetLeft - parseFloat(frame.paddingLeft) : desk.scrollLeft + box.left - room.left - at(kept.left);
+  }
+  keptMusic = { ...kept, scrolled: `${desk.scrollLeft} ${desk.scrollTop}` };
+}
+
 // Each score keeps a zoom for each mode, as it was last left.
 function zoomSetting() {
   return `zoom:${scoreId ?? ""}:${currentMode()}`;
@@ -439,16 +494,16 @@ function usualZoom() {
 }
 
 // The zoom this score was last left at in this mode, shown again.
-function restoreZoom() {
+function restoreZoom(kept = musicAtTop()) {
   zoom = readSetting(zoomSetting(), usualZoom());
-  setZoom(zoom);
+  setZoom(zoom, kept);
 }
 
 function fittedZoom() {
   return zoom === "width" || zoom === "page";
 }
 
-function setZoom(value) {
+function setZoom(value, kept = musicAtTop()) {
   zoom = String(value);
   if (scoreId) keepSetting(zoomSetting(), zoom);
   // The pages are laid out first, as that decides whether the desk has a scroll bar to fit beside.
@@ -461,6 +516,7 @@ function setZoom(value) {
   if (![...choice.options].some(option => option.value === zoom)) choice.append(new Option(`${zoom}%`, zoom));
   choice.value = zoom;
   centreDesk();
+  keepInSight(kept);
   drawCursor();
   redrawGhost();
   drawPageCount(); // A new size shows other pages, or more of them.

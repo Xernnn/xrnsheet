@@ -28,6 +28,7 @@ function writing() {
 function setMode(mode, remember = true) {
   if (!MODES[mode]) return;
   const was = currentMode();
+  const kept = musicAtTop(); // Before the mode's own layout moves the pages about.
   if (was !== mode && (practice.follower || (player && (was === "practice" || mode === "practice")))) stopPlaying();
   if (mode !== "write") {
     setInput(false);
@@ -39,7 +40,7 @@ function setMode(mode, remember = true) {
   document.body.dataset.mode = mode;
   if (remember) keepSetting("mode", mode);
   for (const button of document.querySelectorAll("#modeSwitch button")) button.setAttribute("aria-checked", String(button.dataset.mode === mode));
-  restoreZoom();
+  restoreZoom(kept);
   drawDock();
   if (score) updateTools();
   drawMidiState();
