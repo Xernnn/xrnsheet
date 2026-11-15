@@ -58,7 +58,7 @@ from pipeline.rhythm import (
     write_measure,
     write_offset,
 )
-from pipeline.structure import VOICES_PER_STAFF, delete_measure, insert_measure, origin_of
+from pipeline.structure import VOICES_PER_STAFF, delete_measure, insert_measure, instrument_of, origin_of, pitch_of_name
 
 # Where the first note on an empty staff lands: the middle of that clef's staff.
 CLEF_MIDDLE = {"G": ("B", 4), "F": ("D", 3), "C": ("C", 4)}
@@ -508,24 +508,86 @@ def previous_height(spot: Spot) -> int:
     return diatonic(*CLEF_MIDDLE.get(spot.context.clefs.get(spot.key[0], "G"), CLEF_MIDDLE["G"]))
 
 
-def within_reach(root: ET.Element, spot: Spot, step: str, octave: int) -> int:
-    """Move a typed note by octaves into the three octaves a guitar or bass plays most, from its lowest string up.
+BOWED = "Strings - Bowed"
 
-    The nearest note to the one before can be out of reach: a guitar that has climbed to its top
-    E would put a typed G above the staff and the frets. Anything else is left where it was.
+
+def bowed_range(root: ET.Element, part: ET.Element) -> tuple[int, int, str] | None:
+    """Return how low and how high a violin, viola, cello or double bass plays, as MIDI keys it sounds, and what it's called.
+
+    Its lowest note is its lowest open string, and its highest the top of its range that its
+    instrument gives (see structure.INSTRUMENTS). Any other part has none.
+    """
+    entry = next((found for found in root.findall("part-list/score-part") if found.get("id") == part.get("id")), None)
+    instrument = instrument_of(entry)
+    if instrument is None or instrument.family != BOWED or not instrument.strings or not instrument.highest:
+        return None
+    key = lambda name: (lambda step, alter, octave: 12 * (octave + 1) + NATURAL_SEMITONES[step] + alter)(*pitch_of_name(name))
+    return min(key(name) for name in instrument.strings), key(instrument.highest), instrument.label.lower()
+
+
+ACCIDENTAL_SIGNS = {-2: "𝄫", -1: "♭", 0: "", 1: "♯", 2: "𝄪"}
+
+
+def range_problems(root: ET.Element) -> list[dict]:
+    """List the notes of a violin, viola, cello or double bass out of its range, and say why.
+
+    A click on the staff, a MIDI key, a paste or a transposition writes exactly the note it's given,
+    so one can land below the lowest string or above the top of the range; they're listed with the
+    bars that don't add up, as a guitar's notes that no string can play are. A note is named as the
+    page shows it: written, or as it sounds at concert pitch.
+    """
+    from pipeline import concert, fretted  # As in within_reach: they import this module.
+
+    sounding = concert.shown_at_concert_pitch(root)
+    found = []
+    for number, part in enumerate(root.findall("part")):
+        bowed = bowed_range(root, part)
+        if bowed is None:
+            continue
+        lowest, highest, name = bowed
+        shifts = fretted.shifts_of(part)
+        for context in contexts(part):
+            shift = shifts[context.index] if context.index < len(shifts) else 0
+            for note in context.measure.iter("note"):
+                pitch = note.find("pitch")
+                if pitch is None:
+                    continue
+                midi = fretted.note_midi(note) + shift
+                if lowest <= midi <= highest:
+                    continue
+                # Spelled as written, an octave away at concert pitch for a double bass, which sounds an octave down.
+                octave = int(pitch.findtext("octave")) + (shift // 12 if sounding else 0)
+                said = f"{pitch.findtext('step')}{ACCIDENTAL_SIGNS.get(round(float(pitch.findtext('alter') or 0)), '')}{octave}" if not sounding or shift % 12 == 0 else fretted.name_of(midi)
+                limit = fretted.name_of((lowest if midi < lowest else highest) - (0 if sounding else shift))
+                reason = f"{said} is below the {name}'s lowest string, {limit}." if midi < lowest else f"{said} is above the top of the {name}'s range, {limit}."
+                found.append({"note": note.get("id"), "part": number, "reason": reason})
+    return found
+
+
+def within_reach(root: ET.Element, spot: Spot, step: str, octave: int) -> int:
+    """Move a typed note by octaves to where its instrument plays it.
+
+    That's the three octaves a guitar or bass plays most, from its lowest string up, and a violin,
+    viola, cello or double bass's whole range, from its lowest string to the top of its range. The
+    nearest note to the one before can be out of reach: a guitar that has climbed to its top E would
+    put a typed G above the staff and the frets, and a violin going down from A3 would put an E
+    below its G string. Anything else is left where it was.
     """
     from pipeline import fretted  # Fretted parts are this module's caller's business too, and it imports this.
 
     entry = next((found for found in root.findall("part-list/score-part") if found.get("id") == spot.part.get("id")), None)
     board = fretted.fretboard(spot.part, entry)
-    if board is None:
+    bowed = bowed_range(root, spot.part) if board is None else None
+    if board is None and bowed is None:
         return octave
     shifts = fretted.shifts_of(spot.part)
-    lowest = min(board.opens) + board.capo - (shifts[spot.context.index] if spot.context.index < len(shifts) else 0)
+    shift = shifts[spot.context.index] if spot.context.index < len(shifts) else 0
+    # What's written, from what sounds: a bass's E1 is written E2.
+    lowest, highest = (min(board.opens) + board.capo - shift, min(board.opens) + board.capo - shift + COMFORTABLE_REACH) if board is not None else (bowed[0] - shift, bowed[1] - shift)
     sound = lambda at: 12 * (at + 1) + NATURAL_SEMITONES[step]
     while sound(octave) < lowest:
         octave += 1
-    while sound(octave) > lowest + COMFORTABLE_REACH and sound(octave - 1) >= lowest:
+    while sound(octave) > highest and sound(octave - 1) >= lowest:
         octave -= 1
     return octave
 

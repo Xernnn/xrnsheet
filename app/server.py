@@ -880,6 +880,7 @@ def describe(folder: Path, status: dict, saved: str | None = None) -> dict:
         # How far each part's first bar sounds from how it's written, known before playback is fetched.
         "transpositions": [found[0].semitones if (found := concert.transpositions(part)) else 0 for part in root.findall("part")],
         "fretProblems": fretted.problems(root),
+        "rangeProblems": edit.range_problems(root),
         "diagrams": diagrams.shown(root),
     } | structure.title_of(root)
 
