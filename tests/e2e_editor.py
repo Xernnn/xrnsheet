@@ -2913,6 +2913,55 @@ def test_inspector(page, base: str, shots: Path | None, created: list[str]) -> N
     page.keyboard.press("Escape")
 
 
+def instrument_box(page) -> dict:
+    """What the inspector's box for the instrument shows: its rows and the cells in them, by name."""
+    return page.evaluate("""() => {
+        const shown = element => element && !element.hidden && element.closest('[hidden]') === null && getComputedStyle(element).display !== 'none';
+        const cells = holder => [...holder.querySelectorAll('button[data-cell], button[data-instrument-cell]')].filter(shown).map(button => button.dataset.cell ?? button.dataset.instrumentCell);
+        return {
+            top: cells($('instrumentCells')),
+            rows: Object.fromEntries([...document.querySelectorAll('#instrumentSlots .slot')].filter(shown).map(row => [row.dataset.row || row.id || row.querySelector('.label').textContent, cells(row)])),
+        };
+    }""")
+
+
+def test_a_rest_in_the_instrument_box(page, base: str, created: list[str]) -> None:
+    """A rest's box for the instrument has only what goes on a rest, as the server takes it."""
+    open_blank(page, base, created, staff="piano")
+    page.keyboard.press("Escape")
+    settle(page)
+    click_on(page, page.locator("#pages g.mRest").first)
+    if not page.is_visible("#inspector"):
+        page.click("#inspectorToggle")
+    box = instrument_box(page)
+    check("a pianist's rest keeps the pedal and octave lines, without the arpeggio, fingers or hands", box["top"] == ["line:pedal-pedstar", "line:pedal-line", "line:8va", "line:8vb"] and box["rows"] == {}, box)
+    page.keyboard.press("Escape")
+    page.keyboard.press("n")
+    page.keyboard.press("c")
+    settle(page)
+    page.keyboard.press("Escape")
+    settle(page)
+    box = instrument_box(page)
+    check("while a note has them all", "mark:arpeggio" in box["top"] and set(box["rows"]) == {"Fingers", "Hand"}, box)
+    page.keyboard.press("Escape")
+
+    open_blank(page, base, created, staff="violin")
+    page.keyboard.press("Escape")
+    settle(page)
+    click_on(page, page.locator("#pages g.mRest").first)
+    box = instrument_box(page)
+    check("a violinist's rest has sul, positions, pizz. and arco, but no bowings, fingers or strings", box["top"] == [] and set(box["rows"]) == {"Sul", "Position", "Bow"} and box["rows"]["Bow"] == ["pizzicato:on", "pizzicato:off"], box)
+    page.keyboard.press("Escape")
+
+    open_blank(page, base, created, staff="guitar-tab")
+    page.keyboard.press("Escape")
+    settle(page)
+    click_on(page, page.locator("#pages g.staff").first.locator("g.mRest").first)
+    box = instrument_box(page)
+    check("and a guitarist's the lines and what's shown, without the techniques or strings", box["top"] == [] and set(box["rows"]) == {"Lines", "Show"}, box)
+    page.keyboard.press("Escape")
+
+
 def test_command_palette(page, base: str, created: list[str]) -> None:
     score_id = written_melody(page, base, created, tune="cdef")
     page.keyboard.press("Escape")
@@ -4639,6 +4688,7 @@ def main() -> None:
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
             test_inspector(page, base, arguments.shots, created)
+            test_a_rest_in_the_instrument_box(page, base, created)
             test_command_palette(page, base, created)
             test_fretboard(page, base, arguments.shots, created)
             test_fingerboard_and_switcher(page, base, arguments.shots, created)
