@@ -5,7 +5,8 @@ const MODES = {
   write: { label: "Write", keys: "Alt+W" },
   practice: { label: "Practice", keys: "Alt+P" },
 };
-const TURN_SHARE = 0.9; // How much of the window a turn moves on, when a page is taller than the window.
+const TURN_SHARE = 0.9; // How much of the window a turn moves on, when a system is taller than the window.
+const SYSTEM_MARGIN_PX = 12; // Left above a system brought up to the top of the window.
 const MOST_COMMANDS = 80;
 const commands = { list: [], shown: [], chosen: 0 };
 let pageCountFrame = 0;
@@ -133,10 +134,38 @@ function pagesInView() {
   return { pages, shown: shown.length ? shown.map(item => item.index) : [0] };
 }
 
+// Pages one below the other are read down a system at a time: the first system not wholly in sight
+// comes up to the top of the window, with the notes and marks drawn above its staff, so none is cut
+// under the top bar. Back, the systems before come down, as many as fit whole, and from the top of
+// their page if that fits too. Only a system taller than the window is read a window at a time.
+function readDown(by) {
+  const desk = $("desk"), room = desk.getBoundingClientRect();
+  const systems = [...document.querySelectorAll("#pages g.system")].map(system => ({ system, box: system.getBoundingClientRect() }));
+  const fits = room.height - 2 * SYSTEM_MARGIN_PX;
+  if (by > 0) {
+    const next = systems.find(({ box }) => box.bottom > room.bottom + 1);
+    if (!next) return; // The end of the score is in sight.
+    const step = next.box.top - room.top - SYSTEM_MARGIN_PX;
+    desk.scrollTop += step > 1 ? step : desk.clientHeight * TURN_SHARE;
+    return;
+  }
+  const before = systems.filter(({ box }) => box.top < room.top + SYSTEM_MARGIN_PX - 1);
+  const last = before.at(-1)?.box;
+  if (!last) { desk.scrollTop = 0; return; }
+  if (last.bottom - last.top > fits) { desk.scrollTop -= desk.clientHeight * TURN_SHARE; return; }
+  let first = before.length - 1;
+  while (first > 0 && last.bottom - before[first - 1].box.top <= fits) first -= 1;
+  const { system, box } = before[first];
+  const page = system.closest(".page");
+  const pageTop = page.getBoundingClientRect().top - parseFloat(getComputedStyle($("pagesFrame")).paddingTop);
+  const top = page.querySelector("g.system") === system && last.bottom - pageTop <= fits ? pageTop : box.top - SYSTEM_MARGIN_PX;
+  desk.scrollTop += top - room.top;
+}
+
 function turnPage(by) {
   const desk = $("desk");
   const view = score?.view ?? "page";
-  if (view === "vertical") { desk.scrollTop += by * desk.clientHeight * TURN_SHARE; drawPageCount(); return; }
+  if (view === "vertical") { readDown(by); drawPageCount(); return; }
   if (view === "horizontal") { desk.scrollLeft += by * desk.clientWidth * TURN_SHARE; drawPageCount(); return; }
   const { pages, shown } = pagesInView();
   if (!pages.length) return;
@@ -152,16 +181,8 @@ function turnPage(by) {
     return;
   }
   if (fittedToWidth()) {
-    // One below the other: a page is read down, then the next one's top is brought up.
-    const page = pages[shown[0]];
-    const top = page.offsetTop - padding, bottom = page.offsetTop + page.offsetHeight;
-    if (by > 0 && desk.scrollTop + desk.clientHeight < bottom - 4) desk.scrollTop = Math.min(desk.scrollTop + desk.clientHeight * TURN_SHARE, bottom - desk.clientHeight + padding);
-    else if (by < 0 && desk.scrollTop > top + 4) desk.scrollTop = Math.max(top, desk.scrollTop - desk.clientHeight * TURN_SHARE);
-    else {
-      const target = shown[0] + by;
-      if (target < 0 || target >= pages.length) return;
-      desk.scrollTop = by > 0 ? pages[target].offsetTop - padding : Math.max(pages[target].offsetTop - padding, pages[target].offsetTop + pages[target].offsetHeight - desk.clientHeight + padding);
-    }
+    // One below the other, the pages are read down as one long page.
+    readDown(by);
     drawPageCount();
     return;
   }

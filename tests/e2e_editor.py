@@ -2723,6 +2723,42 @@ def test_reading_on_a_laptop(page, base: str, created: list[str]) -> None:
     page.set_viewport_size(size)
 
 
+def systems_cut_at_the_top(page) -> list[int]:
+    """The systems the top of the window cuts through, counted from 0, their notes and marks above the staff and all."""
+    return page.evaluate("""() => {
+        const top = $("desk").getBoundingClientRect().top;
+        return [...document.querySelectorAll("#pages g.system")].map((system, index) => [system.getBoundingClientRect(), index])
+            .filter(([box]) => box.top < top - 0.5 && box.bottom > top + 0.5).map(([, index]) => index);
+    }""")
+
+
+def test_reading_on_a_system_at_a_time(page, base: str, created: list[str]) -> None:
+    """Space in Read brings up the next system whole, high notes and all, and never cuts one under the top bar."""
+    rag = next((ROOT / ".venv").glob("lib/python*/site-packages/music21/corpus/joplin/maple_leaf_rag.mxl"))
+    page.goto(base)
+    page.set_input_files("#file", str(rag))
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.keyboard.press("Alt+r")
+    page.select_option("#zoomChoice", "width")
+    page.keyboard.press("Home")
+    systems = page.locator("#pages g.system").count()
+    cut, tops = [], []
+    for _ in range(systems):
+        page.keyboard.press(" ")
+        cut += systems_cut_at_the_top(page)
+        tops.append(page.evaluate("() => { const top = $('desk').getBoundingClientRect().top; return Math.min(...[...document.querySelectorAll('#pages g.system')].map(system => system.getBoundingClientRect().top).filter(at => at >= top - 0.5)) - top; }"))
+    check("reading on with Space never cuts a system under the top bar", not cut, cut)
+    check("and brings the next one up to the top, a little below it", all(0 <= gap < 30 for gap in tops[:-1]), tops)
+    check("down to the last page", shown_pages(page)[-1] == page.locator("#pages .page").count() - 1, shown_pages(page))
+    cut = []
+    for _ in range(systems):
+        page.keyboard.press("Shift+ ")
+        cut += systems_cut_at_the_top(page)
+    check("and back with Shift+Space neither", not cut and page.evaluate("() => $('desk').scrollTop") == 0, cut)
+    page.keyboard.press("Alt+w")
+
+
 def test_library(page, base: str, created: list[str]) -> None:
     first = written_melody(page, base, created, tune="cdef")
     menu(page, "File", "Title and composer…")
@@ -4539,6 +4575,7 @@ def main() -> None:
             test_modes(page, base, arguments.shots, created)
             test_writing_starts_in_write(page, base, created)
             test_reading_on_a_laptop(page, base, created)
+            test_reading_on_a_system_at_a_time(page, base, created)
             test_library(page, base, created)
             test_inspector(page, base, arguments.shots, created)
             test_command_palette(page, base, created)
