@@ -124,7 +124,7 @@ function sheetName(sheet) {
   return sheet.name || (sheet.pdf ? "A PDF" : "A photo");
 }
 
-function clock(seconds) {
+function elapsedText(seconds) {
   const whole = Math.max(0, Math.floor(seconds));
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
@@ -139,7 +139,7 @@ function readingState(sheet) {
   if (sheet.ahead > 0) return `Waiting: ${sheet.ahead} ${sheet.ahead === 1 ? "sheet" : "sheets"} ahead`;
   const doing = (sheet.message || "Reading").replace(/\.$/, "");
   const time = readingFor(sheet);
-  return time === null ? doing : `${doing} · ${clock(time)}`;
+  return time === null ? doing : `${doing} · ${elapsedText(time)}`;
 }
 
 // A sheet that isn't a score yet: waiting its turn or being read, with Cancel, or one that couldn't be
@@ -361,7 +361,7 @@ function showReading(data) {
 
 function drawReadingTime() {
   const time = shownSheet?.status === "processing" ? readingFor(shownSheet) : null;
-  $("readingTime").textContent = time === null ? "" : `${clock(time)} so far. A page usually takes under a minute.`;
+  $("readingTime").textContent = time === null ? "" : `${elapsedText(time)} so far. A page usually takes under a minute.`;
 }
 
 // The one way anything leaves the library: Delete on a score, Remove on a sheet that couldn't be
