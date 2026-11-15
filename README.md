@@ -362,4 +362,9 @@ Check these before shipping a commercial product.
 | RapidOCR | Apache-2.0 | |
 | Fonts in `data/fonts/` | SIL Open Font License | Used to generate training images |
 | Piano samples in `app/static/sounds/piano/` | CC BY 3.0 | Salamander Grand Piano by Alexander Holm, the 30-note set from [Tone.js's audio](https://tonejs.github.io/audio/salamander/). Its credit has to go with the app, as [its README](app/static/sounds/piano/README.md) says |
+| Guitar samples in `app/static/sounds/guitar/` | CC0 1.0 | FreePats' Spanish classical guitar, recorded by Roberto of zenvoid.org for [FreePats](https://freepats.zenvoid.org/Guitar/acoustic-guitar.html) ([its README](app/static/sounds/guitar/README.md)) |
+| Bass guitar samples in `app/static/sounds/bass-guitar/` | CC0 1.0 | Growlybass by Karoryfer Samples ([its README](app/static/sounds/bass-guitar/README.md)) |
+| Violin, viola and bowed double bass samples in `app/static/sounds/violin/`, `viola/` and `double-bass/` | CC0 1.0 | Versilian Studios Chamber Orchestra 2 Community Edition, recorded by Sam Gossner and Simon Dalzell, cut by Elan Hickler ([violin](app/static/sounds/violin/README.md), [viola](app/static/sounds/viola/README.md), [double bass](app/static/sounds/double-bass/README.md)) |
+| Cello samples in `app/static/sounds/cello/` | CC0 1.0 | Karoryfer x bigcat cello by Karoryfer Samples and bigcat instruments, played by Kamila Borowiak ([its README](app/static/sounds/cello/README.md)) |
+| Double bass pizzicato in `app/static/sounds/double-bass/pizzicato/` | CC0 1.0 | Meatbass by Karoryfer Samples, played by Drogomir Smolken ([its README](app/static/sounds/double-bass/README.md)) |
 | JAZZMUS dataset | CC BY-NC 4.0 | Not used here. It's non-commercial, and access must be requested |
