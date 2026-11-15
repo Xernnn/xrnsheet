@@ -1,8 +1,8 @@
 """Fine-tune the chord reader on your corrected chords, and keep it only if it wins.
 
     .venv/bin/python -m chords.corrections      gather your corrections first
-    .venv/bin/python -m chords.retrain          train a candidate and report on it
-    .venv/bin/python -m chords.retrain --promote    also replace the live model if it passes
+    .venv-train/bin/python -m chords.retrain          train a candidate and report on it
+    .venv-train/bin/python -m chords.retrain --promote    also replace the live model if it passes
 
 The candidate must beat the current model on held-out real sheets it never trained on, by
 more than chance could explain, and must not get worse on the frozen synthetic test.

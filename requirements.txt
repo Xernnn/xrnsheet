@@ -6,6 +6,8 @@ numpy
 rapidocr
 pypdfium2
 fonttools
+# The app needs only PyTorch's CPU build: install it first from https://download.pytorch.org/whl/cpu
+# (README, Setup). Training on a GPU uses the default build in a second environment, .venv-train.
 torch
 # Pinned, because the app's guard against other sites' pages relies on this FastAPI reading a
 # body as JSON only when it says it's JSON, and these two are what it reads and checks it with.

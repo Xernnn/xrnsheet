@@ -1,4 +1,5 @@
 .venv/
+.venv-train/
 tools/
 results/
 data/images/

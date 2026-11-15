@@ -14,13 +14,16 @@ It works well on clean, computer-rendered sheets. It's weak on real handwriting,
 
 ## Setup
 
-Requires Python 3.11+ and `rsvg-convert`. Install [PyTorch](https://pytorch.org/get-started/locally/) for your machine first if you want GPU training.
+Requires Python 3.11+ and `rsvg-convert`.
 
 ```sh
 python3 -m venv .venv
+.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu   # PyTorch without the GPU parts
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m chords.fonts          # download the fonts
 ```
+
+The app reads every page on the CPU, so `.venv` takes PyTorch's CPU build, under 2 GB in all. The default build carries 5 GB of GPU libraries that only [training](#train-on-a-gpu) uses.
 
 The trained models are in `models/`. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
 
@@ -63,7 +66,7 @@ npm run app:install
 This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it to the launcher. Run it again to update. The app starts its own copy of the server when it opens and stops it when it closes, so nothing needs to be running first.
 
 - **Your scores** are kept in `~/.local/share/xrnsheet/jobs`, not in the checkout, so they stay through updates and branch changes.
-- **Python:** the app runs on this checkout's `.venv`, where the 6 GB of PyTorch already is, rather than carrying a copy. Set `XRNSHEET_PYTHON` before installing to use another one.
+- **Python:** the app runs on this checkout's `.venv`, where PyTorch and the readers' models already are, rather than carrying a copy. Set `XRNSHEET_PYTHON` before installing to use another one.
 - **Opening files:** `.musicxml` and `.mxl` files offer xrnsheet under "Open with", and `xrnsheet.AppImage song.mxl` opens one from a terminal. If the app is already open, the file opens there.
 - **Keys:** Ctrl+T, Ctrl+Shift+P, F6 and the other keys a browser tab keeps for itself all reach the score. Ctrl+Q quits.
 - **If it won't start**, the window says why, and the server's log is `~/.local/state/xrnsheet/server.log`.
@@ -245,13 +248,25 @@ To recognize a sheet without the app:
 .venv/bin/python -m pipeline.recognize photo.jpg --out results/photo
 ```
 
+## Train on a GPU
+
+Training runs on the GPU when there is one, and that needs PyTorch's default build with its GPU libraries. Keep it in a second environment, `.venv-train`, so the app's stays small:
+
+```sh
+python3 -m venv .venv-train
+.venv-train/bin/pip install torch          # the default build, with CUDA (about 6 GB in all)
+.venv-train/bin/pip install -r requirements.txt
+```
+
+The commands below that train use `.venv-train`; the rest work in either. Without a GPU, training falls back to the CPU and takes many times longer. `.venv-train` can be deleted between training runs and made again.
+
 ## Train the chord reader
 
 ```sh
 .venv/bin/python -m chords.testset                                                  # build the test crops
 .venv/bin/python -m chords.baselines                                                # score Tesseract and RapidOCR
-.venv/bin/python -m chords.train --name chord_reader --hand-layout 0.35 --negatives 0.2
-.venv/bin/python -m chords.evaluate --name chord_reader                             # score the model
+.venv-train/bin/python -m chords.train --name chord_reader --hand-layout 0.35 --negatives 0.2
+.venv-train/bin/python -m chords.evaluate --name chord_reader                       # score the model
 ```
 
 Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the ablation. Training data is generated as it runs, and 5 fonts are held out for testing.
@@ -260,8 +275,8 @@ Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the a
 
 ```sh
 .venv/bin/python -m notes.render      # generate the strips, about an hour of CPU time
-.venv/bin/python -m notes.train       # about 60 minutes on a 4 GB GPU
-.venv/bin/python -m notes.evaluate    # score it on the two held-out music fonts
+.venv-train/bin/python -m notes.train       # about 60 minutes on a 4 GB GPU
+.venv-train/bin/python -m notes.evaluate    # score it on the two held-out music fonts
 ```
 
 The best checkpoint is saved as training runs, so a stopped run still leaves a usable model.
@@ -274,8 +289,8 @@ After you've pressed "Mark as checked" on some sheets:
 .venv/bin/python -m chords.corrections       # gather checked sheets into data/corrections/
                                              # (add --jobs ~/.local/share/xrnsheet/jobs for the desktop app's)
 .venv/bin/python bench/real_report.py        # how the app did on the held-out sheets
-.venv/bin/python -m chords.retrain           # train a candidate and report on it
-.venv/bin/python -m chords.retrain --promote # also replace the live model if it passes
+.venv-train/bin/python -m chords.retrain           # train a candidate and report on it
+.venv-train/bin/python -m chords.retrain --promote # also replace the live model if it passes
 ```
 
 About one sheet in five is held out, chosen by a hash. A candidate replaces the live model only if there are at least 30 held-out chords, it gains more chords than it loses with p below 0.05, and it stays at 0.99 or above on the synthetic test. So far, a few dozen real corrections haven't been shown to help. See [the project report](docs/PROJECT_REPORT.md).

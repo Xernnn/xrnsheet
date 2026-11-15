@@ -1,7 +1,7 @@
 """Train the note reader on rendered strips, damaging half of them as they're loaded.
 
-    .venv/bin/python -m notes.train
-    .venv/bin/python -m notes.train --steps 300 --name smoke   quick check
+    .venv-train/bin/python -m notes.train
+    .venv-train/bin/python -m notes.train --steps 300 --name smoke   quick check
 """
 
 import argparse
