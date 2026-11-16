@@ -5630,6 +5630,44 @@ def test_marking_checked_with_things_still_listed(page, base: str, created: list
     check("and it can be un-marked later with the same button", checked() is False and "No longer marked" in page.inner_text("#toastText"))
 
 
+def test_chords_to_check_are_stepped_through(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """Every chord the reader wasn't sure of had a chip under the original, thirteen on a real
+    handwritten page, as the bars that don't add up had above the score."""
+    page.goto(base)
+    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.wait_for_selector("#pages svg", timeout=120000)
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    page.click('#modeSwitch [data-mode="write"]')
+    unsure = [chord for chord in score_data(base, score_id)["chords"] if chord["confidence"] is not None and chord["confidence"] < 0.8]
+    said = [text for text in page.locator("#checks .chip").all_inner_texts() if text not in ("‹", "›")]
+    check("the chords to check are one line saying how many, not a chip each", len(unsure) >= 2 and said == [f"{len(unsure)} chords"], said)
+    lit = """() => [document.querySelector('#pages g.harm.checkHere')?.dataset.index ?? null, document.querySelector('.box.checkHere')?.dataset.index ?? null,
+        document.querySelector('.box.active')?.dataset.index ?? null, selectedChord, $('editor').hidden ? null : $('chordInput').value]"""
+    here = lambda: page.inner_text('#checks [data-step="here"]')
+    page.click('#checks [data-step="on"]')
+    first = str(unsure[0]["index"])
+    check("› goes to the first, lit in the score and on the original, chosen, and open to change", (page.evaluate(lit), here()) == ([first, first, first, unsure[0]["index"], unsure[0]["text"]], f"{unsure[0]['text']} · 1 of {len(unsure)}"), (page.evaluate(lit), here()))
+    page.keyboard.press("Escape")
+    page.click('#checks [data-step="on"]')
+    second = str(unsure[1]["index"])
+    check("and on to the next", (page.evaluate(lit)[:3], here()) == ([second, second, second], f"{unsure[1]['text']} · 2 of {len(unsure)}"), (page.evaluate(lit), here()))
+    if shots:
+        page.screenshot(path=str(shots / "chord_steps.png"))
+    page.keyboard.press("Escape")
+    page.click('#checks [data-step="back"]')
+    check("‹ goes back", page.evaluate(lit)[0] == first, page.evaluate(lit))
+    page.fill("#chordInput", "C7")
+    page.keyboard.press("Enter")
+    settle(page)
+    left = [text for text in page.locator("#checks .chip").all_inner_texts() if text not in ("‹", "›")]
+    expected = [unsure[1]["text"]] if len(unsure) == 2 else [f"{len(unsure) - 1} chords"]
+    check("once it's put right, the line says what's left, and nothing is lit", (left, page.evaluate(lit)[:2]) == (expected, [None, None]), (left, page.evaluate(lit)))
+    page.click('#checks [data-step="here"]')
+    check("and goes on from where it was", page.evaluate(lit)[0] == second, page.evaluate(lit))
+    page.keyboard.press("Escape")
+
+
 def test_deleting_a_score(page, base: str, created: list[str]) -> None:
     """There was no way to delete a score: no menu on a tile, no right-click, nothing in the File menu."""
     keep = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Keep me"})["id"]
@@ -5975,6 +6013,7 @@ def main() -> None:
             test_reading_leaves_the_window_free(page, arguments.shots)
             test_the_original_sheet(page, base, arguments.shots, created)
             test_marking_checked_with_things_still_listed(page, base, created)
+            test_chords_to_check_are_stepped_through(page, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])
             browser.close()

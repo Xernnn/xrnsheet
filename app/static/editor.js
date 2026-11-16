@@ -432,62 +432,70 @@ function drawRange() {
 }
 
 // Measures that don't add up, notes no string can play, and notes out of a bowed string's range.
-// A sheet read from a photo can have twenty bars that don't add up, and a chip for each was a wall
-// four rows deep over the music. So they're one line, saying how many, with ‹ and › to step from one
-// to the next, as a browser's find does; the bar it's on is lit in the score, and the others only
-// faintly marked. The notes' problems are a chip each, that goes there.
-let barStep = null; // The bar stepped to, by its index in the score, or null before stepping.
+// The bars are one line to step through, below; the bar it's on is lit in the score, and the others
+// only faintly marked. The notes' problems are a chip each, that goes there.
+let barStep = null; // The bar last stepped to, by its index in the score, or null.
 
 function drawBarChecks() {
   const checks = score.barChecks ?? [];
   $("barChecks").hidden = checks.length === 0 && !(score.fretProblems ?? []).length && !(score.rangeProblems ?? []).length;
-  // Once the bar stepped to is put right, the steps carry on from the next that doesn't add up.
-  const at = barStep === null ? -1 : checks.findIndex(check => check.measure >= barStep);
-  barStep = at < 0 ? null : checks[at].measure;
   document.querySelectorAll("#pages g.barCheck").forEach(measure => measure.classList.remove("barCheck", "barCheckHere"));
   const measures = document.querySelectorAll("#pages g.measure");
   for (const check of checks) measures[check.measure]?.classList.add("barCheck", ...(check.measure === barStep ? ["barCheckHere"] : []));
   // A step taken from the keyboard keeps its key's focus, though the line is made again.
   const focused = document.activeElement?.closest?.("#barChecks [data-step]")?.dataset.step;
-  $("barChecks").replaceChildren(...(checks.length ? [barSteps(checks, at)] : []), ...fretChips());
+  const line = checks.length ? [stepLine("barSteps", "Bars that don't add up", checks, checks.map(check => check.measure), barStep, {
+    said: check => `Bar ${measureFacts(check.measure).number}: ${check.problem === "long" ? "too many beats" : "too few beats"}`,
+    many: `${checks.length} bars don't add up`,
+    why: "The beats don't add up to the time signature, which is often a rhythm misread.",
+    before: "The bar before that doesn't add up",
+    next: "The next bar that doesn't add up",
+    go: stepToBarCheck,
+  })] : [];
+  $("barChecks").replaceChildren(...line, ...fretChips());
   if (focused) $("barChecks").querySelector(`[data-step="${focused}"]`)?.focus();
 }
 
-function barSteps(checks, at) {
-  const said = check => `Bar ${measureFacts(check.measure).number}: ${check.problem === "long" ? "too many beats" : "too few beats"}`;
+// Bars that don't add up, and chords the reader wasn't sure of, are each one line: how many there
+// are, or the one stepped to and where it is among them, with ‹ and › to step from one to the next,
+// as a browser's find does, the last coming round to the first. A chip for each was a wall: a real
+// handwritten page had twenty-one bars, four rows deep over the music, and thirteen chords beside it.
+// Each is known by its key, its bar or its chord's number, so once the one stepped to is put right
+// the line says how many are left, and the steps go on from where it was.
+function stepLine(id, label, items, keys, step, { said, many, why, before, next, go }) {
+  const at = step === null ? -1 : keys.indexOf(step);
+  const after = keys.findIndex(key => step === null || key > step);
+  const earlier = keys.findLastIndex(key => step === null || key < step);
   const group = document.createElement("span");
-  group.id = "barSteps";
+  group.id = id;
+  group.className = "steps";
   group.setAttribute("role", "group");
-  group.setAttribute("aria-label", "Bars that don't add up");
-  const step = (name, text, title, to) => {
-    const button = document.createElement("button");
-    button.className = "chip";
-    button.dataset.step = name;
-    button.textContent = text;
-    button.title = title;
-    if (name !== "here") button.setAttribute("aria-label", title);
+  group.setAttribute("aria-label", label);
+  const button = (name, text, title, item) => {
+    const element = document.createElement("button");
+    element.className = "chip";
+    element.dataset.step = name;
+    element.textContent = text;
+    element.title = title;
+    if (name !== "here") element.setAttribute("aria-label", title);
     // A click lets go of the focus, leaving the keys to the score; a step pressed from the keyboard keeps it.
-    button.addEventListener("click", event => { if (event.detail) button.blur(); stepToBarCheck(to); });
-    return button;
+    element.addEventListener("click", event => { if (event.detail) element.blur(); go(item); });
+    return element;
   };
-  const why = "The beats don't add up to the time signature, which is often a rhythm misread.";
-  if (checks.length === 1) {
-    group.append(step("here", said(checks[0]), `${why} Click to go to the bar.`, 0));
+  if (items.length === 1) {
+    group.append(button("here", said(items[0]), `${why} Click to go to it.`, items[0]));
     return group;
   }
+  const onward = items[after < 0 ? 0 : after];
   group.append(
-    step("here", at < 0 ? `${checks.length} bars don't add up` : `${said(checks[at])} · ${at + 1} of ${checks.length}`, `${why} Click to go to ${at < 0 ? "the first" : "the bar"}, then step with ‹ and ›.`, Math.max(at, 0)),
-    step("back", "‹", "The bar before that doesn't add up", at < 0 ? checks.length - 1 : at - 1),
-    step("on", "›", "The next bar that doesn't add up", at + 1),
+    button("here", at < 0 ? many : `${said(items[at])} · ${at + 1} of ${items.length}`, `${why} Click to go to ${at < 0 ? "one" : "it"}, then step through them with ‹ and ›.`, at < 0 ? onward : items[at]),
+    button("back", "‹", before, items[earlier < 0 ? items.length - 1 : earlier]),
+    button("on", "›", next, onward),
   );
   return group;
 }
 
-// Go to a bar that doesn't add up, by its place in the list, the last coming round to the first.
-function stepToBarCheck(index) {
-  const checks = score?.barChecks ?? [];
-  if (!checks.length) return;
-  const check = checks[(index + checks.length) % checks.length];
+function stepToBarCheck(check) {
   barStep = check.measure;
   return enqueue(async () => {
     if (editor.on) moveCursor(check.note); else select(check.note);

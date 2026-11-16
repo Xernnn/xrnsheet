@@ -237,8 +237,8 @@ body:not([data-mode="write"]) #noteBar, body:not([data-mode="practice"]) #practi
 body:not([data-mode="write"]) #barChecks { display: none !important; }
 .chip { min-height: 26px; padding: 2px 11px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); background: var(--warn-soft); color: var(--warn-ink); }
 .chip:hover:not(:disabled) { background: color-mix(in srgb, var(--warn) 22%, var(--warn-soft)); border-color: var(--warn); }
-#barSteps { display: inline-flex; gap: 2px; }
-#barSteps [data-step="back"], #barSteps [data-step="on"] { min-width: 30px; padding: 2px 8px; }
+.steps { display: inline-flex; gap: 2px; }
+.steps [data-step="back"], .steps [data-step="on"] { min-width: 30px; padding: 2px 8px; }
 /* Bars that don't add up, in Write mode: each one's staff lines faintly in the warning colour, and
    the one stepped to plainly, so the music still reads. */
 body[data-mode="write"] #pages g.measure.barCheck > g.staff > path { stroke: color-mix(in srgb, var(--warn) 45%, var(--notes)); }
@@ -273,6 +273,7 @@ body.wholePages #desk { scrollbar-gutter: stable; }
 #pages g.selected text, #pages g.selected tspan { fill: var(--voice1); }
 #pages g.selected g.verse, #pages g.selected g.verse * { fill: var(--notes); stroke: none; }
 #pages g.harm.unsure text { fill: var(--warn); }
+#pages g.harm.checkHere text { fill: var(--voice1); } /* The chord to check stepped to, as its box is. */
 body.inputting #pages { cursor: crosshair; }
 #pages { user-select: none; }
 #caret { position: absolute; background: color-mix(in srgb, var(--voice1) 20%, transparent); border-left: 2px solid var(--voice1); border-radius: 0 3px 3px 0; pointer-events: none; }
@@ -348,7 +349,7 @@ body.inputting #scoreArea::after { content: ""; position: absolute; inset: 0; z-
 .box:hover { background: color-mix(in srgb, var(--good) 16%, transparent); }
 .box.added { border-style: dashed; border-color: var(--accent); }
 .box.unsure { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
-.box.active { border-color: var(--voice1); background: color-mix(in srgb, var(--voice1) 16%, transparent); }
+.box.active, .box.checkHere { border-color: var(--voice1); background: color-mix(in srgb, var(--voice1) 16%, transparent); }
 /* A sheet wider than it's tall goes across the top of the score, which keeps the window's width. */
 @media (min-width: 761px) {
   #scoreArea:has(#original.across:not([hidden])) { flex-direction: column; }
