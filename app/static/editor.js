@@ -466,7 +466,8 @@ function barSteps(checks, at) {
     button.textContent = text;
     button.title = title;
     if (name !== "here") button.setAttribute("aria-label", title);
-    button.addEventListener("click", () => stepToBarCheck(to));
+    // A click lets go of the focus, leaving the keys to the score; a step pressed from the keyboard keeps it.
+    button.addEventListener("click", event => { if (event.detail) button.blur(); stepToBarCheck(to); });
     return button;
   };
   const why = "The beats don't add up to the time signature, which is often a rhythm misread.";
@@ -1530,6 +1531,10 @@ function setUpToolbar() {
   $("lyricButton").addEventListener("click", startLyrics);
   // A clicked button keeps the focus, and Space would press it again instead of playing.
   for (const id of ["noteBar", "viewTools", "pitches", "playPopup", "speedPopup", "library"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
+  // So would Enter, instead of breaking the line, by the original sheet and the bars to check too. But
+  // only a mouse's click lets go of the focus there: one pressed from the keyboard keeps it, so the
+  // steps through what's to check can go on with Space.
+  for (const id of ["original", "barChecks"]) $(id).addEventListener("click", event => { if (event.detail) event.target.closest("button")?.blur(); });
   $("redo").addEventListener("click", redoEdit);
   window.addEventListener("resize", () => { drawCursor(); redrawGhost(); });
   $("desk").addEventListener("scroll", redrawGhost, { passive: true });
@@ -1619,6 +1624,10 @@ function practiceKey(event) {
   if (key === "/") { handled(); openCommands(); }
 }
 
+// What a focused control does itself with Enter and with Space.
+const PRESSED_BY_ENTER = "button, a[href], summary, [role=button]";
+const PRESSED_BY_SPACE = "button, summary, [role=button]";
+
 document.addEventListener("keydown", event => {
   const key = event.key;
   if (event.defaultPrevented) return; // Already the key of whatever had it, such as the command palette.
@@ -1641,10 +1650,13 @@ document.addEventListener("keydown", event => {
     return;
   }
   if (event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey && MODE_KEYS[event.code]) { handled(); setMode(MODE_KEYS[event.code]); return; }
+  // A button someone has tabbed to is pressed by Enter or Space, and a link followed by Enter, so the
+  // key mustn't also act on the score: Enter on one put a line break in at the selected note instead,
+  // and in Read mode both keys turned the page. With nothing focused, they act on the score as ever.
+  const pressed = { "Enter": PRESSED_BY_ENTER, " ": PRESSED_BY_SPACE }[key];
+  if (pressed && !event.ctrlKey && !event.metaKey && !event.altKey && event.target.matches?.(pressed)) return;
   if (reading() && !event.ctrlKey && !event.metaKey && !event.altKey && readingKey(event)) return;
   if (event.ctrlKey || event.metaKey) { handleControlKey(event); return; }
-  // A button someone has tabbed to is pressed by Space, so it mustn't also start playing.
-  if (key === " " && event.target.tagName === "BUTTON") return;
   if (INSPECTOR_KEYS[key]) { handled(); toggleInspector(INSPECTOR_KEYS[key]); return; }
   if (key === "F10") { handled(); toggleDock("mixer"); return; }
   if (key === "F12") { handled(); toggleDock("timeline"); return; }

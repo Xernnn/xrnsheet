@@ -2837,6 +2837,41 @@ def test_opening_a_file(page, base: str, shots: Path | None, created: list[str])
     check("a broken file says so", "MusicXML" in page.inner_text("#message"), page.inner_text("#message"))
 
 
+def test_enter_and_space_press_a_focused_button(page, base: str, created: list[str]) -> None:
+    """Enter on a button reached from the keyboard didn't press it: with a note selected, it put a line
+    break in the score there instead, and in Read mode Enter and Space turned the page."""
+    score_id = written_melody(page, base, created, bars=8, tune="cdefgabc" * 2)
+    breaks = lambda: fetch_text(base, f"/api/scores/{score_id}/score.musicxml").count('new-system="yes"')
+    zoomed = lambda: page.evaluate("() => zoom")
+    click_on(page, page.locator("#pages g.note").nth(5))
+    settle(page)
+    before, at = breaks(), zoomed()
+    page.focus("#zoomIn")
+    page.keyboard.press("Enter")
+    settle(page)
+    check("Enter on a focused button presses it, and leaves the score alone", (zoomed() != at, breaks()) == (True, before), (at, zoomed(), before, breaks()))
+    at = zoomed()
+    page.focus("#zoomOut")
+    page.keyboard.press(" ")
+    settle(page)
+    check("and so does Space, without playing", zoomed() != at and page.get_attribute("#play", "aria-label") == "Play", (at, zoomed()))
+    page.click('#modeSwitch [data-mode="read"]')
+    for key in ("Enter", " "):
+        at = zoomed()
+        page.focus("#zoomIn")
+        page.keyboard.press(key)
+        settle(page)
+        check(f"in Read mode too, {key.strip() or 'Space'} presses it rather than turning the page", zoomed() != at, (at, zoomed()))
+    page.click('#modeSwitch [data-mode="write"]')
+    click_on(page, page.locator("#pages g.note").nth(5))
+    settle(page)
+    page.keyboard.press("Enter")
+    settle(page)
+    check("with the focus on the score, Enter still breaks the line at the selected note", breaks() == before + 1, (before, breaks()))
+    page.keyboard.press("Control+z")
+    settle(page)
+
+
 def uneven_bars() -> bytes:
     """Eight bars of 4/4, of which the 2nd, 3rd, 5th and 7th have five beats and the 6th three, as a misread photo's do."""
     beats = [4, 5, 5, 4, 5, 3, 5, 4]
@@ -2871,9 +2906,15 @@ def test_bars_that_dont_add_up_are_stepped_through(page, base: str, shots: Path 
     check("‹ goes back, from the first round to the last", (page.evaluate(lit), here(), page.evaluate(in_lit_bar)) == (6, "Bar 7: too many beats · 5 of 5", True), (page.evaluate(lit), here()))
     if shots:
         page.screenshot(path=str(shots / "bar_steps.png"))
+    page.focus('#barChecks [data-step="back"]')
     page.keyboard.press(" ")
     settle(page)
-    check("a step keeps its button's focus, so Space steps again", (page.evaluate(lit), here()) == (5, "Bar 6: too few beats · 4 of 5"), (page.evaluate(lit), here()))
+    page.keyboard.press(" ")
+    settle(page)
+    check("a step pressed from the keyboard keeps its focus, so Space steps again", (page.evaluate(lit), here()) == (4, "Bar 5: too many beats · 3 of 5"), (page.evaluate(lit), here()))
+    page.click('#barChecks [data-step="on"]')
+    settle(page)
+    check("one clicked lets go of it, so the keys go to the score", page.evaluate("() => document.activeElement === document.body"), page.evaluate("() => document.activeElement.outerHTML.slice(0, 80)"))
     page.click('#modeSwitch [data-mode="read"]')
     tinted = "() => getComputedStyle(document.querySelector('#pages g.measure.barCheck > g.staff > path')).stroke !== getComputedStyle(document.querySelector('#pages g.measure:not(.barCheck) > g.staff > path')).stroke"
     check("Read mode shows the music without the marks", not page.evaluate(tinted))
@@ -5886,6 +5927,7 @@ def main() -> None:
             test_timeline(page, base, arguments.shots, created)
             test_midi_keyboard(context, base, created)
             test_opening_a_file(page, base, arguments.shots, created)
+            test_enter_and_space_press_a_focused_button(page, base, created)
             test_bars_that_dont_add_up_are_stepped_through(page, base, arguments.shots, created)
             test_a_file_titled_only_on_its_page(page, base, created)
             test_sound_of_marks(page, base, created)
