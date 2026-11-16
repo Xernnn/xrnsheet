@@ -23,9 +23,9 @@ python3 -m venv .venv
 .venv/bin/python -m chords.fonts          # download the fonts
 ```
 
-The app reads every page on the CPU, so `.venv` takes PyTorch's CPU build, under 2 GB in all. The default build carries 5 GB of GPU libraries that only [training](#train-on-a-gpu) uses.
+The app reads every page on the CPU, with its two models exported to ONNX and run in onnxruntime, so reading a page doesn't load PyTorch. `.venv` still takes PyTorch's CPU build, under 2 GB in all, for the tests, for `bench/real_page.py`, and to read with a model that hasn't been exported. The default build carries 5 GB of GPU libraries that only [training](#train-on-a-gpu) uses.
 
-The trained models are in `models/`. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
+The trained models are in `models/`: the `.pt` that training writes, and the `.onnx` exported from it that the app reads. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
 
 The benchmark also uses Audiveris and Tesseract. Audiveris has no Arch package, so it's unpacked into `tools/` from the official release:
 
@@ -44,7 +44,7 @@ Tesseract needs `eng.traineddata` in `/usr/share/tessdata`.
 .venv/bin/python -m app.server
 ```
 
-Open <http://127.0.0.1:8000>. A page takes 15 to 30 seconds on CPU. PDFs can have up to 40 pages. If a page can't be read, it's left out and the app says which one. Your sheets are listed in the library, so you can come back to them.
+Open <http://127.0.0.1:8000>. A page takes 10 to 15 seconds on a laptop's CPU, or 2 to 3 with `--notes own` below. PDFs can have up to 40 pages. If a page can't be read, it's left out and the app says which one. Your sheets are listed in the library, so you can come back to them.
 
 The rest of the app can be used while a sheet is read. It's in the library at once, as a tile saying how it's getting on: waiting its turn, and behind how many, as sheets are read one at a time; or the page being read and the time so far. Opened, it shows the same, and opens into the score when it's done. Cancel, on either, stops the reading and removes the sheet; the pages of a PDF read so far go with it. A sheet read while you were elsewhere says so, with Open, and one that couldn't be read stays in the library saying why, with Try again and Remove.
 
@@ -68,7 +68,7 @@ npm run app:install
 This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it to the launcher. Run it again to update. The app starts its own copy of the server when it opens and stops it when it closes, so nothing needs to be running first.
 
 - **Your scores** are kept in `~/.local/share/xrnsheet/jobs`, not in the checkout, so they stay through updates and branch changes.
-- **Python:** the app runs on this checkout's `.venv`, where PyTorch and the readers' models already are, rather than carrying a copy. Set `XRNSHEET_PYTHON` before installing to use another one.
+- **Python:** the app runs on this checkout's `.venv`, where homr, onnxruntime and the readers' models already are, rather than carrying a copy. Set `XRNSHEET_PYTHON` before installing to use another one.
 - **Opening files:** `.musicxml` and `.mxl` files offer xrnsheet under "Open with", and `xrnsheet.AppImage song.mxl` opens one from a terminal. If the app is already open, the file opens there.
 - **Keys:** Ctrl+T, Ctrl+Shift+P, F6 and the other keys a browser tab keeps for itself all reach the score. Ctrl+Q quits.
 - **If it won't start**, the window says why, and the server's log is `~/.local/state/xrnsheet/server.log`.
@@ -260,9 +260,10 @@ Training runs on the GPU when there is one, and that needs PyTorch's default bui
 python3 -m venv .venv-train
 .venv-train/bin/pip install torch          # the default build, with CUDA (about 6 GB in all)
 .venv-train/bin/pip install -r requirements.txt
+.venv-train/bin/pip install onnx           # to export a trained model for the app
 ```
 
-The commands below that train use `.venv-train`; the rest work in either. Without a GPU, training falls back to the CPU and takes many times longer. `.venv-train` can be deleted between training runs and made again.
+The commands below that train or export use `.venv-train`; the rest work in either. Without a GPU, training falls back to the CPU and takes many times longer. `.venv-train` can be deleted between training runs and made again.
 
 ## Train the chord reader
 
@@ -271,9 +272,10 @@ The commands below that train use `.venv-train`; the rest work in either. Withou
 .venv/bin/python -m chords.baselines                                                # score Tesseract and RapidOCR
 .venv-train/bin/python -m chords.train --name chord_reader --hand-layout 0.35 --negatives 0.2
 .venv-train/bin/python -m chords.evaluate --name chord_reader                       # score the model
+.venv-train/bin/python -m chords.export                                             # export it for the app
 ```
 
-Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the ablation. Training data is generated as it runs, and 5 fonts are held out for testing.
+The app reads chords with `models/chord_reader.onnx`, so a model trained isn't used until it's exported, and `tests/test_exported.py` fails until then. Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the ablation. Training data is generated as it runs, and 5 fonts are held out for testing.
 
 ## Train the note reader
 
@@ -281,9 +283,10 @@ Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the a
 .venv/bin/python -m notes.render      # generate the strips, about an hour of CPU time
 .venv-train/bin/python -m notes.train       # about 60 minutes on a 4 GB GPU
 .venv-train/bin/python -m notes.evaluate    # score it on the two held-out music fonts
+.venv-train/bin/python -m notes.export      # export it for the app
 ```
 
-The best checkpoint is saved as training runs, so a stopped run still leaves a usable model.
+The best checkpoint is saved as training runs, so a stopped run still leaves a usable model. As with the chord reader, the app reads `models/note_reader.onnx`, so export the model before using it.
 
 ## Retrain on your own corrections
 
@@ -294,7 +297,7 @@ After you've pressed "Mark as checked" on some sheets:
                                              # (add --jobs ~/.local/share/xrnsheet/jobs for the desktop app's)
 .venv/bin/python bench/real_report.py        # how the app did on the held-out sheets
 .venv-train/bin/python -m chords.retrain           # train a candidate and report on it
-.venv-train/bin/python -m chords.retrain --promote # also replace the live model if it passes
+.venv-train/bin/python -m chords.retrain --promote # also replace the live model if it passes, and export it
 ```
 
 About one sheet in five is held out, chosen by a hash. A candidate replaces the live model only if there are at least 30 held-out chords, it gains more chords than it loses with p below 0.05, and it stays at 0.99 or above on the synthetic test. So far, a few dozen real corrections haven't been shown to help. See [the project report](docs/PROJECT_REPORT.md).
@@ -357,7 +360,7 @@ The note reader in this repository (`--notes own`), on the same synthetic pages:
 | Lead sheets, simulated photo (3) | 1.00 | 1.00 | 1.00 | 0.98 |
 | Classical, all conditions (15) | 0.12 | 0.91 | n/a | n/a |
 
-It reads one melody per staff, which is why classical music scores so low, and why homr stays the default. It takes about 4 seconds a page. It reads hand-style time signatures badly, and the notes score doesn't measure that. On real handwriting it found only a small share of the notes.
+It reads one melody per staff, which is why classical music scores so low, and why homr stays the default. It takes 2 to 3 seconds a page. It reads hand-style time signatures badly, and the notes score doesn't measure that. On real handwriting it found only a small share of the notes.
 
 ### The chord reader alone
 

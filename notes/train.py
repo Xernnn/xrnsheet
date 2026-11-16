@@ -2,6 +2,9 @@
 
     .venv-train/bin/python -m notes.train
     .venv-train/bin/python -m notes.train --steps 300 --name smoke   quick check
+
+The app reads notes with models/note_reader.onnx, so a new note_reader.pt isn't used until
+notes.export has been run.
 """
 
 import argparse
@@ -156,6 +159,8 @@ def main() -> None:
             if step >= arguments.steps:
                 break
     print(f"best validation token error {best:.4f}", flush=True)
+    if arguments.name == "note_reader":
+        print("The app reads with the exported model, so run python -m notes.export before using it.")
 
 
 if __name__ == "__main__":

@@ -10,10 +10,12 @@ import torch
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
+from chords import reading as chord_reading
 from chords.model import conv_block
-from notes.vocab import BLANK, TOKENS, Reading
+from notes import reading
+from notes.reading import WIDTH_REDUCTION
+from notes.vocab import TOKENS, Reading
 
-WIDTH_REDUCTION = 4
 ROWS = 6  # A 96 pixel strip after four halvings.
 CHANNELS = 192
 
@@ -51,36 +53,13 @@ class NoteReader(nn.Module):
 
 
 def to_batch(strips: list[np.ndarray]) -> tuple[torch.Tensor, torch.Tensor]:
-    widths = torch.tensor([strip.shape[1] for strip in strips])
-    longest = int(widths.max())
-    pixels = np.full((len(strips), 1, strips[0].shape[0], longest), 255, dtype=np.uint8)
-    for index, strip in enumerate(strips):
-        pixels[index, 0, :, : strip.shape[1]] = strip
-    return torch.from_numpy(pixels).float() / 127.5 - 1.0, widths
+    pixels, widths = chord_reading.to_arrays(strips)
+    return torch.from_numpy(pixels), torch.from_numpy(widths)
 
 
 def decode(log_probabilities: torch.Tensor, lengths: torch.Tensor) -> list[Reading]:
-    """Greedy CTC decoding that also keeps where each token fired.
-
-    A token can fire across several slices, so its position is the middle of that run.
-    """
-    best_probability, best_index = log_probabilities.exp().max(dim=2)
-    readings = []
-    for row in range(best_index.shape[0]):
-        tokens, xs, confidences = [], [], []
-        start = 0
-        indices = best_index[row, : int(lengths[row])].tolist()
-        probabilities = best_probability[row, : int(lengths[row])].tolist()
-        for step in range(1, len(indices) + 1):
-            if step < len(indices) and indices[step] == indices[start]:
-                continue
-            if indices[start] != BLANK:
-                tokens.append(TOKENS[indices[start]])
-                xs.append((start + step) / 2 * WIDTH_REDUCTION)
-                confidences.append(max(probabilities[start:step]))
-            start = step
-        readings.append(Reading(tokens, xs, confidences))
-    return readings
+    """Greedy CTC decoding that also keeps where each token fired, as notes/reading.py does it for the app."""
+    return reading.decode(log_probabilities.numpy(), lengths.numpy())
 
 
 def load_reader(path, device: str = "cpu") -> NoteReader:

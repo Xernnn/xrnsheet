@@ -10,8 +10,9 @@ import cv2
 import numpy as np
 
 from chords.fonts import ROOT
+from chords.reading import load_network
 from notes.build import build_score
-from notes.model import load_reader, read_strips
+from notes.reading import read_strips
 from notes.staves import crop_staff, find_staves, straighten
 from pipeline.align import SystemLayout
 
@@ -20,7 +21,7 @@ MODEL_PATH = ROOT / "models" / "note_reader.pt"
 
 @lru_cache(maxsize=1)
 def note_model(device: str):
-    return load_reader(MODEL_PATH, device)
+    return load_network(MODEL_PATH, "notes.model", device)
 
 
 def read_page(image: np.ndarray, device: str = "cpu"):
@@ -31,7 +32,7 @@ def read_page(image: np.ndarray, device: str = "cpu"):
     if not staves:
         raise ValueError("No staffs found")
     cuts = [crop_staff(level, staff) for staff in staves]
-    readings = read_strips(note_model(device), [strip for strip, _, _ in cuts], device)
+    readings = read_strips(note_model(device), [strip for strip, _, _ in cuts])
     root, kept, all_marks = build_score(readings)
     layouts = []
     for index, marks in zip(kept, all_marks):

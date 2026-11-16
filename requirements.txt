@@ -1,4 +1,5 @@
 homr==0.7.0
+onnxruntime  # Runs the readers trained here, exported to ONNX, as homr's own are.
 music21
 verovio
 opencv-python-headless
