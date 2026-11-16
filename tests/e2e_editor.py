@@ -2163,7 +2163,9 @@ def test_measures_numbered_as_the_page_numbers_them(page, base: str, created: li
     settle(page)
     choose(page, "time:3/4")
     settle(page)
-    chip = page.locator("#barChecks .chip").first.inner_text()
+    page.click('#barChecks [data-step="here"]')  # From how many don't add up, to the first of them.
+    settle(page)
+    chip = page.inner_text('#barChecks [data-step="here"]')
     check("and a bar check names the measure the page numbers", chip.startswith("Bar 2:"), chip)
     page.keyboard.press("Control+z")
     settle(page)
@@ -2833,6 +2835,50 @@ def test_opening_a_file(page, base: str, shots: Path | None, created: list[str])
     page.set_input_files("#file", files=[{"name": "broken.musicxml", "mimeType": "application/xml", "buffer": b"<nonsense"}])
     page.wait_for_selector("#message:not([hidden])")
     check("a broken file says so", "MusicXML" in page.inner_text("#message"), page.inner_text("#message"))
+
+
+def uneven_bars() -> bytes:
+    """Eight bars of 4/4, of which the 2nd, 3rd, 5th and 7th have five beats and the 6th three, as a misread photo's do."""
+    beats = [4, 5, 5, 4, 5, 3, 5, 4]
+    quarter = "<note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration><type>quarter</type></note>"
+    first = "<attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>"
+    bars = "".join(f'<measure number="{index + 1}">{first if index == 0 else ""}{quarter * count}</measure>' for index, count in enumerate(beats))
+    return f'<score-partwise version="4.0"><part-list><score-part id="P1"><part-name/></score-part></part-list><part id="P1">{bars}</part></score-partwise>'.encode()
+
+
+def test_bars_that_dont_add_up_are_stepped_through(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """A sheet read from a photo had a chip for every bar that didn't add up, twenty-one on a real page,
+    four rows of them over the music."""
+    page.goto(base)
+    page.set_input_files("#file", files=[{"name": "uneven.musicxml", "mimeType": "application/xml", "buffer": uneven_bars()}])
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.click('#modeSwitch [data-mode="write"]')
+    said = [text for text in page.locator("#barChecks .chip").all_inner_texts() if text not in ("‹", "›")]
+    check("five bars that don't add up are one line saying so, not a chip each", said == ["5 bars don't add up"], said)
+    lit = "() => [...document.querySelectorAll('#pages g.measure')].findIndex(measure => measure.classList.contains('barCheckHere'))"
+    marked = "() => [...document.querySelectorAll('#pages g.measure')].flatMap((measure, index) => measure.classList.contains('barCheck') ? [index] : [])"
+    check("each is marked in the score, and none lit before a step", (page.evaluate(marked), page.evaluate(lit)) == ([1, 2, 4, 5, 6], -1), (page.evaluate(marked), page.evaluate(lit)))
+    step = lambda name: (page.click(f'#barChecks [data-step="{name}"]'), settle(page))
+    here = lambda: page.inner_text('#barChecks [data-step="here"]')
+    in_lit_bar = "() => document.querySelector('#pages g.measure.barCheckHere')?.contains(document.querySelector('#pages g.selected')) ?? false"
+    step("on")
+    check("› goes to the first, lighting it and selecting its first note", (page.evaluate(lit), here(), page.evaluate(in_lit_bar)) == (1, "Bar 2: too many beats · 1 of 5", True), (page.evaluate(lit), here()))
+    step("on")
+    check("and on to the next", (page.evaluate(lit), here()) == (2, "Bar 3: too many beats · 2 of 5"), (page.evaluate(lit), here()))
+    step("back")
+    step("back")
+    check("‹ goes back, from the first round to the last", (page.evaluate(lit), here(), page.evaluate(in_lit_bar)) == (6, "Bar 7: too many beats · 5 of 5", True), (page.evaluate(lit), here()))
+    if shots:
+        page.screenshot(path=str(shots / "bar_steps.png"))
+    page.keyboard.press(" ")
+    settle(page)
+    check("a step keeps its button's focus, so Space steps again", (page.evaluate(lit), here()) == (5, "Bar 6: too few beats · 4 of 5"), (page.evaluate(lit), here()))
+    page.click('#modeSwitch [data-mode="read"]')
+    tinted = "() => getComputedStyle(document.querySelector('#pages g.measure.barCheck > g.staff > path')).stroke !== getComputedStyle(document.querySelector('#pages g.measure:not(.barCheck) > g.staff > path')).stroke"
+    check("Read mode shows the music without the marks", not page.evaluate(tinted))
+    page.click('#modeSwitch [data-mode="write"]')
+    check("which Write mode shows", page.evaluate(tinted))
 
 
 def test_a_file_titled_only_on_its_page(page, base: str, created: list[str]) -> None:
@@ -5840,6 +5886,7 @@ def main() -> None:
             test_timeline(page, base, arguments.shots, created)
             test_midi_keyboard(context, base, created)
             test_opening_a_file(page, base, arguments.shots, created)
+            test_bars_that_dont_add_up_are_stepped_through(page, base, arguments.shots, created)
             test_a_file_titled_only_on_its_page(page, base, created)
             test_sound_of_marks(page, base, created)
             test_playback_toolbar(page, base, arguments.shots, created)

@@ -237,6 +237,12 @@ body:not([data-mode="write"]) #noteBar, body:not([data-mode="practice"]) #practi
 body:not([data-mode="write"]) #barChecks { display: none !important; }
 .chip { min-height: 26px; padding: 2px 11px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); background: var(--warn-soft); color: var(--warn-ink); }
 .chip:hover:not(:disabled) { background: color-mix(in srgb, var(--warn) 22%, var(--warn-soft)); border-color: var(--warn); }
+#barSteps { display: inline-flex; gap: 2px; }
+#barSteps [data-step="back"], #barSteps [data-step="on"] { min-width: 30px; padding: 2px 8px; }
+/* Bars that don't add up, in Write mode: each one's staff lines faintly in the warning colour, and
+   the one stepped to plainly, so the music still reads. */
+body[data-mode="write"] #pages g.measure.barCheck > g.staff > path { stroke: color-mix(in srgb, var(--warn) 45%, var(--notes)); }
+body[data-mode="write"] #pages g.measure.barCheckHere > g.staff > path { stroke: var(--warn); stroke-width: 40px; }
 
 /* The score. */
 #scoreArea { flex: 1; display: flex; min-height: 0; position: relative; }
