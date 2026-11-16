@@ -549,6 +549,7 @@ def recognize_job(folder: Path, upload: Path) -> None:
             write_status(folder, "failed", next(iter(failed.values())))
             return
         root = combine_pages(folder, read)
+        name_after_file(folder, root)
         edit.ensure_note_ids(root)
         structure.ensure_measure_ids(root)
         save_version(folder, root)
@@ -559,6 +560,25 @@ def recognize_job(folder: Path, upload: Path) -> None:
     except Exception as error:  # A background thread has no one else to report to.
         print(f"recognition error: {error}", file=sys.stderr)
         write_status(folder, "failed", "Recognition failed.")
+
+
+def name_after_file(folder: Path, root: ET.Element) -> None:
+    """Call a sheet read with no title after the file it was read from, rather than "Untitled score".
+
+    A title the reading found stays, and one typed later replaces this as it would any other. Like a
+    title recognition guesses, it's the work's title only, so it isn't printed until it's saved.
+    """
+    title = title_from_name(source_of(folder)["name"] or "")
+    if structure.title_of(root)["title"] or not title:
+        return
+    work = root.find("work")
+    if work is None:
+        work = ET.Element("work")
+        root.insert(0, work)
+    found = work.find("work-title")
+    if found is None:
+        found = ET.SubElement(work, "work-title")
+    found.text = title
 
 
 def queue_reading(folder: Path, upload: Path) -> None:
@@ -599,6 +619,33 @@ def source_of(folder: Path) -> dict:
     except (OSError, ValueError, AttributeError):
         name = None
     return {"name": name if isinstance(name, str) and name else None, "pdf": (folder / "upload.pdf").exists()}
+
+
+# Words a camera, phone, scanner or app names its pictures with, as in "IMG_2034.jpeg", "scan0001.pdf",
+# "photo 3.png" or "WhatsApp Image 2024-11-02 at 15.30.12.jpeg". A file named with only these and
+# numbers says nothing of its music, so it gives a sheet no title.
+CAMERA_WORDS = {
+    "img", "image", "images", "photo", "photos", "pic", "picture", "pxl", "dsc", "dscn", "dscf", "mvimg", "mp", "wa", "fb",
+    "screenshot", "screen", "shot", "scan", "scanned", "scanner", "camscanner", "adobe", "whatsapp", "received",
+    "document", "doc", "file", "page", "untitled", "unnamed", "download", "upload", "copy", "new", "at",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "sheet", "score", "music",
+}
+
+
+def title_from_name(name: str) -> str:
+    """Make a title from the name of the file a sheet was read from: "Autumn leaves" from
+    "autumn_leaves (2).jpg", but none from a camera's or scanner's name for it, such as "IMG_2034.jpeg".
+
+    The number a browser or file manager adds to a second copy goes, as do underscores, and hyphens in
+    a name with no spaces. A name all in small letters starts with a capital; any other is left as typed.
+    """
+    words = re.sub(r"(\s*\(\d+\)|[\s_-]+copy(\s*\d+)?)$", "", Path(name).stem, flags=re.IGNORECASE).replace("_", " ")
+    if " " not in words:
+        words = words.replace("-", " ")
+    words = " ".join(words.split())[: structure.MOST_TITLE_LETTERS]
+    if all(word in CAMERA_WORDS for word in re.findall(r"[^\W\d_]+", words.lower())):
+        return ""
+    return words[:1].upper() + words[1:] if words == words.lower() else words
 
 
 def reading_state(folder: Path) -> dict:

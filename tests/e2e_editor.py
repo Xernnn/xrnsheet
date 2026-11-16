@@ -5372,6 +5372,7 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         page.click("#toastAction")
         page.wait_for_selector("#pages svg")
         check("and opens from there", page.evaluate("() => scoreId") == first and page.is_hidden("#busy"))
+        check("a sheet whose reading found no title is called after its file, not Untitled score", page.inner_text("#scoreName") == "First page", page.inner_text("#scoreName"))
 
         page.set_input_files("#file", files=[photo("blank.png", blank=True)])
         page.wait_for_selector("#busy:not([hidden])")
