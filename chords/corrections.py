@@ -24,6 +24,7 @@ from pathlib import Path
 import cv2
 
 from chords.fonts import ROOT
+from chords.reading import CHARACTER_INDEX  # Not from chords.model, which would load PyTorch for this.
 from pipeline import edit
 from pipeline.chord_boxes import crop
 from pipeline.structure import surviving_bars
@@ -125,8 +126,6 @@ def sheet_digest(folder: Path) -> str:
 
 def export(job_dir: Path = JOB_DIR, out_dir: Path = OUT_DIR) -> Counter:
     """Rebuild the corrections folder, and return counts of what went into it."""
-    from chords.model import CHARACTER_INDEX  # Here, so the app can forget a sheet without loading the model's code.
-
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)

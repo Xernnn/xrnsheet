@@ -21,6 +21,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from chords.corrections import OUT_DIR, load_labels
+from chords.export import export_chord_reader
 from chords.fonts import ROOT
 from chords.metrics import is_correct, mcnemar_exact, wilson_interval
 from chords.model import CHARACTER_INDEX, ChordReader, load_reader, read_images, to_batch
@@ -178,9 +179,10 @@ def main() -> None:
         backup = MODEL_PATH.with_name(f"chord_reader_before_{time.strftime('%Y%m%d_%H%M%S')}.pt")
         shutil.copy(MODEL_PATH, backup)
         shutil.copy(CANDIDATE_PATH, MODEL_PATH)
+        export_chord_reader()  # The app reads with the exported model, so it's only promoted once that's written too.
         print(f"Promoted. The old model is saved as {backup.name}")
     elif passed:
-        print("Run again with --promote to use it, or copy models/chord_reader_candidate.pt over models/chord_reader.pt.")
+        print("Run again with --promote to use it, or copy models/chord_reader_candidate.pt over models/chord_reader.pt and run chords.export.")
 
 
 if __name__ == "__main__":

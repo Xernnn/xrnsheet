@@ -308,6 +308,7 @@ function openScore(id) {
   score = null;
   selected = null;
   chosenPart = null;
+  barStep = chordStep = null; // The steps through what's to check were through the last score's.
   location.hash = id;
   document.querySelectorAll("#historyList .tile").forEach(tile => tile.toggleAttribute("aria-current", tile.dataset.score === id));
   return poll();
@@ -584,7 +585,7 @@ function showBox(box) {
   if (place.top < area.top || place.bottom > area.bottom) holder.scrollTop += place.top - area.top - (area.height - place.height) / 2;
 }
 
-// A box clicked on the original chooses its chord in the score, and opens it to change, as a chip does.
+// A box clicked on the original chooses its chord in the score, and opens it to change, as a step to it does.
 function openChordFromSheet(index) {
   const element = document.querySelector(`#pages g.harm[data-index="${index}"]`);
   if (!element || !score?.chords?.[index]) return;
@@ -803,22 +804,35 @@ function drawBoxes() {
   }
 }
 
+// The chords the reader wasn't sure of, coloured in the score and on the original, are one line to
+// step through under it, as the bars that don't add up are (stepLine). The one stepped to is lit in
+// both places.
+let chordStep = null; // The chord last stepped to, by its number in the score, or null.
+
 function drawChecks() {
-  document.querySelectorAll("#checks .chip").forEach(chip => chip.remove());
   const unsure = score.chords.filter(chord => chord.confidence !== null && chord.confidence < UNSURE_BELOW);
   $("checks").hidden = unsure.length === 0;
-  for (const chord of unsure) {
-    const chip = document.createElement("button");
-    chip.className = "chip";
-    chip.textContent = chord.text;
-    chip.addEventListener("click", () => {
-      const element = document.querySelector(`#pages g.harm[data-index="${chord.index}"]`);
-      if (!element) return;
-      element.scrollIntoView({ block: "nearest", inline: "nearest" });
-      openEditor(element.getBoundingClientRect(), chord.index, chord.text);
-    });
-    $("checks").append(chip);
+  document.querySelectorAll("#pages g.harm.checkHere, .box.checkHere").forEach(element => element.classList.remove("checkHere"));
+  if (unsure.some(chord => chord.index === chordStep)) {
+    document.querySelectorAll(`#pages g.harm[data-index="${chordStep}"], .box[data-index="${chordStep}"]`).forEach(element => element.classList.add("checkHere"));
   }
+  $("checks").querySelector(".steps")?.remove();
+  if (!unsure.length) return;
+  $("checks").append(stepLine("chordSteps", "Chords to check", unsure, unsure.map(chord => chord.index), chordStep, {
+    said: chord => chord.text,
+    many: `${unsure.length} chords`,
+    why: "The reader wasn't sure of these chords, which are coloured in the score and on the original.",
+    before: "The chord before to check",
+    next: "The next chord to check",
+    go: stepToChordCheck,
+  }));
+}
+
+// A chord stepped to is chosen and opened to change, as a click on its chip or its box was.
+function stepToChordCheck(chord) {
+  chordStep = chord.index;
+  drawChecks();
+  openChordFromSheet(chord.index);
 }
 
 // A selected note takes its voice's colour, as it does in MuseScore.

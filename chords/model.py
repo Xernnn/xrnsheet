@@ -10,11 +10,9 @@ import torch
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
-from chords.vocab import ALPHABET
+from chords import reading
+from chords.reading import BLANK, CHARACTER_INDEX, CHARACTERS  # noqa: F401 (imported from here elsewhere)
 
-BLANK = 0
-CHARACTERS = ["<blank>", *ALPHABET]
-CHARACTER_INDEX = {character: index for index, character in enumerate(CHARACTERS)}
 WIDTH_REDUCTION = 4  # The convolutions shrink width by this factor.
 
 
@@ -58,32 +56,13 @@ class ChordReader(nn.Module):
 
 def to_batch(images: list[np.ndarray]) -> tuple[torch.Tensor, torch.Tensor]:
     """Stack images of different widths, padding the right side with white."""
-    widths = torch.tensor([image.shape[1] for image in images])
-    longest = int(widths.max())
-    pixels = np.full((len(images), 1, images[0].shape[0], longest), 255, dtype=np.uint8)
-    for index, image in enumerate(images):
-        pixels[index, 0, :, : image.shape[1]] = image
-    return (torch.from_numpy(pixels).float() / 127.5 - 1.0), widths
+    pixels, widths = reading.to_arrays(images)
+    return torch.from_numpy(pixels), torch.from_numpy(widths)
 
 
 def decode(log_probabilities: torch.Tensor, lengths: torch.Tensor) -> list[tuple[str, float]]:
-    """Greedy CTC decoding: take the likeliest character per slice, merge repeats, drop blanks.
-
-    Confidence is the probability of the least certain character the model kept.
-    """
-    best_probability, best_index = log_probabilities.exp().max(dim=2)
-    results = []
-    for row in range(best_index.shape[0]):
-        previous = BLANK
-        characters, probabilities = [], []
-        for step in range(int(lengths[row])):
-            index = int(best_index[row, step])
-            if index != BLANK and index != previous:
-                characters.append(CHARACTERS[index])
-                probabilities.append(float(best_probability[row, step]))
-            previous = index
-        results.append(("".join(characters), min(probabilities) if probabilities else 1.0))
-    return results
+    """Greedy CTC decoding, as chords/reading.py does it for the app."""
+    return reading.decode(log_probabilities.numpy(), lengths.numpy())
 
 
 def load_reader(path, device: str = "cpu") -> ChordReader:

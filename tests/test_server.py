@@ -288,6 +288,62 @@ def test_a_long_pdf_says_what_was_skipped(client, monkeypatch):
     assert "first 2 of 3" in client.get(f"/api/scores/{folder.name}").json()["message"]
 
 
+@pytest.mark.parametrize(
+    ("name", "title"),
+    [
+        ("autumn_leaves (2).jpg", "Autumn leaves"),
+        ("fly-me-to-the-moon.png", "Fly me to the moon"),
+        ("Blue Bossa - Copy.jpg", "Blue Bossa"),
+        ("Nocturne Op. 9 No. 2.pdf", "Nocturne Op. 9 No. 2"),
+        ("IMG_2034.jpeg", ""),
+        ("scan0001.pdf", ""),
+        ("photo 3.png", ""),
+        ("WhatsApp Image 2024-11-02 at 15.30.12.jpeg", ""),
+        ("PXL_20241102_153012345.MP.jpg", ""),
+        ("20241102_153012.jpg", ""),
+    ],
+)
+def test_a_file_name_is_a_title_unless_a_camera_gave_it(name, title):
+    assert server.title_from_name(name) == title
+
+
+def read_as(name):
+    """Read a one-page sheet uploaded as a file of this name, and return its address."""
+    folder = server.JOB_DIR / os.urandom(16).hex()
+    folder.mkdir()
+    pdf_with_pages(folder / "upload.pdf", 1)
+    server.write_whole(folder / server.SOURCE_FILE, json.dumps({"name": name}))
+    server.write_status(folder, "processing")
+    server.recognize_job(folder, folder / "upload.pdf")
+    return f"/api/scores/{folder.name}"
+
+
+def test_a_sheet_read_with_no_title_is_called_after_its_file(client, monkeypatch):
+    """One whose reading found no title was "Untitled score" in the library and the top bar, and saved
+    as score.pdf, though the photo it was read from had a name."""
+    monkeypatch.setattr(server, "recognize_page", fake_recognizer())
+    url = read_as("autumn_leaves (2).pdf")
+    assert client.get(url).json()["title"] == "Autumn leaves"
+    assert [sheet["title"] for sheet in client.get("/api/scores").json()] == ["Autumn leaves"]
+    assert "Autumn%20leaves.pdf" in client.get(f"{url}/score.pdf").headers["content-disposition"]
+    assert "Autumn" not in "".join(client.get(url).json()["pages"])  # Not printed until saved, as a title read isn't.
+    client.post(f"{url}/title", json={"title": "Les feuilles mortes"})
+    assert client.get(url).json()["title"] == "Les feuilles mortes"  # One typed wins, as over any other.
+
+
+def test_a_title_read_from_the_sheet_wins_and_a_cameras_name_gives_none(client, monkeypatch):
+    def titled(image, out_dir):
+        fake_recognizer()(image, out_dir)
+        root = ET.parse(out_dir / "page.musicxml").getroot()
+        root.insert(0, ET.fromstring("<work><work-title>Blue Bossa</work-title></work>"))
+        (out_dir / "page.musicxml").write_text(to_text(root), encoding="utf-8")
+
+    monkeypatch.setattr(server, "recognize_page", titled)
+    assert client.get(read_as("autumn_leaves.pdf")).json()["title"] == "Blue Bossa"
+    monkeypatch.setattr(server, "recognize_page", fake_recognizer())
+    assert client.get(read_as("IMG_2034.pdf")).json()["title"] == ""
+
+
 def test_progress_is_reported_page_by_page(client, monkeypatch):
     seen = []
     original = server.write_status

@@ -3,6 +3,9 @@
     .venv-train/bin/python -m chords.train
     .venv-train/bin/python -m chords.train --steps 300 --name smoke   quick check
     .venv-train/bin/python -m chords.train --no-damage --name no_damage   see what augmentation adds
+
+The app reads chords with models/chord_reader.onnx, so a new chord_reader.pt isn't used until
+chords.export has been run.
 """
 
 import argparse
@@ -137,6 +140,8 @@ def main() -> None:
             if step >= arguments.steps:
                 break
     print(f"best validation accuracy {best:.3f}")
+    if arguments.name == "chord_reader":
+        print("The app reads with the exported model, so run python -m chords.export before using it.")
 
 
 if __name__ == "__main__":

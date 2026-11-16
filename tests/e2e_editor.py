@@ -2163,7 +2163,9 @@ def test_measures_numbered_as_the_page_numbers_them(page, base: str, created: li
     settle(page)
     choose(page, "time:3/4")
     settle(page)
-    chip = page.locator("#barChecks .chip").first.inner_text()
+    page.click('#barChecks [data-step="here"]')  # From how many don't add up, to the first of them.
+    settle(page)
+    chip = page.inner_text('#barChecks [data-step="here"]')
     check("and a bar check names the measure the page numbers", chip.startswith("Bar 2:"), chip)
     page.keyboard.press("Control+z")
     settle(page)
@@ -2833,6 +2835,91 @@ def test_opening_a_file(page, base: str, shots: Path | None, created: list[str])
     page.set_input_files("#file", files=[{"name": "broken.musicxml", "mimeType": "application/xml", "buffer": b"<nonsense"}])
     page.wait_for_selector("#message:not([hidden])")
     check("a broken file says so", "MusicXML" in page.inner_text("#message"), page.inner_text("#message"))
+
+
+def test_enter_and_space_press_a_focused_button(page, base: str, created: list[str]) -> None:
+    """Enter on a button reached from the keyboard didn't press it: with a note selected, it put a line
+    break in the score there instead, and in Read mode Enter and Space turned the page."""
+    score_id = written_melody(page, base, created, bars=8, tune="cdefgabc" * 2)
+    breaks = lambda: fetch_text(base, f"/api/scores/{score_id}/score.musicxml").count('new-system="yes"')
+    zoomed = lambda: page.evaluate("() => zoom")
+    click_on(page, page.locator("#pages g.note").nth(5))
+    settle(page)
+    before, at = breaks(), zoomed()
+    page.focus("#zoomIn")
+    page.keyboard.press("Enter")
+    settle(page)
+    check("Enter on a focused button presses it, and leaves the score alone", (zoomed() != at, breaks()) == (True, before), (at, zoomed(), before, breaks()))
+    at = zoomed()
+    page.focus("#zoomOut")
+    page.keyboard.press(" ")
+    settle(page)
+    check("and so does Space, without playing", zoomed() != at and page.get_attribute("#play", "aria-label") == "Play", (at, zoomed()))
+    page.click('#modeSwitch [data-mode="read"]')
+    for key in ("Enter", " "):
+        at = zoomed()
+        page.focus("#zoomIn")
+        page.keyboard.press(key)
+        settle(page)
+        check(f"in Read mode too, {key.strip() or 'Space'} presses it rather than turning the page", zoomed() != at, (at, zoomed()))
+    page.click('#modeSwitch [data-mode="write"]')
+    click_on(page, page.locator("#pages g.note").nth(5))
+    settle(page)
+    page.keyboard.press("Enter")
+    settle(page)
+    check("with the focus on the score, Enter still breaks the line at the selected note", breaks() == before + 1, (before, breaks()))
+    page.keyboard.press("Control+z")
+    settle(page)
+
+
+def uneven_bars() -> bytes:
+    """Eight bars of 4/4, of which the 2nd, 3rd, 5th and 7th have five beats and the 6th three, as a misread photo's do."""
+    beats = [4, 5, 5, 4, 5, 3, 5, 4]
+    quarter = "<note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration><type>quarter</type></note>"
+    first = "<attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes>"
+    bars = "".join(f'<measure number="{index + 1}">{first if index == 0 else ""}{quarter * count}</measure>' for index, count in enumerate(beats))
+    return f'<score-partwise version="4.0"><part-list><score-part id="P1"><part-name/></score-part></part-list><part id="P1">{bars}</part></score-partwise>'.encode()
+
+
+def test_bars_that_dont_add_up_are_stepped_through(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """A sheet read from a photo had a chip for every bar that didn't add up, twenty-one on a real page,
+    four rows of them over the music."""
+    page.goto(base)
+    page.set_input_files("#file", files=[{"name": "uneven.musicxml", "mimeType": "application/xml", "buffer": uneven_bars()}])
+    page.wait_for_selector("#pages svg")
+    created.append(page.evaluate("() => scoreId"))
+    page.click('#modeSwitch [data-mode="write"]')
+    said = [text for text in page.locator("#barChecks .chip").all_inner_texts() if text not in ("‹", "›")]
+    check("five bars that don't add up are one line saying so, not a chip each", said == ["5 bars don't add up"], said)
+    lit = "() => [...document.querySelectorAll('#pages g.measure')].findIndex(measure => measure.classList.contains('barCheckHere'))"
+    marked = "() => [...document.querySelectorAll('#pages g.measure')].flatMap((measure, index) => measure.classList.contains('barCheck') ? [index] : [])"
+    check("each is marked in the score, and none lit before a step", (page.evaluate(marked), page.evaluate(lit)) == ([1, 2, 4, 5, 6], -1), (page.evaluate(marked), page.evaluate(lit)))
+    step = lambda name: (page.click(f'#barChecks [data-step="{name}"]'), settle(page))
+    here = lambda: page.inner_text('#barChecks [data-step="here"]')
+    in_lit_bar = "() => document.querySelector('#pages g.measure.barCheckHere')?.contains(document.querySelector('#pages g.selected')) ?? false"
+    step("on")
+    check("› goes to the first, lighting it and selecting its first note", (page.evaluate(lit), here(), page.evaluate(in_lit_bar)) == (1, "Bar 2: too many beats · 1 of 5", True), (page.evaluate(lit), here()))
+    step("on")
+    check("and on to the next", (page.evaluate(lit), here()) == (2, "Bar 3: too many beats · 2 of 5"), (page.evaluate(lit), here()))
+    step("back")
+    step("back")
+    check("‹ goes back, from the first round to the last", (page.evaluate(lit), here(), page.evaluate(in_lit_bar)) == (6, "Bar 7: too many beats · 5 of 5", True), (page.evaluate(lit), here()))
+    if shots:
+        page.screenshot(path=str(shots / "bar_steps.png"))
+    page.focus('#barChecks [data-step="back"]')
+    page.keyboard.press(" ")
+    settle(page)
+    page.keyboard.press(" ")
+    settle(page)
+    check("a step pressed from the keyboard keeps its focus, so Space steps again", (page.evaluate(lit), here()) == (4, "Bar 5: too many beats · 3 of 5"), (page.evaluate(lit), here()))
+    page.click('#barChecks [data-step="on"]')
+    settle(page)
+    check("one clicked lets go of it, so the keys go to the score", page.evaluate("() => document.activeElement === document.body"), page.evaluate("() => document.activeElement.outerHTML.slice(0, 80)"))
+    page.click('#modeSwitch [data-mode="read"]')
+    tinted = "() => getComputedStyle(document.querySelector('#pages g.measure.barCheck > g.staff > path')).stroke !== getComputedStyle(document.querySelector('#pages g.measure:not(.barCheck) > g.staff > path')).stroke"
+    check("Read mode shows the music without the marks", not page.evaluate(tinted))
+    page.click('#modeSwitch [data-mode="write"]')
+    check("which Write mode shows", page.evaluate(tinted))
 
 
 def test_a_file_titled_only_on_its_page(page, base: str, created: list[str]) -> None:
@@ -5372,6 +5459,7 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         page.click("#toastAction")
         page.wait_for_selector("#pages svg")
         check("and opens from there", page.evaluate("() => scoreId") == first and page.is_hidden("#busy"))
+        check("a sheet whose reading found no title is called after its file, not Untitled score", page.inner_text("#scoreName") == "First page", page.inner_text("#scoreName"))
 
         page.set_input_files("#file", files=[photo("blank.png", blank=True)])
         page.wait_for_selector("#busy:not([hidden])")
@@ -5540,6 +5628,44 @@ def test_marking_checked_with_things_still_listed(page, base: str, created: list
     page.click("#checked")
     settle(page)
     check("and it can be un-marked later with the same button", checked() is False and "No longer marked" in page.inner_text("#toastText"))
+
+
+def test_chords_to_check_are_stepped_through(page, base: str, shots: Path | None, created: list[str]) -> None:
+    """Every chord the reader wasn't sure of had a chip under the original, thirteen on a real
+    handwritten page, as the bars that don't add up had above the score."""
+    page.goto(base)
+    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.wait_for_selector("#pages svg", timeout=120000)
+    score_id = page.evaluate("() => scoreId")
+    created.append(score_id)
+    page.click('#modeSwitch [data-mode="write"]')
+    unsure = [chord for chord in score_data(base, score_id)["chords"] if chord["confidence"] is not None and chord["confidence"] < 0.8]
+    said = [text for text in page.locator("#checks .chip").all_inner_texts() if text not in ("‹", "›")]
+    check("the chords to check are one line saying how many, not a chip each", len(unsure) >= 2 and said == [f"{len(unsure)} chords"], said)
+    lit = """() => [document.querySelector('#pages g.harm.checkHere')?.dataset.index ?? null, document.querySelector('.box.checkHere')?.dataset.index ?? null,
+        document.querySelector('.box.active')?.dataset.index ?? null, selectedChord, $('editor').hidden ? null : $('chordInput').value]"""
+    here = lambda: page.inner_text('#checks [data-step="here"]')
+    page.click('#checks [data-step="on"]')
+    first = str(unsure[0]["index"])
+    check("› goes to the first, lit in the score and on the original, chosen, and open to change", (page.evaluate(lit), here()) == ([first, first, first, unsure[0]["index"], unsure[0]["text"]], f"{unsure[0]['text']} · 1 of {len(unsure)}"), (page.evaluate(lit), here()))
+    page.keyboard.press("Escape")
+    page.click('#checks [data-step="on"]')
+    second = str(unsure[1]["index"])
+    check("and on to the next", (page.evaluate(lit)[:3], here()) == ([second, second, second], f"{unsure[1]['text']} · 2 of {len(unsure)}"), (page.evaluate(lit), here()))
+    if shots:
+        page.screenshot(path=str(shots / "chord_steps.png"))
+    page.keyboard.press("Escape")
+    page.click('#checks [data-step="back"]')
+    check("‹ goes back", page.evaluate(lit)[0] == first, page.evaluate(lit))
+    page.fill("#chordInput", "C7")
+    page.keyboard.press("Enter")
+    settle(page)
+    left = [text for text in page.locator("#checks .chip").all_inner_texts() if text not in ("‹", "›")]
+    expected = [unsure[1]["text"]] if len(unsure) == 2 else [f"{len(unsure) - 1} chords"]
+    check("once it's put right, the line says what's left, and nothing is lit", (left, page.evaluate(lit)[:2]) == (expected, [None, None]), (left, page.evaluate(lit)))
+    page.click('#checks [data-step="here"]')
+    check("and goes on from where it was", page.evaluate(lit)[0] == second, page.evaluate(lit))
+    page.keyboard.press("Escape")
 
 
 def test_deleting_a_score(page, base: str, created: list[str]) -> None:
@@ -5839,6 +5965,8 @@ def main() -> None:
             test_timeline(page, base, arguments.shots, created)
             test_midi_keyboard(context, base, created)
             test_opening_a_file(page, base, arguments.shots, created)
+            test_enter_and_space_press_a_focused_button(page, base, created)
+            test_bars_that_dont_add_up_are_stepped_through(page, base, arguments.shots, created)
             test_a_file_titled_only_on_its_page(page, base, created)
             test_sound_of_marks(page, base, created)
             test_playback_toolbar(page, base, arguments.shots, created)
@@ -5885,6 +6013,7 @@ def main() -> None:
             test_reading_leaves_the_window_free(page, arguments.shots)
             test_the_original_sheet(page, base, arguments.shots, created)
             test_marking_checked_with_things_still_listed(page, base, created)
+            test_chords_to_check_are_stepped_through(page, base, arguments.shots, created)
             test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])
             browser.close()

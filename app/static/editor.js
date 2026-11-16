@@ -431,22 +431,77 @@ function drawRange() {
   range.ids.forEach(id => markSelected(document.getElementById(id)));
 }
 
-// Measures that don't add up, notes no string can play, and notes out of a bowed string's range,
-// each a chip that goes there.
+// Measures that don't add up, notes no string can play, and notes out of a bowed string's range.
+// The bars are one line to step through, below; the bar it's on is lit in the score, and the others
+// only faintly marked. The notes' problems are a chip each, that goes there.
+let barStep = null; // The bar last stepped to, by its index in the score, or null.
+
 function drawBarChecks() {
   const checks = score.barChecks ?? [];
   $("barChecks").hidden = checks.length === 0 && !(score.fretProblems ?? []).length && !(score.rangeProblems ?? []).length;
-  const chips = checks.slice(0, 40).map(check => {
-    const chip = document.createElement("button");
-    chip.className = "chip";
-    chip.textContent = `Bar ${measureFacts(check.measure).number}: ${check.problem === "long" ? "too many beats" : "too few beats"}`;
-    chip.addEventListener("click", () => enqueue(async () => {
-      if (editor.on) moveCursor(check.note); else select(check.note);
-      document.getElementById(check.note)?.scrollIntoView({ block: "center" });
-    }));
-    return chip;
+  document.querySelectorAll("#pages g.barCheck").forEach(measure => measure.classList.remove("barCheck", "barCheckHere"));
+  const measures = document.querySelectorAll("#pages g.measure");
+  for (const check of checks) measures[check.measure]?.classList.add("barCheck", ...(check.measure === barStep ? ["barCheckHere"] : []));
+  // A step taken from the keyboard keeps its key's focus, though the line is made again.
+  const focused = document.activeElement?.closest?.("#barChecks [data-step]")?.dataset.step;
+  const line = checks.length ? [stepLine("barSteps", "Bars that don't add up", checks, checks.map(check => check.measure), barStep, {
+    said: check => `Bar ${measureFacts(check.measure).number}: ${check.problem === "long" ? "too many beats" : "too few beats"}`,
+    many: `${checks.length} bars don't add up`,
+    why: "The beats don't add up to the time signature, which is often a rhythm misread.",
+    before: "The bar before that doesn't add up",
+    next: "The next bar that doesn't add up",
+    go: stepToBarCheck,
+  })] : [];
+  $("barChecks").replaceChildren(...line, ...fretChips());
+  if (focused) $("barChecks").querySelector(`[data-step="${focused}"]`)?.focus();
+}
+
+// Bars that don't add up, and chords the reader wasn't sure of, are each one line: how many there
+// are, or the one stepped to and where it is among them, with ‹ and › to step from one to the next,
+// as a browser's find does, the last coming round to the first. A chip for each was a wall: a real
+// handwritten page had twenty-one bars, four rows deep over the music, and thirteen chords beside it.
+// Each is known by its key, its bar or its chord's number, so once the one stepped to is put right
+// the line says how many are left, and the steps go on from where it was.
+function stepLine(id, label, items, keys, step, { said, many, why, before, next, go }) {
+  const at = step === null ? -1 : keys.indexOf(step);
+  const after = keys.findIndex(key => step === null || key > step);
+  const earlier = keys.findLastIndex(key => step === null || key < step);
+  const group = document.createElement("span");
+  group.id = id;
+  group.className = "steps";
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", label);
+  const button = (name, text, title, item) => {
+    const element = document.createElement("button");
+    element.className = "chip";
+    element.dataset.step = name;
+    element.textContent = text;
+    element.title = title;
+    if (name !== "here") element.setAttribute("aria-label", title);
+    // A click lets go of the focus, leaving the keys to the score; a step pressed from the keyboard keeps it.
+    element.addEventListener("click", event => { if (event.detail) element.blur(); go(item); });
+    return element;
+  };
+  if (items.length === 1) {
+    group.append(button("here", said(items[0]), `${why} Click to go to it.`, items[0]));
+    return group;
+  }
+  const onward = items[after < 0 ? 0 : after];
+  group.append(
+    button("here", at < 0 ? many : `${said(items[at])} · ${at + 1} of ${items.length}`, `${why} Click to go to ${at < 0 ? "one" : "it"}, then step through them with ‹ and ›.`, at < 0 ? onward : items[at]),
+    button("back", "‹", before, items[earlier < 0 ? items.length - 1 : earlier]),
+    button("on", "›", next, onward),
+  );
+  return group;
+}
+
+function stepToBarCheck(check) {
+  barStep = check.measure;
+  return enqueue(async () => {
+    if (editor.on) moveCursor(check.note); else select(check.note);
+    drawBarChecks();
+    document.getElementById(check.note)?.scrollIntoView({ block: "center" });
   });
-  $("barChecks").replaceChildren(...chips, ...fretChips());
 }
 
 // A file saved from the score is named after its title, as the server names the ones it sends, so
@@ -1484,6 +1539,10 @@ function setUpToolbar() {
   $("lyricButton").addEventListener("click", startLyrics);
   // A clicked button keeps the focus, and Space would press it again instead of playing.
   for (const id of ["noteBar", "viewTools", "pitches", "playPopup", "speedPopup", "library"]) $(id).addEventListener("click", event => event.target.closest("button")?.blur());
+  // So would Enter, instead of breaking the line, by the original sheet and the bars to check too. But
+  // only a mouse's click lets go of the focus there: one pressed from the keyboard keeps it, so the
+  // steps through what's to check can go on with Space.
+  for (const id of ["original", "barChecks"]) $(id).addEventListener("click", event => { if (event.detail) event.target.closest("button")?.blur(); });
   $("redo").addEventListener("click", redoEdit);
   window.addEventListener("resize", () => { drawCursor(); redrawGhost(); });
   $("desk").addEventListener("scroll", redrawGhost, { passive: true });
@@ -1573,6 +1632,10 @@ function practiceKey(event) {
   if (key === "/") { handled(); openCommands(); }
 }
 
+// What a focused control does itself with Enter and with Space.
+const PRESSED_BY_ENTER = "button, a[href], summary, [role=button]";
+const PRESSED_BY_SPACE = "button, summary, [role=button]";
+
 document.addEventListener("keydown", event => {
   const key = event.key;
   if (event.defaultPrevented) return; // Already the key of whatever had it, such as the command palette.
@@ -1595,10 +1658,13 @@ document.addEventListener("keydown", event => {
     return;
   }
   if (event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey && MODE_KEYS[event.code]) { handled(); setMode(MODE_KEYS[event.code]); return; }
+  // A button someone has tabbed to is pressed by Enter or Space, and a link followed by Enter, so the
+  // key mustn't also act on the score: Enter on one put a line break in at the selected note instead,
+  // and in Read mode both keys turned the page. With nothing focused, they act on the score as ever.
+  const pressed = { "Enter": PRESSED_BY_ENTER, " ": PRESSED_BY_SPACE }[key];
+  if (pressed && !event.ctrlKey && !event.metaKey && !event.altKey && event.target.matches?.(pressed)) return;
   if (reading() && !event.ctrlKey && !event.metaKey && !event.altKey && readingKey(event)) return;
   if (event.ctrlKey || event.metaKey) { handleControlKey(event); return; }
-  // A button someone has tabbed to is pressed by Space, so it mustn't also start playing.
-  if (key === " " && event.target.tagName === "BUTTON") return;
   if (INSPECTOR_KEYS[key]) { handled(); toggleInspector(INSPECTOR_KEYS[key]); return; }
   if (key === "F10") { handled(); toggleDock("mixer"); return; }
   if (key === "F12") { handled(); toggleDock("timeline"); return; }

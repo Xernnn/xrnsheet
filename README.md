@@ -23,9 +23,9 @@ python3 -m venv .venv
 .venv/bin/python -m chords.fonts          # download the fonts
 ```
 
-The app reads every page on the CPU, so `.venv` takes PyTorch's CPU build, under 2 GB in all. The default build carries 5 GB of GPU libraries that only [training](#train-on-a-gpu) uses.
+The app reads every page on the CPU, with its two models exported to ONNX and run in onnxruntime, so reading a page doesn't load PyTorch. `.venv` still takes PyTorch's CPU build, under 2 GB in all, for the tests, for `bench/real_page.py`, and to read with a model that hasn't been exported. The default build carries 5 GB of GPU libraries that only [training](#train-on-a-gpu) uses.
 
-The trained models are in `models/`. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
+The trained models are in `models/`: the `.pt` that training writes, and the `.onnx` exported from it that the app reads. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
 
 The benchmark also uses Audiveris and Tesseract. Audiveris has no Arch package, so it's unpacked into `tools/` from the official release:
 
@@ -44,7 +44,7 @@ Tesseract needs `eng.traineddata` in `/usr/share/tessdata`.
 .venv/bin/python -m app.server
 ```
 
-Open <http://127.0.0.1:8000>. A page takes 15 to 30 seconds on CPU. PDFs can have up to 40 pages. If a page can't be read, it's left out and the app says which one. Your sheets are listed in the library, so you can come back to them.
+Open <http://127.0.0.1:8000>. A page takes 10 to 15 seconds on a laptop's CPU, or 2 to 3 with `--notes own` below. PDFs can have up to 40 pages. If a page can't be read, it's left out and the app says which one. Your sheets are listed in the library, so you can come back to them.
 
 The rest of the app can be used while a sheet is read. It's in the library at once, as a tile saying how it's getting on: waiting its turn, and behind how many, as sheets are read one at a time; or the page being read and the time so far. Opened, it shows the same, and opens into the score when it's done. Cancel, on either, stops the reading and removes the sheet; the pages of a PDF read so far go with it. A sheet read while you were elsewhere says so, with Open, and one that couldn't be read stays in the library saying why, with Try again and Remove.
 
@@ -68,7 +68,7 @@ npm run app:install
 This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it to the launcher. Run it again to update. The app starts its own copy of the server when it opens and stops it when it closes, so nothing needs to be running first.
 
 - **Your scores** are kept in `~/.local/share/xrnsheet/jobs`, not in the checkout, so they stay through updates and branch changes.
-- **Python:** the app runs on this checkout's `.venv`, where PyTorch and the readers' models already are, rather than carrying a copy. Set `XRNSHEET_PYTHON` before installing to use another one.
+- **Python:** the app runs on this checkout's `.venv`, where homr, onnxruntime and the readers' models already are, rather than carrying a copy. Set `XRNSHEET_PYTHON` before installing to use another one.
 - **Opening files:** `.musicxml` and `.mxl` files offer xrnsheet under "Open with", and `xrnsheet.AppImage song.mxl` opens one from a terminal. If the app is already open, the file opens there.
 - **Keys:** Ctrl+T, Ctrl+Shift+P, F6 and the other keys a browser tab keeps for itself all reach the score. Ctrl+Q quits.
 - **If it won't start**, the window says why, and the server's log is `~/.local/state/xrnsheet/server.log`.
@@ -212,9 +212,9 @@ F8 shows or hides the inspector on the selection, F7 on the score. On a narrow w
 | Drag the paper | Move the pages about |
 | Double-click the title | Change the title and composer |
 
-The keys are MuseScore's where MuseScore has one. A browser keeps a few for itself: in an ordinary tab Ctrl+T opens a new tab, so use the inspector's Text button or Add ▸ Text ▸ Staff text there; some browsers open their own menu on `F10` or put the focus in the address bar on `F6`, so use the command palette or View there; and most open their developer tools on `F12`, so use View ▸ Timeline. In the desktop app every key reaches the score.
+The keys are MuseScore's where MuseScore has one. A button you've tabbed to takes Enter and Space itself, as anywhere else, and a link Enter, so they act on the score only when nothing else has the focus. A browser keeps a few for itself: in an ordinary tab Ctrl+T opens a new tab, so use the inspector's Text button or Add ▸ Text ▸ Staff text there; some browsers open their own menu on `F10` or put the focus in the address bar on `F6`, so use the command palette or View there; and most open their developer tools on `F12`, so use View ▸ Timeline. In the desktop app every key reaches the score.
 
-Measures that don't add up to the time signature are listed above the score in Write, which is usually how a misread rhythm shows itself, and so are a guitar's notes that no string can play, which its tablature leaves out, with the reason, and a violin's, viola's, cello's or double bass's notes below its lowest string or above the top of its range, as "E3 is below the violin's lowest string, G3." A click, a MIDI key, a paste or a transposition writes such a note as given; a letter never does. Click one to go there, then fix it with Remove beat or Insert beat in the inspector. A new time signature doesn't move notes between measures: the ones that no longer fit are listed for you to fix.
+Measures that don't add up to the time signature are listed above the score in Write, which is usually how a misread rhythm shows itself: one line saying how many, as "21 bars don't add up", with ‹ and › to step from one to the next, the bar it's on lit in the score and the others faintly marked. So are a guitar's notes that no string can play, which its tablature leaves out, with the reason, and a violin's, viola's, cello's or double bass's notes below its lowest string or above the top of its range, as "E3 is below the violin's lowest string, G3." A click, a MIDI key, a paste or a transposition writes such a note as given; a letter never does. Click one to go there, then fix it with Remove beat or Insert beat in the inspector. A new time signature doesn't move notes between measures: the ones that no longer fit are listed for you to fix.
 
 Play sounds the notes and the chord symbols. It follows repeats, first and second endings, D.C. and D.S. with Fine and Coda, tempo changes, dynamics and hairpins, swing, articulations and ornaments, and the sustain pedal, and a player's techniques: hammer-ons and pull-offs legato, slides and glissandos through the notes between, bends reaching their pitch, palm mute short and let ring ringing, dead notes as a click, harmonics where they ring, and pizzicato plucked until arco. A tablature staff isn't heard twice: only the staff above it plays. Tablature on its own is the music, and plays.
 
@@ -238,9 +238,9 @@ A staff can hold four voices. Choose one with the coloured buttons or Ctrl+Alt a
 
 To write a triplet, pick the duration it should fill, press Ctrl+`3`, and type its three notes. A quarter gives eighth-note triplets. A triplet can't be cut in half, so selecting or copying any note of one takes the whole triplet.
 
-Repeats & jumps starts or ends a repeat at the selected measure, and marks it as a first or second ending. Select several measures to put one ending over all of them. A title recognition guessed isn't printed until you save it in the inspector or File ▸ Title and composer.
+Repeats & jumps starts or ends a repeat at the selected measure, and marks it as a first or second ending. Select several measures to put one ending over all of them. A title recognition guessed isn't printed until you save it in the inspector or File ▸ Title and composer. A sheet read with no title is called after its file, tidied, so `autumn_leaves (2).jpg` is "Autumn leaves", unless a camera or scanner named it, as `IMG_2034.jpeg` or `scan0001.pdf`; that title isn't printed until saved either.
 
-Click a chord symbol to change or remove it. With chord diagrams shown, the inspector draws its diagram to change: the other shapes the chord can be played with (the open one, the barre chords on the low E and A strings and an octave up, and others up the neck), or a finger put on a string at a fret by a click, above the nut an open string or, clicked again, one not played, the arrows to move up and down the neck, and Barre. Usual shape gives it back the library's. The score keeps it as the chord's `<frame>`, so MuseScore shows it too, a new capo or tuning keeps its sound where the strings can still play it, and it can be undone. A transposed chord, or one retyped, takes its usual shape. Doubtful chords are coloured and listed under "Please check". "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. With chords or bars still listed to check, it says how many and asks first. Undo, or the same button later, un-marks it, which also takes it out of the corrections gathered for retraining. Measures you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
+Click a chord symbol to change or remove it. With chord diagrams shown, the inspector draws its diagram to change: the other shapes the chord can be played with (the open one, the barre chords on the low E and A strings and an octave up, and others up the neck), or a finger put on a string at a fret by a click, above the nut an open string or, clicked again, one not played, the arrows to move up and down the neck, and Barre. Usual shape gives it back the library's. The score keeps it as the chord's `<frame>`, so MuseScore shows it too, a new capo or tuning keeps its sound where the strings can still play it, and it can be undone. A transposed chord, or one retyped, takes its usual shape. Doubtful chords are coloured, in the score and on the original, and listed under the original as one line, "Please check: 13 chords", with ‹ and › to step through them as through the bars to check: each step chooses the chord, lights it and its box, and opens it to change. Once one is put right, the line says how many are left, and the next step goes on from there. "Clear marks" removes a false fermata or ornament from a note. "Mark as checked" tells the app you've finished with a sheet, which makes it usable as training data. With chords or bars still listed to check, it says how many and asks first. Undo, or the same button later, un-marks it, which also takes it out of the corrections gathered for retraining. Measures you added or deleted are allowed for, so a chord that only moved isn't treated as a misread one.
 
 **Speed.** Only the pages an edit changes are drawn again, the server keeps its last few drawings, so going back to a score, undoing and redoing are quick, and the window is sent only the music symbols it draws. `bench/editor_speed.py` measures how long a score takes to open and an edit to show, and what the window loads.
 
@@ -260,9 +260,10 @@ Training runs on the GPU when there is one, and that needs PyTorch's default bui
 python3 -m venv .venv-train
 .venv-train/bin/pip install torch          # the default build, with CUDA (about 6 GB in all)
 .venv-train/bin/pip install -r requirements.txt
+.venv-train/bin/pip install onnx           # to export a trained model for the app
 ```
 
-The commands below that train use `.venv-train`; the rest work in either. Without a GPU, training falls back to the CPU and takes many times longer. `.venv-train` can be deleted between training runs and made again.
+The commands below that train or export use `.venv-train`; the rest work in either. Without a GPU, training falls back to the CPU and takes many times longer. `.venv-train` can be deleted between training runs and made again.
 
 ## Train the chord reader
 
@@ -271,9 +272,10 @@ The commands below that train use `.venv-train`; the rest work in either. Withou
 .venv/bin/python -m chords.baselines                                                # score Tesseract and RapidOCR
 .venv-train/bin/python -m chords.train --name chord_reader --hand-layout 0.35 --negatives 0.2
 .venv-train/bin/python -m chords.evaluate --name chord_reader                       # score the model
+.venv-train/bin/python -m chords.export                                             # export it for the app
 ```
 
-Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the ablation. Training data is generated as it runs, and 5 fonts are held out for testing.
+The app reads chords with `models/chord_reader.onnx`, so a model trained isn't used until it's exported, and `tests/test_exported.py` fails until then. Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the ablation. Training data is generated as it runs, and 5 fonts are held out for testing.
 
 ## Train the note reader
 
@@ -281,9 +283,10 @@ Training takes about 34 minutes on a 4 GB GPU. Add `--no-damage` to repeat the a
 .venv/bin/python -m notes.render      # generate the strips, about an hour of CPU time
 .venv-train/bin/python -m notes.train       # about 60 minutes on a 4 GB GPU
 .venv-train/bin/python -m notes.evaluate    # score it on the two held-out music fonts
+.venv-train/bin/python -m notes.export      # export it for the app
 ```
 
-The best checkpoint is saved as training runs, so a stopped run still leaves a usable model.
+The best checkpoint is saved as training runs, so a stopped run still leaves a usable model. As with the chord reader, the app reads `models/note_reader.onnx`, so export the model before using it.
 
 ## Retrain on your own corrections
 
@@ -294,7 +297,7 @@ After you've pressed "Mark as checked" on some sheets:
                                              # (add --jobs ~/.local/share/xrnsheet/jobs for the desktop app's)
 .venv/bin/python bench/real_report.py        # how the app did on the held-out sheets
 .venv-train/bin/python -m chords.retrain           # train a candidate and report on it
-.venv-train/bin/python -m chords.retrain --promote # also replace the live model if it passes
+.venv-train/bin/python -m chords.retrain --promote # also replace the live model if it passes, and export it
 ```
 
 About one sheet in five is held out, chosen by a hash. A candidate replaces the live model only if there are at least 30 held-out chords, it gains more chords than it loses with p below 0.05, and it stays at 0.99 or above on the synthetic test. So far, a few dozen real corrections haven't been shown to help. See [the project report](docs/PROJECT_REPORT.md).
@@ -357,7 +360,7 @@ The note reader in this repository (`--notes own`), on the same synthetic pages:
 | Lead sheets, simulated photo (3) | 1.00 | 1.00 | 1.00 | 0.98 |
 | Classical, all conditions (15) | 0.12 | 0.91 | n/a | n/a |
 
-It reads one melody per staff, which is why classical music scores so low, and why homr stays the default. It takes about 4 seconds a page. It reads hand-style time signatures badly, and the notes score doesn't measure that. On real handwriting it found only a small share of the notes.
+It reads one melody per staff, which is why classical music scores so low, and why homr stays the default. It takes 2 to 3 seconds a page. It reads hand-style time signatures badly, and the notes score doesn't measure that. On real handwriting it found only a small share of the notes.
 
 ### The chord reader alone
 

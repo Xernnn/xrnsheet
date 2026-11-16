@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from chords.fonts import ROOT
-from chords.model import load_reader, read_images
+from chords.reading import load_network, read_images
 from chords.render import fit_height
 from chords.vocab import parse_chord
 from pipeline import align
@@ -107,14 +107,14 @@ def detect_text(image: np.ndarray) -> list[tuple[float, float, float, float]]:
 
 @lru_cache(maxsize=1)
 def chord_model(device: str):
-    return load_reader(MODEL_PATH, device)
+    return load_network(MODEL_PATH, "chords.model", device)
 
 
 def read_crops(crops: list[np.ndarray], reader: str, device: str) -> list[tuple[str, float]]:
     if not crops:
         return []
     if reader == "model":
-        return read_images(chord_model(device), [fit_height(crop) for crop in crops], device)
+        return read_images(chord_model(device), [fit_height(crop) for crop in crops])
     readings = []
     for crop in crops:
         result = ocr_engine()(cv2.cvtColor(crop, cv2.COLOR_GRAY2BGR), use_det=False, use_cls=False, use_rec=True)
