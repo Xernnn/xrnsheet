@@ -133,6 +133,21 @@ function sameOrigin(url, base) {
   }
 }
 
+/**
+ * Whether a window may go to this address: the app's own pages, and of files only the loading page.
+ * Any file: address was let through, so a file dropped on the loading page, or a link to one, was
+ * shown in the window.
+ */
+function staysInApp(url, base, loadingPage) {
+  if (base && sameOrigin(url, base)) return true
+  try {
+    const target = new URL(url)
+    return target.protocol === 'file:' && fileURLToPath(target) === loadingPage
+  } catch {
+    return false
+  }
+}
+
 function opensOutside(url) {
   try {
     return ['http:', 'https:', 'mailto:'].includes(new URL(url).protocol)
@@ -216,6 +231,7 @@ module.exports = {
   sameOrigin,
   scoreFiles,
   serverArguments,
+  staysInApp,
   uploadScore,
   waitForServer
 }

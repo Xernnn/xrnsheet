@@ -127,6 +127,18 @@ test('the app\'s own pages stay in its windows and other sites go to the browser
   for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'smb://server/share', 'nonsense']) assert.equal(desktop.opensOutside(url), false, url)
 })
 
+test('a window goes only to the app\'s own pages and its loading page, not to any file', () => {
+  const base = 'http://127.0.0.1:47360'
+  const loading = '/opt/xrnsheet/resources/app.asar/loading.html'
+  assert.equal(desktop.staysInApp(`${base}/#${'a'.repeat(32)}`, base, loading), true)
+  assert.equal(desktop.staysInApp('file:///opt/xrnsheet/resources/app.asar/loading.html?state=restarting', base, loading), true)
+  assert.equal(desktop.staysInApp('file:///opt/xrnsheet/resources/app.asar/loading.html', null, loading), true, 'while the server starts')
+  // A file dropped on the loading page, or a link to one, would show it in the window.
+  for (const url of ['file:///etc/passwd', 'file:///home/someone/song.mxl', 'file:///opt/xrnsheet/resources/app.asar/main.js', 'http://127.0.0.1:47361/', 'nonsense']) {
+    assert.equal(desktop.staysInApp(url, base, loading), false, url)
+  }
+})
+
 test('the usual port is taken first, and the next one when something else has it', async () => {
   const blocker = net.createServer()
   await new Promise(resolve => blocker.listen(0, '127.0.0.1', resolve))

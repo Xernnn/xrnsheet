@@ -106,7 +106,7 @@ function guard(contents) {
     return { action: 'deny' }
   })
   contents.on('will-navigate', (event, url) => {
-    if (url.startsWith('file:') || (server && desktop.sameOrigin(url, server.base))) return
+    if (desktop.staysInApp(url, server?.base, LOADING_PAGE)) return
     event.preventDefault()
     if (desktop.opensOutside(url)) shell.openExternal(url)
   })
