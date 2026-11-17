@@ -11,6 +11,7 @@ import argparse
 import functools
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -1222,12 +1223,27 @@ def add_chord_at(score_id: str, body: ChordAt) -> dict:
     Where it was clicked is kept, apart from what the reader found, so the original draws its box.
     """
     folder = job_folder(score_id)
+    if not math.isfinite(body.onset):  # 1e400 is read as infinity, which no Fraction can hold.
+        raise HTTPException(422, "That isn't a moment in a bar.")
+    path = folder / "recognized" / ADDED_FILE
     with edit_lock:
-        if body.page is not None and body.box is not None and len(body.box) == 4 and (folder / "recognized").exists():
+        before = path.read_text(encoding="utf-8") if path.exists() else None
+        wrote = body.page is not None and body.box is not None and len(body.box) == 4 and (folder / "recognized").exists()
+        if wrote:
             kept = [item for item in added_chords(folder) if (item.get("measure"), item.get("onset")) != (body.measure, body.onset)]
             kept.append({"measure": body.measure, "onset": body.onset, "page": body.page, "box": body.box, "chord": body.text.strip(), "confidence": None, "added": True})
-            write_whole(folder / "recognized" / ADDED_FILE, json.dumps(kept))
-        return apply_edit(score_id, lambda root: edit.add_chord_at(root, body.measure, Fraction(body.onset).limit_denominator(64), body.text))
+            write_whole(path, json.dumps(kept))
+        try:
+            return apply_edit(score_id, lambda root: edit.add_chord_at(root, body.measure, Fraction(body.onset).limit_denominator(64), body.text))
+        except Exception:
+            # A chord refused, as there's one there already, leaves the boxes as they were: its box
+            # had replaced the box of the chord already there.
+            if wrote:
+                if before is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    write_whole(path, before)
+            raise
 
 
 @app.post("/api/scores/{score_id}/checked")

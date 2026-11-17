@@ -254,6 +254,22 @@ def test_a_chord_missed_is_added_where_it_was_clicked_on_the_original(client, mo
     assert refused.status_code == 422 and "deleted" in refused.json()["detail"]
 
 
+@pytest.mark.parametrize("onset", ["1e400", "-1e400", "NaN", "1e300", "4", "2.0"])
+def test_a_chord_that_cant_be_added_from_the_original_leaves_no_box_behind(client, monkeypatch, onset):
+    """A moment no number can hold was a 500, one past the bar was saved, and a refused chord still
+    wrote its box, over the box of the chord already there."""
+    monkeypatch.setattr(server, "recognize_page", page_with_its_places)
+    folder, upload = job_for_pdf(1)
+    server.recognize_job(folder, upload)
+    url = f"/api/scores/{folder.name}"
+    client.post(f"{url}/chords/at", json={"measure": 1, "onset": 2.0, "text": "G7", "page": 1, "box": [690, 75, 730, 95]})
+    before, kept = server.versions(folder), server.added_chords(folder)
+    body = f'{{"measure": 1, "onset": {onset}, "text": "A7", "page": 1, "box": [1, 2, 3, 4]}}'
+    response = client.post(f"{url}/chords/at", content=body, headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+    assert server.versions(folder) == before and server.added_chords(folder) == kept
+
+
 def test_a_page_read_before_its_places_were_kept_says_so(client, monkeypatch):
     monkeypatch.setattr(server, "recognize_page", fake_recognizer())
     folder, upload = job_for_pdf(1)
@@ -730,6 +746,11 @@ REFUSED_EDITS = [
     ("bars", {"action": "barsPerLine", "count": 99, "note": "note0"}),
     ("bars", {"action": "pickup", "count": 2}),
     ("bars", {"action": "pickup", "count": 16}),
+    # A chord at a moment past its bar's end was saved, at onset 1e+300, and a tuplet of no notes was a 500.
+    ("chords/at", {"measure": 0, "onset": 1e300, "text": "C"}),
+    ("chords/at", {"measure": 0, "onset": 4, "text": "C"}),
+    ("paste", {"at": "note0", "events": [{"type": "eighth", "pitches": [["C", 0, 4]], "triplet": 0, "actual": 0}]}),
+    ("paste", {"at": "note0", "events": [{"type": "eighth", "pitches": [["C", 0, 4]], "triplet": 0, "actual": -3}]}),
 ]
 
 

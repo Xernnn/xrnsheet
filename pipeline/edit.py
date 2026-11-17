@@ -1454,6 +1454,8 @@ def paste(root: ET.Element, at_id: str, items: list[dict]) -> dict:
             triplets_done.add(triplet)
             span = sum((length_of(other["type"], other["dots"]) for other in items if other["triplet"] == triplet), Fraction(0))
             actual = item.get("actual", 3)
+            if actual < 2:  # A tuplet of no notes has no length, which Tuplet.of can't work out.
+                raise EditError("That isn't a tuplet this app can write.")
             cursor = make_tuplet(root, cursor, span * Tuplet.of(actual).scale, keep_note=False, actual=actual)["cursor"]
         spot = locate_cursor(root, cursor)
         first_bar = spot.context.index if first_bar is None else first_bar
@@ -1594,6 +1596,9 @@ def add_chord_at(root: ET.Element, origin: int, onset: Fraction, text: str) -> N
         if origin_of(context.measure, context.index) != origin:
             continue
         timeline = read_measure(context.measure, context.divisions)
+        # A bar read with too many beats goes on past its time signature, and a chord can go on those.
+        if onset >= max(context.length, *(line_end(line) for line in timeline.lines.values())):
+            raise EditError("That's past the end of the bar.")
         if any(mark.element.tag == "harmony" and mark.onset == onset for mark in timeline.marks):
             raise EditError("There's a chord there already. Click it to change it.")
         timeline.marks.append(Mark(onset, harmony_element(chord)))
