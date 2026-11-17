@@ -47,11 +47,9 @@ function enqueue(task) {
 const NOT_ANSWERING = "xrnsheet isn't answering.";
 const DIDNT_WORK = "That didn't work.";
 
-class RequestFailed extends Error {
-  constructor(text, status) {
-    super(text);
-    this.status = status;
-  }
+// A function rather than a class, as the page's script tests load its functions alone.
+function requestFailed(text, status) {
+  return Object.assign(new Error(text), { status });
 }
 
 async function request(path, options = {}) {
@@ -59,11 +57,11 @@ async function request(path, options = {}) {
   try {
     response = await fetch(path, options);
   } catch {
-    throw new RequestFailed(NOT_ANSWERING, 0);
+    throw requestFailed(NOT_ANSWERING, 0);
   }
   const data = await response.json().catch(() => undefined);
-  if (!response.ok) throw new RequestFailed(typeof data?.detail === "string" ? data.detail : DIDNT_WORK, response.status);
-  if (data === undefined) throw new RequestFailed(DIDNT_WORK, response.status);
+  if (!response.ok) throw requestFailed(typeof data?.detail === "string" ? data.detail : DIDNT_WORK, response.status);
+  if (data === undefined) throw requestFailed(DIDNT_WORK, response.status);
   return data;
 }
 
