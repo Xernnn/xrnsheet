@@ -1837,6 +1837,15 @@ def test_the_pages_own_files_are_checked_for_a_newer_copy_each_time(client, path
     assert again.status_code == 304 and again.headers["cache-control"] == "no-cache", "unchanged, it isn't sent again"
 
 
+@pytest.mark.parametrize("path", ["/", "/index.html"])
+def test_the_page_may_run_only_its_own_scripts(client, path):
+    """Pages of music go into the window as markup; everything read from a score is escaped today,
+    and a policy keeps a slip in the engraver or a future innerHTML from running anything."""
+    policy = client.get(path).headers["content-security-policy"]
+    assert "default-src 'self'" in policy and "object-src 'none'" in policy and "base-uri 'none'" in policy
+    assert "script-src" not in policy and "'unsafe-eval'" not in policy, "scripts come from the app alone"
+
+
 def test_a_drawing_just_made_is_kept_for_the_next_time_it_is_asked_for(client):
     """Opening a score again, and undoing, ask for a drawing the server has just made."""
     score_id = blank(client, measures=2)

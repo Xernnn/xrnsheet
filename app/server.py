@@ -78,6 +78,8 @@ CANCEL_WAIT_SECONDS = 10  # How long a cancel waits for the page being read to s
 TRASH = ".trash"  # In the folder of scores: those deleted, kept a while so a delete can be undone.
 TRASH_SECONDS = 7 * 24 * 60 * 60
 OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
+# Verovio puts the font for music symbols in text, such as a tempo's note, into a page's SVG as a data: address.
+PAGE_POLICY = "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 ONLY_READS = {"GET", "HEAD", "OPTIONS"}
 OPENED_FILE = "opened.json"  # Beside a score opened from a MusicXML file.
 LAYOUT_FILE = "layout.json"  # Beside each page read: where its lines of music, barlines and notes are.
@@ -1879,11 +1881,18 @@ class CheckedStaticFiles(StaticFiles):
     its age. The installed app's files all carry the date of their commit, and the page is always at
     the same address, so after an update a window could load the new page with some of the old
     scripts, or the old page with some of the new. Asked each time, an unchanged file is a 304.
+
+    The page itself comes with a Content-Security-Policy. Pages of music go into it as markup, and
+    everything read from a score is escaped today; the policy keeps a slip in the engraver or a
+    future innerHTML from running anything but the app's own scripts. The pages' SVG carries its
+    own style sheets and the app sets styles from its scripts, so inline styles are allowed.
     """
 
     def file_response(self, *args, **kwargs) -> Response:
         response = super().file_response(*args, **kwargs)
         response.headers["Cache-Control"] = "no-cache"
+        if response.media_type == "text/html" or response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Content-Security-Policy"] = PAGE_POLICY
         return response
 
 
