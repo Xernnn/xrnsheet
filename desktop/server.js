@@ -133,6 +133,16 @@ function sameOrigin(url, base) {
   }
 }
 
+/** The score the app's page shows at this address, by the id after its #, or null for the library. */
+function scoreInAddress(url) {
+  try {
+    const id = new URL(url).hash.slice(1)
+    return /^[0-9a-f]{32}$/.test(id) ? id : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Whether a window may go to this address: the app's own pages, and of files only the loading page.
  * Any file: address was let through, so a file dropped on the loading page, or a link to one, was
@@ -230,6 +240,7 @@ module.exports = {
   portIsFree,
   sameOrigin,
   scoreFiles,
+  scoreInAddress,
   serverArguments,
   staysInApp,
   uploadScore,

@@ -127,6 +127,13 @@ test('the app\'s own pages stay in its windows and other sites go to the browser
   for (const url of ['file:///etc/passwd', 'javascript:alert(1)', 'smb://server/share', 'nonsense']) assert.equal(desktop.opensOutside(url), false, url)
 })
 
+test('the score a window shows is read from its address, to come back to after a restart', () => {
+  const id = 'a'.repeat(32)
+  assert.equal(desktop.scoreInAddress(`http://127.0.0.1:47360/?opened=1#${id}`), id)
+  assert.equal(desktop.scoreInAddress(`http://127.0.0.1:47360/#${id}`), id)
+  for (const url of ['http://127.0.0.1:47360/', 'http://127.0.0.1:47360/#', 'http://127.0.0.1:47360/#../etc', 'nonsense']) assert.equal(desktop.scoreInAddress(url), null, url)
+})
+
 test('a window goes only to the app\'s own pages and its loading page, not to any file', () => {
   const base = 'http://127.0.0.1:47360'
   const loading = '/opt/xrnsheet/resources/app.asar/loading.html'
