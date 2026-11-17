@@ -36,6 +36,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -754,8 +755,15 @@ async def create_score(file: Annotated[list[UploadFile], File()]) -> dict:
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, TOO_LARGE)
         sent.append(data)
+    # Opening is done on a thread of its own: done here, on the one loop every request is answered on,
+    # a large MusicXML engraved twice, or a photo decoded, held up the library's polls and every edit.
     if suffixes[0] in SCORE_TYPES:
-        return open_score_file(sent[0], suffixes[0])
+        return await run_in_threadpool(open_score_file, sent[0], suffixes[0])
+    return await run_in_threadpool(keep_sheet, names, suffixes, sent)
+
+
+def keep_sheet(names: list[str], suffixes: list[str], sent: list[bytes]) -> dict:
+    """Keep a photo, several, or a PDF as a sheet to read, and put it in the line to be read."""
     for name, suffix, data in zip(names, suffixes, sent):
         if suffix != ".pdf" and cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE) is None:
             raise HTTPException(415, f"{name} couldn't be opened as an image." if len(sent) > 1 else "That file couldn't be opened as an image.")

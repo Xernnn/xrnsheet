@@ -1135,6 +1135,31 @@ def test_photos_sent_together_are_read_as_the_pages_of_one_score(client, monkeyp
     assert until(lambda: client.get(f"/api/scores/{score_id}").json()["status"] == "ready") and len(seen) == 3, "Try again reads every page"
 
 
+@pytest.mark.parametrize(("name", "slow"), [("song.musicxml", (server, "open_score_file")), ("page.png", (server.cv2, "imdecode"))], ids=["musicxml", "photo"])
+def test_opening_a_file_holds_up_no_other_request(client, monkeypatch, name, slow):
+    """A file was opened on the server's one event loop: a large MusicXML engraved twice, or a photo
+    decoded, before anything else was answered, as the library's polls or an edit in another window."""
+    entered, release = threading.Event(), threading.Event()
+    real = getattr(*slow)
+
+    def held(*arguments):
+        entered.set()
+        release.wait(10)
+        return real(*arguments)
+
+    monkeypatch.setattr(*slow, held)
+    data = to_text(parsed(note())).encode() if name.endswith(".musicxml") else photo()
+    with TestClient(server.app, base_url="http://127.0.0.1:8000") as shared, ThreadPoolExecutor(1) as pool:  # One event loop for both.
+        opening = pool.submit(shared.post, "/api/scores", files={"file": (name, io.BytesIO(data))})
+        assert entered.wait(10)
+        started = time.monotonic()
+        answered = shared.get("/api/instruments").status_code
+        waited = time.monotonic() - started
+        release.set()
+        assert opening.result().status_code == 200
+    assert answered == 200 and waited < 5, waited
+
+
 @pytest.mark.parametrize("names", [("page.png", "piece.pdf"), ("page.png", "song.musicxml"), ("a.pdf", "b.pdf")])
 def test_only_photos_are_read_together(client, names):
     files = [("file", (name, io.BytesIO(photo()))) for name in names]
