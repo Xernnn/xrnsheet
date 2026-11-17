@@ -1427,8 +1427,52 @@ def test_a_pdf_page_too_large_to_read_in_full_detail_is_read_at_a_size_that_fits
     document.new_page(2000, 1000)  # 28 inches across, which 250 dots an inch would make 7,000 pixels.
     document.new_page(595, 842)  # A4, which is read in full detail.
     document.save(tmp_path / "upload.pdf")
-    images, _ = server.pdf_to_images(tmp_path / "upload.pdf")
+    document = server.opened_pdf(tmp_path / "upload.pdf")
+    images = [server.draw_pdf_page(document, index, tmp_path / "pages") for index in range(2)]
+    document.close()
     assert [Image.open(image).size for image in images] == [(5000, 2500), (2066, 2924)]
+
+
+def test_a_pdfs_pages_are_drawn_as_they_are_read_so_a_cancel_stops_the_drawing(client, monkeypatch):
+    """Every page of a PDF, up to 40 at 250 dots an inch, was drawn before the first was read, inside
+    the server with no limit, and a cancel waited for all of them."""
+    drawn = []
+
+    def cancelled_during_page_one(image, out_dir):
+        folder = out_dir.parent.parent
+        drawn.append(sorted(path.name for path in (folder / "pages").glob("*.png")))
+        server.cancelled.add(folder.name)
+        return fake_recognizer()(image, out_dir)
+
+    monkeypatch.setattr(server, "recognize_page", cancelled_during_page_one)
+    folder, upload = job_for_pdf(3)
+    server.recognize_job(folder, upload)
+    assert drawn == [["page_001.png"]]
+
+
+def locked_pdf() -> bytes:
+    """A PDF that asks for a password, as a bank statement or a shop's sheet music might."""
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>", b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+               b"<< /Filter /Standard /V 1 /R 2 /O <" + b"11" * 32 + b"> /U <" + b"22" * 32 + b"> /P -4 >>"]
+    out, offsets = b"%PDF-1.4\n", []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    start = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1) + b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    return out + b"trailer\n<< /Size %d /Root 1 0 R /Encrypt 4 0 R /ID [<%s> <%s>] >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, b"ab" * 16, b"ab" * 16, start)
+
+
+@pytest.mark.parametrize(("data", "reason"), [(locked_pdf(), "password"), (b"%PDF-1.4 and nothing more", "couldn't be opened")], ids=["locked", "broken"])
+def test_a_pdf_that_cant_be_opened_says_why(client, data, reason):
+    """A password-protected or broken PDF ended as the general "Recognition failed."."""
+    folder = server.JOB_DIR / ("e" * 32)
+    folder.mkdir()
+    (folder / "upload.pdf").write_bytes(data)
+    server.write_status(folder, "processing")
+    server.recognize_job(folder, folder / "upload.pdf")
+    status = server.read_status(folder)
+    assert status["status"] == "failed" and reason in status["message"], status
 
 
 @pytest.mark.parametrize(("name", "data", "reason"), [

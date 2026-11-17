@@ -69,6 +69,8 @@ MEMORY_LIMIT = "6G"
 DRAWINGS_KEPT = 4  # A long score's drawing is a few megabytes, so only the last few are kept.
 VERSIONS_KEPT = 100  # The versions an edit leaves to undo to, besides the first (see prune_versions).
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
+LOCKED_PDF = "That PDF asks for a password. Open a copy saved without one."
+BROKEN_PDF = "That PDF couldn't be opened."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
 SOURCE_FILE = "source.json"  # The name of the file a sheet is read from, to call it by until it has a title.
 CANCEL_WAIT_SECONDS = 10  # How long a cancel waits for the page being read to stop, which is usually at once.
@@ -467,22 +469,42 @@ def prune_versions(folder: Path) -> None:
         old.unlink(missing_ok=True)
 
 
-def pdf_to_images(path: Path) -> tuple[list[Path], str]:
+class UnopenedPdf(Exception):
+    """A PDF that can't be read, with what to tell the person."""
+
+
+def opened_pdf(path: Path):
+    """Open a PDF to draw its pages, or say why it can't be: a password, or a file that isn't whole."""
     import pypdfium2
 
-    document = pypdfium2.PdfDocument(str(path))
-    folder = path.parent / "pages"
+    try:
+        return pypdfium2.PdfDocument(str(path))
+    except pypdfium2.PdfiumError as error:
+        raise UnopenedPdf(LOCKED_PDF if error.err_code == pypdfium2.raw.FPDF_ERR_PASSWORD else BROKEN_PDF) from error
+
+
+def draw_pdf_page(document, index: int, folder: Path) -> Path:
+    """Draw a page of a PDF for the reader, at 250 dots an inch but no larger than LONGEST_PDF_PAGE."""
     folder.mkdir(exist_ok=True)
-    images = []
-    for index in range(min(len(document), MAX_PDF_PAGES)):
-        image_path = folder / f"page_{index + 1:03d}.png"
-        page = document[index]
-        scale = min(250 / 72, LONGEST_PDF_PAGE / max(*page.get_size(), 1))  # A PDF counts 72 points an inch.
-        page.render(scale=scale).to_pil().convert("RGB").save(image_path)
-        images.append(image_path)
-    note = f"Only the first {MAX_PDF_PAGES} of {len(document)} pages were read." if len(document) > MAX_PDF_PAGES else ""
-    document.close()
-    return images, note
+    image_path = folder / f"page_{index + 1:03d}.png"
+    page = document[index]
+    scale = min(250 / 72, LONGEST_PDF_PAGE / max(*page.get_size(), 1))  # A PDF counts 72 points an inch.
+    page.render(scale=scale).to_pil().convert("RGB").save(image_path)
+    return image_path
+
+
+def pages_to_read(folder: Path, upload: Path, document) -> tuple[list[Callable[[], Path]], str]:
+    """Each page of a sheet, as a picture got only when its turn comes, and a note of any left out.
+
+    A PDF's pages were all drawn before the first was read: up to 40 large pictures, in the server
+    with none of the limits a page's reading has, and a cancel waited for them all. Now each is drawn
+    as it's read, and a cancel stops before the next.
+    """
+    if document is None:
+        return [lambda path=path: path for path in uploaded_pages(folder, upload)], ""
+    count = len(document)
+    note = f"Only the first {MAX_PDF_PAGES} of {count} pages were read." if count > MAX_PDF_PAGES else ""
+    return [functools.partial(draw_pdf_page, document, index, folder / "pages") for index in range(min(count, MAX_PDF_PAGES))], note
 
 
 def recognize_page(image: Path, out_dir: Path) -> str | None:
@@ -554,18 +576,23 @@ def uploaded_pages(folder: Path, upload: Path) -> list[Path]:
 
 
 def recognize_job(folder: Path, upload: Path) -> None:
+    document = None
     try:
-        images, note = pdf_to_images(upload) if upload.suffix.lower() == ".pdf" else (uploaded_pages(folder, upload), "")
-        if not images:
+        document = opened_pdf(upload) if upload.suffix.lower() == ".pdf" else None
+        pages, note = pages_to_read(folder, upload, document)
+        if not pages:
             write_status(folder, "failed", "That PDF has no pages.")
             return
         read, failed = [], {}
-        for number, image in enumerate(images, start=1):
+        for number, page in enumerate(pages, start=1):
             if given_up(folder):
                 return
-            if len(images) > 1:
-                write_status(folder, "processing", f"Reading page {number} of {len(images)}.")
+            if len(pages) > 1:
+                write_status(folder, "processing", f"Reading page {number} of {len(pages)}.")
+            image = page()
             reason = recognize_page(image, folder / "recognized" / f"page_{number:03d}")
+            if document is not None:
+                image.unlink(missing_ok=True)  # Read, the page is kept as the reader's page.jpg.
             if given_up(folder):
                 return  # Stopping, it's left as still being read, which the next start reports as interrupted.
             if reason is None:
@@ -584,10 +611,14 @@ def recognize_job(folder: Path, upload: Path) -> None:
             listed = ", ".join(str(number) for number in failed)
             note = f"{note} Couldn't read page {listed}, so it was left out.".strip()
         write_status(folder, "ready", note)
+    except UnopenedPdf as error:
+        write_status(folder, "failed", str(error))
     except Exception as error:  # A background thread has no one else to report to.
         print(f"recognition error: {error}", file=sys.stderr)
         write_status(folder, "failed", "Recognition failed.")
     finally:
+        if document is not None:
+            document.close()
         # A PDF's pages, drawn at 250 dots an inch, are only for the reader: what's shown beside the
         # score is the page.jpg it keeps of each, and Try again draws them afresh.
         shutil.rmtree(folder / "pages", ignore_errors=True)
