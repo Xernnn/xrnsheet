@@ -1086,10 +1086,8 @@ function setUpPage() {
   // Marked as the button is pressed, not once the dialog has closed, which comes a moment later, so an
   // edit made straight after can't overtake it.
   $("checkedAnyway").addEventListener("click", () => setChecked(true));
-  for (const id of ["file", "camera"]) {
-    // Cleared afterwards, so choosing the same file again still counts as a choice.
-    $(id).addEventListener("change", event => { upload(event.target.files); event.target.value = ""; });
-  }
+  // Cleared afterwards, so choosing the same file again still counts as a choice.
+  $("file").addEventListener("change", event => { upload(event.target.files); event.target.value = ""; });
   // A file dropped anywhere opens, as Open does.
   const carriesFile = event => [...(event.dataTransfer?.types ?? [])].includes("Files");
   for (const name of ["dragenter", "dragover"]) document.addEventListener(name, event => { if (!carriesFile(event)) return; event.preventDefault(); document.body.classList.add("dropping"); });

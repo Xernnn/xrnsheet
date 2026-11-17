@@ -3547,6 +3547,7 @@ def test_library(page, base: str, created: list[str]) -> None:
     menu(page, "File", "Close")
     check("with nothing open the library is the whole window", page.is_visible("#library") and page.is_hidden("#workspace") and page.is_hidden("#inspector"))
     check("and shows each score as a page", page.locator(f'#historyList a[data-score="{first}"] img').count() == 1)
+    check("a score is begun with New or Open, with no camera button doing what Open does", page.locator(".libraryActions > *").all_inner_texts() == ["New", "Open…"], page.locator(".libraryActions > *").all_inner_texts())
 
 
 def test_back_and_forward_follow_the_address(page, base: str, created: list[str]) -> None:

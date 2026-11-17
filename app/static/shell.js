@@ -32,7 +32,6 @@ const ICONS = {
   read: `<path d="M3 6.5c3-1.5 6-1.5 9 .5 3-2 6-2 9-.5V19c-3-1.5-6-1.5-9 .5-3-2-6-2-9-.5zM12 7v12.5"/>`,
   target: `<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".8" fill="currentColor"/>`,
   folder: `<path d="M3.5 7.5a2 2 0 012-2h4l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2h-13a2 2 0 01-2-2z"/>`,
-  camera: `<path d="M4 8.5a2 2 0 012-2h2l1.5-2h5L16 6.5h2a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2z"/><circle cx="12" cy="13" r="3.5"/>`,
   up: `<path d="M6 15l6-6 6 6"/>`,
   down: `<path d="M6 9l6 6 6-6"/>`,
   piano: `<rect x="3.5" y="5" width="17" height="14" rx="1.5"/><path d="M8 5v14M12 5v14M16 5v14"/><path d="M6.5 5v7h3V5M14.5 5v7h3V5" fill="currentColor"/>`,
