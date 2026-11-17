@@ -233,14 +233,14 @@ function updateTools() {
   const over = under?.matches("g.note") ? (under.closest("g.chord") ? [...under.closest("g.chord").querySelectorAll("g.note")] : [under]).map(spelledName).join(" ") : "";
   $("caret").classList.toggle("over", Boolean(over));
   $("caret").dataset.over = over ? `writes over ${over}` : "";
-  const selection = range ? `${range.ids.length} notes selected. Copy them, or use an action.` : tabSelected() ? "Selected on the tablature. Type a fret, Ctrl+↑ ↓ for another string, or Shift and a digit for a length." : selected ? "Selected. Drag it up or down, press a key below, or choose a duration. Shift-click selects a stretch." : "Click a note or rest, or press N to write notes.";
+  // What's chosen, or being written, in a few words: the keys are in Help ▸ Keyboard shortcuts.
+  const selection = range ? `${range.ids.length} notes selected` : tabSelected() ? "Selected on the tablature" : selected ? "Selected" : "";
   const mark = selectedMark && score?.marks.find(item => item.id === selectedMark);
   const said = mark?.text ? `: ${mark.text}`.replace(/\.$/, "") : "";
   const chord = selectedChord !== null && score?.chords?.[selectedChord];
-  const chosen = mark ? `${markName(mark)}${said}. Press Delete to remove it${markEditable(mark) ? ", or double-click to change it" : ""}.` : chord ? `Chord ${chord.text}. Type another, or change how it's played in the inspector.` : selection;
-  const practising = currentMode() === "practice" ? "Space plays from the selected note, or with a loop set, round it from A. A and B set the loop's ends there, and Hear and Wait for choose a part or a hand." : null;
-  const entering = tabInput() ? "Writing on the tablature. Type a fret for the string the cursor is on, ↑ ↓ for another string, Shift and a digit for a length, or click a string. Esc stops." : over ? `Writing over ${over} and what follows it, from the cursor on. Click the staff, type A to G or play below. Click a note to select it. Esc stops.` : "Writing. Click the staff, type A to G, 0 for a rest, or play below. Click a note to select it. Esc stops.";
-  $("toolLabel").textContent = hint || (editor.on ? entering : practising ?? chosen);
+  const chosen = mark ? `${markName(mark)}${said}` : chord ? `Chord ${chord.text}` : selection;
+  const entering = tabInput() ? "Writing on the tablature" : over ? `Writing over ${over}` : "Writing";
+  $("toolLabel").textContent = hint || (editor.on ? entering : chosen);
   hint = "";
   drawInspector();
   lightKeys();
@@ -356,7 +356,7 @@ function typeFret(digit, key, most, send) {
   flushFret();
   if (digit !== "0" && Number(digit) * 10 <= most) {
     fretTyping = { key, digits: digit, send, timer: setTimeout(flushFret, FRET_PAUSE_MS) };
-    $("toolLabel").textContent = `Fret ${digit}. Type another digit at once for fret ${digit}0 and up.`;
+    $("toolLabel").textContent = `Fret ${digit}…`;
     return;
   }
   send(Number(digit));
@@ -447,7 +447,6 @@ function drawBarChecks() {
   const line = checks.length ? [stepLine("barSteps", "Bars that don't add up", checks, checks.map(check => check.measure), barStep, {
     said: check => `Bar ${measureFacts(check.measure).number}: ${check.problem === "long" ? "too many beats" : "too few beats"}`,
     many: `${checks.length} bars don't add up`,
-    why: "The beats don't add up to the time signature, which is often a rhythm misread.",
     before: "The bar before that doesn't add up",
     next: "The next bar that doesn't add up",
     go: stepToBarCheck,
@@ -462,7 +461,7 @@ function drawBarChecks() {
 // handwritten page had twenty-one bars, four rows deep over the music, and thirteen chords beside it.
 // Each is known by its key, its bar or its chord's number, so once the one stepped to is put right
 // the line says how many are left, and the steps go on from where it was.
-function stepLine(id, label, items, keys, step, { said, many, why, before, next, go }) {
+function stepLine(id, label, items, keys, step, { said, many, before, next, go }) {
   const at = step === null ? -1 : keys.indexOf(step);
   const after = keys.findIndex(key => step === null || key > step);
   const earlier = keys.findLastIndex(key => step === null || key < step);
@@ -483,12 +482,12 @@ function stepLine(id, label, items, keys, step, { said, many, why, before, next,
     return element;
   };
   if (items.length === 1) {
-    group.append(button("here", said(items[0]), `${why} Click to go to it.`, items[0]));
+    group.append(button("here", said(items[0]), label, items[0]));
     return group;
   }
   const onward = items[after < 0 ? 0 : after];
   group.append(
-    button("here", at < 0 ? many : `${said(items[at])} · ${at + 1} of ${items.length}`, `${why} Click to go to ${at < 0 ? "one" : "it"}, then step through them with ‹ and ›.`, at < 0 ? onward : items[at]),
+    button("here", at < 0 ? many : `${said(items[at])} · ${at + 1} of ${items.length}`, label, at < 0 ? onward : items[at]),
     button("back", "‹", before, items[earlier < 0 ? items.length - 1 : earlier]),
     button("on", "›", next, onward),
   );
@@ -513,7 +512,7 @@ function savedName(extension) {
 
 function drawTitle() {
   $("scoreName").textContent = score.title || "Untitled score";
-  $("scoreName").title = `${[score.title || "Untitled score", score.composer].filter(Boolean).join(", ")}. Click to change the title and composer`;
+  $("scoreName").title = [score.title || "Untitled score", score.composer].filter(Boolean).join(", ");
   fitTopBar();
   document.title = score.title ? `${score.title} - xrnsheet` : "xrnsheet";
   $("pdfSave").download = savedName(".pdf");
@@ -1122,7 +1121,7 @@ async function copyChosen() {
   } catch {
     // Without storage it can still be pasted until the page is reloaded.
   }
-  hint = "Copied. Choose where it goes, then press Ctrl+V.";
+  hint = "Copied";
   updateTools();
   return true;
 }

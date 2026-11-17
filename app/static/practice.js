@@ -416,7 +416,7 @@ function refreshFollower() {
 
 function drawMidiState() {
   if (practice.waitFor === "off") { showWait(""); return; }
-  const words = { ready: "MIDI keyboard ready, or play the instrument below", none: "No MIDI keyboard found: play the instrument below", unknown: "Play on a MIDI keyboard or the instrument below" };
+  const words = { ready: "MIDI keyboard ready", none: "No MIDI keyboard", unknown: "" };
   if (!practice.follower) showWait(words[practice.midi] ?? words.unknown);
 }
 
@@ -424,24 +424,24 @@ function setUpPractice() {
   $("practiceBar").innerHTML = `
     <div class="tool" role="group" aria-label="Loop">
       <span class="label">Loop</span>
-      <button id="loopStart" title="Start the loop at the selected note (A)">A</button>
-      <button id="loopEnd" title="End the loop at the selected note (B)">B</button>
-      <button id="practiceLoop" class="toggle" aria-pressed="false" title="Loop between A and B, or round the selection">${icon("loop")}Loop</button>
+      <button id="loopStart" title="Loop start (A)">A</button>
+      <button id="loopEnd" title="Loop end (B)">B</button>
+      <button id="practiceLoop" class="toggle" aria-pressed="false" title="Loop">${icon("loop")}Loop</button>
     </div>
     <span class="divider"></span>
     <label class="tool"><span class="label">Speed</span><input id="practiceSpeed" type="range" min="25" max="150" step="5" value="100" aria-label="Practice speed"><span id="practiceSpeedValue">100%</span></label>
-    <label class="tool" title="Before a pickup or a start partway through a bar, the last bar counted is cut short, so the music comes in on its own beat"><span class="label">Count in</span><select id="countIn"><option value="0">Off</option><option value="1">1 bar</option><option value="2">2 bars</option><option value="1w" title="A whole bar, then the beats up to the start">1 bar + beats</option><option value="2w" title="Two whole bars, then the beats up to the start">2 bars + beats</option></select></label>
+    <label class="tool"><span class="label">Count in</span><select id="countIn"><option value="0">Off</option><option value="1">1 bar</option><option value="2">2 bars</option><option value="1w">1 bar + beats</option><option value="2w">2 bars + beats</option></select></label>
     <div class="tool" role="group" aria-label="Speed up each time round the loop">
-      <button id="speedSteps" class="toggle" aria-pressed="false" title="Each time round the loop, play a little faster, up to the speed chosen. Stopped, it goes back to where it started">Step up</button>
+      <button id="speedSteps" class="toggle" aria-pressed="false" title="Step up">Step up</button>
       <select id="speedStep" aria-label="By how much each time round">${[5, 10, 20].map(step => `<option value="${step}">+${step}%</option>`).join("")}</select>
       <select id="speedTarget" aria-label="Up to">${[80, 90, 100, 110, 120, 150].map(speed => `<option value="${speed}">to ${speed}%</option>`).join("")}</select>
     </div>
-    <button id="practiceMetronome" class="toggle" aria-pressed="false" title="Tick every beat">${icon("metronome")}Metronome</button>
+    <button id="practiceMetronome" class="toggle" aria-pressed="false" title="Metronome">${icon("metronome")}Metronome</button>
     <span class="divider"></span>
     <label class="tool"><span class="label">Hear</span><select id="practiceHear" aria-label="What playback sounds"></select></label>
     <label class="tool"><span class="label">Wait for</span><select id="waitFor" aria-label="Whose notes playback waits for you to play"></select></label>
     <span id="waitState" role="status"></span>
-    <span id="timingState" role="status" hidden title="How your notes fell against the music while it waited for you"></span>`;
+    <span id="timingState" role="status" hidden></span>`;
   $("loopStart").addEventListener("click", () => setLoopEnd("first"));
   $("loopEnd").addEventListener("click", () => setLoopEnd("last"));
   $("practiceLoop").addEventListener("click", toggleLoop);

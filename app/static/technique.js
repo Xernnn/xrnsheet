@@ -253,7 +253,7 @@ function drawStringChoice(element, part, played) {
   const note = element?.matches("g.note") && !range;
   buttons.hidden = !board || !note;
   if (!board) { info.textContent = ""; return; }
-  if (!note) { info.textContent = range ? "Select one note to choose its string." : ""; return; }
+  if (!note) { info.textContent = ""; return; }
   const names = [...board.strings].reverse();
   const pitch = soundOfNote(element.id);
   if (buttons.childElementCount !== names.length || buttons.dataset.strings !== names.join(",")) {
@@ -274,11 +274,10 @@ function drawStringChoice(element, part, played) {
     const playable = fret !== null && fret >= 0 && fret <= board.frets - (board.capo ?? 0);
     button.setAttribute("aria-pressed", String(played.string === index + 1));
     button.classList.toggle("cannot", !playable);
-    button.title = playable ? `Play it on string ${index + 1}, ${letterOf(names[index])}, at fret ${fret}` : `String ${index + 1} can't play this note`;
+    button.title = playable ? `String ${index + 1}, fret ${fret}` : `String ${index + 1} can't play this note`;
   });
   const where = `String ${played.string}, fret ${played.fret}${board.capo ? ` from the capo on fret ${board.capo}` : ""}`;
-  const unchosen = board.tab ? "No string can play this note." : "Choose a string to keep it there. Until then the fretboard shows it where it's easiest to play.";
-  info.textContent = played.string ? `${where}${onTab(element) ? ". Type a fret number to change it" : ""}` : unchosen;
+  info.textContent = played.string ? where : board.tab ? "No string can play this note." : "";
 }
 
 // What a selected note sounds, from its name as the page shows it, which is at concert pitch when
@@ -295,7 +294,7 @@ function soundOfNote(id) {
 function tabSwitches() {
   const row = document.createElement("div");
   row.className = "slot";
-  row.innerHTML = `<span class="label">Show</span><div class="row tight"><button class="toggle" data-switch="tab" title="A tablature staff under the staff, with each note's string and fret">Tablature</button><button class="toggle" data-switch="diagrams" title="A fretboard diagram over each chord symbol">Chord diagrams</button></div><p class="info" data-tuning></p>`;
+  row.innerHTML = `<span class="label">Show</span><div class="row tight"><button class="toggle" data-switch="tab" title="Tablature">Tablature</button><button class="toggle" data-switch="diagrams" title="Chord diagrams">Chord diagrams</button></div><p class="info" data-tuning></p>`;
   row.querySelector('[data-switch="tab"]').addEventListener("click", () => switchTab(selectedPart()));
   row.querySelector('[data-switch="diagrams"]').addEventListener("click", switchDiagrams);
   return row;
@@ -311,7 +310,7 @@ function drawSwitches() {
   const board = frettedOf(part);
   document.querySelectorAll('[data-switch="tab"]').forEach(button => { button.setAttribute("aria-pressed", String(Boolean(board?.tab))); button.disabled = !board; });
   document.querySelectorAll('[data-switch="diagrams"]').forEach(button => button.setAttribute("aria-pressed", String(Boolean(score?.diagrams))));
-  document.querySelectorAll("[data-tuning]").forEach(line => { line.textContent = board ? `${tuningText(board)}. Change it on the Score tab.` : ""; });
+  document.querySelectorAll("[data-tuning]").forEach(line => { line.textContent = board ? tuningText(board) : ""; });
 }
 
 function switchTab(part) {
@@ -382,8 +381,8 @@ function crossStaff(action) {
 // Notes no string can play, and a violin's, viola's, cello's or double bass's notes out of its
 // range, listed with the bar checks: a click goes to the note.
 function fretChips() {
-  const fretted = (score?.fretProblems ?? []).map(problem => ({ ...problem, kind: "fretProblem", title: "No string can play this note, so the tablature leaves it out. Click to go to it." }));
-  const bowed = (score?.rangeProblems ?? []).map(problem => ({ ...problem, kind: "rangeProblem", title: "This instrument can't play this note. Click to go to it." }));
+  const fretted = (score?.fretProblems ?? []).map(problem => ({ ...problem, kind: "fretProblem", title: "No string plays it" }));
+  const bowed = (score?.rangeProblems ?? []).map(problem => ({ ...problem, kind: "rangeProblem", title: "Out of range" }));
   return [...fretted, ...bowed].slice(0, 40).map(problem => {
     const chip = document.createElement("button");
     chip.className = "chip";
@@ -503,7 +502,7 @@ function toggleBarre() {
   const low = Math.min(...fretted);
   const on = diagram.frets.flatMap((fret, string) => (fret === low ? [string] : []));
   if (on.length < 2 || diagram.frets.slice(on[0], on.at(-1) + 1).some(fret => fret === null || fret < low)) {
-    message("A barre needs two strings at its fret, with every string between them fretted there or higher.");
+    message("A barre needs two strings at its fret.");
     return;
   }
   sendFrame({ frets: diagram.frets, barre: [low, on[0], on.at(-1)] });
@@ -529,7 +528,7 @@ function drawChordPane() {
   const diagram = chord.diagram;
   $("chordDiagramTools").hidden = !score.diagrams || !diagram;
   $("diagramShow").hidden = Boolean(score.diagrams);
-  if (!score.diagrams) { $("propChordWhat").textContent = "Show chord diagrams to choose how this chord is played."; return; }
+  if (!score.diagrams) { $("propChordWhat").textContent = ""; return; }
   if (!diagram) { $("propChordWhat").textContent = "This chord has no diagram."; return; }
   const count = diagram.frets.length;
   const most = chordPane.shapes?.frets ?? 19;

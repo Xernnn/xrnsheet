@@ -118,7 +118,7 @@ function tileFor(sheet) {
   if (sheet.status && sheet.status !== "ready") jobTile(sheet, holder, link);
   else drawScoreTile(sheet, link);
   more.setAttribute("aria-label", `More for ${link.querySelector(".name").textContent}`);
-  more.title = "More: open or delete";
+  more.title = "More";
   return holder;
 }
 
@@ -192,16 +192,15 @@ function jobTile(sheet, holder, link) {
   link.append(picture, name, state);
   const actions = document.createElement("span");
   actions.className = "actions";
-  const button = (label, title, run) => {
+  const button = (label, run) => {
     const made = document.createElement("button");
     made.type = "button";
     made.textContent = label;
-    made.title = title;
     made.addEventListener("click", () => run(sheet.id));
     return made;
   };
-  if (failed) actions.append(button("Try again", "Read this sheet again", readAgain), button("Remove", "Remove it from the library", removeSheet));
-  else actions.append(button("Cancel", "Stop reading this sheet and remove it", removeSheet));
+  if (failed) actions.append(button("Try again", readAgain), button("Remove", removeSheet));
+  else actions.append(button("Cancel", removeSheet));
   holder.append(actions);
 }
 
@@ -235,7 +234,7 @@ function drawTiles() {
   const create = document.createElement("button");
   create.className = "tile";
   create.id = "newTile";
-  create.innerHTML = `<span class="sheet">${icon("plus")}</span><span class="name">New score</span><span class="state">Piano, guitar, violin or anything</span>`;
+  create.innerHTML = `<span class="sheet">${icon("plus")}</span><span class="name">New score</span>`;
   create.addEventListener("click", openNewScore);
   // A score is found by its title or by who wrote it, as a musician asks for "the Joplin".
   const called = sheet => sheet.status && sheet.status !== "ready" ? sheetName(sheet) : `${sheet.title || "Untitled score"} ${sheet.composer ?? ""}`;
@@ -252,7 +251,7 @@ function drawTiles() {
   $("libraryEmpty").hidden = sheets.length > 0;
   // A search that finds nothing says so, rather than leaving an empty space that looks like no library.
   $("libraryNone").hidden = !wanted || shown.length > 0 || !sheets.length;
-  $("libraryNone").textContent = `No score in your library is called “${$("homeSearch").value.trim()}” or is by anyone of that name.`;
+  $("libraryNone").textContent = "No match";
 }
 
 let listed = 0; // Counts the times the library is asked for, so an answer overtaken by a later one is dropped.
@@ -409,10 +408,9 @@ function showReading(data) {
   $("readingName").textContent = sheetName(data);
   $("readingIcon").innerHTML = failed ? icon("alert") : data.ahead > 0 ? icon("clock") : `<div class="spinner"></div>`;
   $("readingIcon").classList.toggle("failed", failed);
-  $("busyText").textContent = failed ? `This sheet couldn't be read. ${data.message || ""}`.trim()
-    : data.ahead > 0 ? `Waiting its turn, behind ${data.ahead} ${data.ahead === 1 ? "sheet" : "sheets"}: sheets are read one at a time.`
-    : data.message || "Reading your sheet.";
-  $("readingHint").hidden = failed;
+  $("busyText").textContent = failed ? `Couldn't be read. ${data.message || ""}`.trim()
+    : data.ahead > 0 ? `Waiting: ${data.ahead} ${data.ahead === 1 ? "sheet" : "sheets"} ahead`
+    : (data.message || "Reading").replace(/\.$/, "");
   $("readingRetry").hidden = $("readingRemove").hidden = !failed;
   $("readingCancel").hidden = failed;
   drawReadingTime();
@@ -421,7 +419,7 @@ function showReading(data) {
 
 function drawReadingTime() {
   const time = shownSheet?.status === "processing" ? readingFor(shownSheet) : null;
-  $("readingTime").textContent = time === null ? "" : `${elapsedText(time)} so far. A page usually takes under a minute.`;
+  $("readingTime").textContent = time === null ? "" : elapsedText(time);
 }
 
 // The one way anything leaves the library: Delete on a score, Remove on a sheet that couldn't be
@@ -567,7 +565,6 @@ function draw() {
   $("redo").disabled = !score.canRedo;
   $("checked").textContent = score.checked ? "Checked ✓" : "Mark as checked";
   $("checked").classList.toggle("done", score.checked);
-  $("checked").title = score.checked ? "Checked: its chords are learnt from as right. Press to un-mark it, so they aren't." : "Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.";
   const shown = [...document.querySelectorAll("#pages g.harm")];
   score.chords.forEach((chord, index) => {
     const element = shown[index];
@@ -734,7 +731,7 @@ function askForMissedChord(event) {
   const spot = point && missedChordAt(point);
   if (!point) return;
   if (!spot) {
-    message(sheetPlaces[point.page] ? "This page was read before chords could be added from it. Choose a note in the score, then Add chord." : "");
+    message(sheetPlaces[point.page] ? "Add this chord from a note in the score." : "");
     return;
   }
   if (!spot.name) { message("That bar has been deleted from the score."); return; }
@@ -879,7 +876,7 @@ function drawBoxes() {
     const box = document.createElement("div");
     box.className = "box" + (chord.confidence !== null && chord.confidence < UNSURE_BELOW ? " unsure" : "") + (chord.added ? " added" : "");
     box.dataset.index = chord.index;
-    box.title = `${chord.text}: click to change it`;
+    box.title = chord.text;
     box.style.left = `${left / image.naturalWidth * 100}%`;
     box.style.top = `${top / image.naturalHeight * 100}%`;
     box.style.width = `${(right - left) / image.naturalWidth * 100}%`;
@@ -905,7 +902,6 @@ function drawChecks() {
   $("checks").append(stepLine("chordSteps", "Chords to check", unsure, unsure.map(chord => chord.index), chordStep, {
     said: chord => chord.text,
     many: `${unsure.length} chords`,
-    why: "The reader wasn't sure of these chords, which are coloured in the score and on the original.",
     before: "The chord before to check",
     next: "The next chord to check",
     go: stepToChordCheck,
@@ -1136,7 +1132,7 @@ function markChecked() {
 function setChecked(on) {
   return enqueue(async () => {
     await send("checked", { checked: on });
-    toast(on ? "Marked as checked: its chords will be learnt from." : "No longer marked as checked, so it won't be learnt from.", { label: "Undo", run: () => setChecked(!on) });
+    toast(on ? "Marked as checked" : "Not checked", { label: "Undo", run: () => setChecked(!on) });
   });
 }
 

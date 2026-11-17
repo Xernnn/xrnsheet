@@ -26,7 +26,7 @@
 <main>
   <div class="spinner" id="spinner"></div>
   <h1 id="title">Starting xrnsheet…</h1>
-  <p id="note">Your scores open in a moment.</p>
+  <p id="note" hidden></p>
   <pre id="detail" hidden></pre>
 </main>
 <script>
@@ -36,6 +36,7 @@
     document.getElementById("spinner").hidden = true;
     document.getElementById("title").textContent = problem;
     document.getElementById("note").textContent = "Close this window and open xrnsheet again once it's fixed.";
+    document.getElementById("note").hidden = false;
     const detail = query.get("detail");
     if (detail) {
       const box = document.getElementById("detail");
@@ -44,7 +45,6 @@
     }
   } else if (query.get("state") === "restarting") {
     document.getElementById("title").textContent = "Starting xrnsheet again…";
-    document.getElementById("note").textContent = "Its server stopped. Every edit was saved as you made it.";
   }
 </script>
 </body>

@@ -547,7 +547,7 @@ function makeChooser(holder, onChange) {
   const state = { family: FAMILIES[0], picked: [], chosen: null, wanted: "" };
   holder.innerHTML = `<div><h3>Family</h3><ul class="pickList" data-list="families" role="listbox" aria-label="Family"></ul></div>
     <div><h3>Instruments</h3><input type="search" placeholder="Search" aria-label="Search instruments" style="margin-bottom: 8px"><ul class="pickList" data-list="instruments" role="listbox" aria-label="Instruments"></ul></div>
-    <div><h3>Your score</h3><ul class="pickList" data-list="picked" aria-label="Instruments chosen"></ul><div class="note" data-empty>Choose your instruments by adding them to this list.</div></div>`;
+    <div><h3>Your score</h3><ul class="pickList" data-list="picked" aria-label="Instruments chosen"></ul><div class="note" data-empty>None yet</div></div>`;
   const list = name => holder.querySelector(`[data-list="${name}"]`);
   const add = id => { state.picked.push(id); draw(); onChange(state.picked); };
   function draw() {
@@ -565,8 +565,7 @@ function makeChooser(holder, onChange) {
       row.dataset.instrument = item.id;
       row.setAttribute("role", "option");
       row.setAttribute("aria-selected", String(state.chosen === item.id));
-      row.title = "Double-click to add";
-      row.innerHTML = `<span></span><button type="button" class="flat" aria-label="Add ${item.label}" title="Add to the score">${icon("arrow")}</button>`;
+      row.innerHTML = `<span></span><button type="button" class="flat" aria-label="Add ${item.label}" title="Add">${icon("arrow")}</button>`;
       row.firstChild.textContent = item.label;
       row.addEventListener("click", () => { state.chosen = item.id; draw(); });
       row.addEventListener("dblclick", () => add(item.id));
@@ -614,7 +613,7 @@ async function openNewScore() {
   showNewPage(false);
   showMoreInstruments(false);
   const time = $("blankTime").selectedOptions[0]?.textContent ?? "4/4";
-  $("quickHint").textContent = `One click starts writing for it, in ${KEY_NAMES[Number($("blankKey").value) + 7]} major and ${time.toLowerCase()}. Its + puts several instruments together.`;
+  $("quickHint").textContent = `${KEY_NAMES[Number($("blankKey").value) + 7]} major · ${time}`;
   $("newDialog").showModal();
 }
 
@@ -652,28 +651,27 @@ async function createScore(picked = newChooser.picked) {
 // The instruments xrnsheet is made for, a click away at the top of the New score dialog: a click starts
 // a score for one, and its + adds it to the list to choose more.
 const QUICK_INSTRUMENTS = [
-  ["piano", "Piano", "piano", "Two staves, for both hands"],
-  ["guitar-tab", "Guitar", "guitar", "Staff and tablature, six strings"],
-  ["violin", "Violin", "violin", "Bowings, strings, positions"],
-  ["bass-guitar-tab", "Bass guitar", "guitar", "Staff and tablature, four strings"],
-  ["cello", "Cello", "violin", "Bass clef, four strings"],
-  ["viola", "Viola", "violin", "Alto clef, four strings"],
-  ["ukulele", "Ukulele", "guitar", "Four strings, G C E A"],
-  ["voice", "Voice", "voice", "A melody to sing, with lyrics"],
+  ["piano", "Piano", "piano"],
+  ["guitar-tab", "Guitar", "guitar"],
+  ["violin", "Violin", "violin"],
+  ["bass-guitar-tab", "Bass guitar", "guitar"],
+  ["cello", "Cello", "violin"],
+  ["viola", "Viola", "violin"],
+  ["ukulele", "Ukulele", "guitar"],
+  ["voice", "Voice", "voice"],
 ];
 
 function setUpNewScore() {
   $("blankOpen").addEventListener("click", openNewScore);
-  $("quickStart").replaceChildren(...QUICK_INSTRUMENTS.map(([id, label, drawn, what]) => {
+  $("quickStart").replaceChildren(...QUICK_INSTRUMENTS.map(([id, label, drawn]) => {
     const holder = document.createElement("div");
     holder.className = "quick";
     holder.dataset.quick = id;
-    holder.innerHTML = `<button type="button" class="start">${icon(drawn)}<span class="name"></span><span class="what"></span></button><button type="button" class="add flat">${icon("plus")}</button>`;
+    holder.innerHTML = `<button type="button" class="start">${icon(drawn)}<span class="name"></span></button><button type="button" class="add flat">${icon("plus")}</button>`;
     const [start, add] = holder.querySelectorAll("button");
     start.querySelector(".name").textContent = label;
-    start.querySelector(".what").textContent = what;
-    start.title = `Start writing for ${label.toLowerCase()} at once`;
-    add.title = `Add ${label.toLowerCase()} to the list, to choose more instruments`;
+    start.title = label;
+    add.title = `Add ${label.toLowerCase()}`;
     add.setAttribute("aria-label", add.title);
     start.addEventListener("click", () => createScore([id]));
     add.addEventListener("click", () => { showMoreInstruments(true); newChooser?.add(id); });

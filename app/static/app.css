@@ -148,7 +148,6 @@ body.atHome #libraryClose { display: none; }
 .tile .name { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; align-self: end; }
 .tile .state { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; align-self: start; }
 #newTile .sheet { border-style: dashed; background: transparent; }
-.libraryFoot { margin: 0; color: var(--faint); font-size: 12px; }
 #libraryEmpty { padding: 24px 6px; color: var(--muted); }
 #libraryNone { margin: 0; padding: 12px 6px; color: var(--muted); }
 #libraryEmpty h3 { color: var(--ink); font-size: 18px; margin-bottom: 6px; }
@@ -173,7 +172,6 @@ body.atHome #centre { display: none; }
 #readingCard p { margin: 0; }
 #busyText { color: var(--ink); }
 #readingTime { font-variant-numeric: tabular-nums; }
-#readingHint { font-size: 12.5px; margin-top: 6px !important; }
 #readingCard .buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
 #readingIcon { display: grid; place-items: center; min-height: 44px; }
 #readingIcon svg.icon { width: 34px; height: 34px; color: var(--muted); }
@@ -522,7 +520,6 @@ body.atHome #dock { display: none !important; }
 #commandList li[aria-disabled="true"] { opacity: .45; }
 #commandList li kbd { flex: none; }
 #commandList .none { color: var(--muted); padding: 14px; cursor: default; }
-.commandFoot { display: flex; gap: 4px; align-items: center; padding: 8px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 
 /* Small things that float: the box for a chord or a mark's words, and dialogs. */
 #editor { position: absolute; z-index: 30; display: flex; gap: 6px; padding: 8px; background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 10px 30px var(--shadow); }
@@ -545,10 +542,9 @@ dialog .buttons button { min-width: 96px; }
 dialog .error { color: var(--bad); }
 .quickStart { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
 .quickStart .quick { position: relative; display: flex; }
-.quickStart .start { flex: 1; min-height: 112px; flex-direction: column; gap: 3px; padding: 14px 34px 12px 14px; align-items: flex-start; justify-content: flex-start; white-space: normal; text-align: left; border-radius: var(--radius); }
+.quickStart .start { flex: 1; min-height: 96px; flex-direction: column; gap: 3px; padding: 14px 34px 12px 14px; align-items: flex-start; justify-content: flex-start; white-space: normal; text-align: left; border-radius: var(--radius); }
 .quickStart .start:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); }
 .quickStart .start .name { font-weight: 700; font-size: 15px; }
-.quickStart .start .what { color: var(--muted); font-size: 12px; }
 .quickStart .start svg.icon { width: 34px; height: 34px; color: var(--accent); margin-bottom: 6px; stroke-width: 1.4; }
 .quickFoot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 @media (max-width: 760px) { .quickStart { grid-template-columns: repeat(2, 1fr); } }

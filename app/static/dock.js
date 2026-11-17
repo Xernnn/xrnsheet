@@ -44,15 +44,13 @@ function drawDock() {
   drawCursor();
 }
 
-// What the instrument panel is showing, and what a press on it does just now.
+// What the instrument panel is showing, and what a press on it does just now, in a word or two.
 function trayNote() {
   const part = partLabel(activePart());
-  if (practice.follower) return `${part}: play the lit notes`;
-  if (editor.on) return `✎ Writing: what you play on the ${KINDS[activeKind()].label.toLowerCase()} is written at the cursor. Shift adds to the chord`;
-  if (currentMode() === "practice") return `${part}: the notes light as they sound`;
-  if (range) return `${part}: select one note to change it from here, or press N to write`;
-  if (actionTarget()) return `${part}: what you play becomes the selected note. Shift adds to its chord`;
-  return `${part}: click to hear a note. Select one to change it, or press N to write`;
+  if (practice.follower) return `${part} · Play along`;
+  if (editor.on) return "✎ Writing";
+  if (!range && actionTarget() && currentMode() !== "practice") return `${part} · Changes the note`;
+  return part;
 }
 
 function showDock(name) {

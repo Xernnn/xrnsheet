@@ -3615,7 +3615,7 @@ def test_library_search_by_composer(page, base: str, created: list[str]) -> None
     page.fill("#homeSearch", "nothing is called this")
     page.wait_for_timeout(100)
     said = page.evaluate("() => document.getElementById('libraryNone')?.hidden === false ? document.getElementById('libraryNone').textContent : ''")
-    check("a search that finds nothing says so", page.locator("#historyList a").count() == 0 and "nothing is called this" in said, said)
+    check("a search that finds nothing says so", page.locator("#historyList a").count() == 0 and said == "No match", said)
     page.fill("#homeSearch", "")
     page.wait_for_timeout(100)
     check("and says nothing once the search is cleared", page.is_hidden("#libraryNone"))
@@ -4802,7 +4802,7 @@ def test_tablature_editing(page, base: str, shots: Path | None, created: list[st
     click_on(page, page.locator(f"[id='{first}-tab']"))
     settle(page)
     check("a fret number on the tablature is selected by a click", page.evaluate("() => selected") == f"{first}-tab" and page.locator(f"[id='{first}-tab'].selected").count() == 1)
-    check("and the inspector says how to change it", "Type a fret number" in page.inner_text("#stringInfo"), page.inner_text("#stringInfo"))
+    check("and the inspector says its string and fret", page.inner_text("#stringInfo").startswith("String "), page.inner_text("#stringInfo"))
     page.keyboard.press("5")
     page.wait_for_timeout(800)
     settle(page)
@@ -4992,7 +4992,7 @@ def test_practice(context, base: str, shots: Path | None, created: list[str]) ->
     check("it says the MIDI keyboard is ready", "MIDI keyboard ready" in page.inner_text("#waitState"), page.inner_text("#waitState"))
     box = page.locator("#waitState").bounding_box()
     check("where it can be seen, as the practice tools wrap to fit", box is not None and box["x"] + box["width"] <= page.viewport_size["width"], box)
-    check("and the hint says what Practice's keys do", page.inner_text("#toolLabel").startswith("Space plays from the selected note"), page.inner_text("#toolLabel"))
+    check("and the bar under the score names what's chosen, with no sentence of keys", page.inner_text("#toolLabel") in ("", "Selected") or page.inner_text("#toolLabel").endswith("notes selected"), page.inner_text("#toolLabel"))
     page.click("#rewind")
     page.keyboard.press(" ")
     page.wait_for_function("() => practice.follower?.arrived")
@@ -5473,7 +5473,7 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         page.set_input_files("#file", files=[photo("first page.png")])
         page.wait_for_selector("#busy:not([hidden])")
         first = page.evaluate("() => scoreId")
-        page.wait_for_function("() => /so far/.test(document.getElementById('readingTime')?.textContent ?? '')", timeout=5000)
+        page.wait_for_function("() => /^\\d+:\\d\\d$/.test(document.getElementById('readingTime')?.textContent ?? '')", timeout=5000)
         check("a sheet being read says which it is, how long it has taken, and can be cancelled", page.inner_text("#readingName") == "first page.png" and page.is_visible("#readingCancel"), page.inner_text("#readingTime"))
         check("and the library's button is there", page.is_visible("#libraryToggle"))
         page.keyboard.press("F6")
@@ -5485,7 +5485,7 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         page.wait_for_function("id => scoreId && scoreId !== id && !document.getElementById('busy').hidden", arg=first)
         second = page.evaluate("() => scoreId")
         page.wait_for_function("id => /ahead/.test(document.querySelector(`#historyList a[data-score='${id}']`)?.textContent ?? '')", arg=second, timeout=5000)
-        check("a second sheet says it waits its turn, and behind how many", "behind 1 sheet" in page.inner_text("#busyText") and "1 sheet ahead" in tile(second).inner_text(), page.inner_text("#busyText"))
+        check("a second sheet says it waits its turn, and behind how many", page.inner_text("#busyText") == "Waiting: 1 sheet ahead" and "1 sheet ahead" in tile(second).inner_text(), page.inner_text("#busyText"))
         if shots:
             page.screenshot(path=str(shots / "reading-two-sheets.png"))
         page.keyboard.press("F6")  # Opening the second folded the library away, as opening a score does.
@@ -5528,7 +5528,7 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         page.set_input_files("#file", files=[photo("third page.png")])
         page.wait_for_selector("#readingCancel:not([hidden])")
         third = page.evaluate("() => scoreId")
-        page.wait_for_function("() => /so far/.test(document.getElementById('readingTime').textContent)", timeout=5000)
+        page.wait_for_function("() => /^\\d+:\\d\\d$/.test(document.getElementById('readingTime').textContent)", timeout=5000)
         page.click("#readingCancel")
         page.wait_for_function("() => document.body.classList.contains('atHome')", timeout=15000)
         check("Cancel where it's shown stops it and goes back to the library", third not in listed(base) and page.locator(f'#historyList a[data-score="{third}"]').count() == 0)
@@ -5740,7 +5740,7 @@ def test_marking_checked_with_things_still_listed(page, base: str, created: list
     check("the File menu says it's checked", menu_ticked(page, "File", "Checked, for retraining") == "true")
     page.click("#checked")
     settle(page)
-    check("and it can be un-marked later with the same button", checked() is False and "No longer marked" in page.inner_text("#toastText"))
+    check("and it can be un-marked later with the same button", checked() is False and page.inner_text("#toastText") == "Not checked")
 
 
 def test_chords_to_check_are_stepped_through(page, base: str, shots: Path | None, created: list[str]) -> None:
