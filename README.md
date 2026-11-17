@@ -75,6 +75,13 @@ This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it 
 
 `npm start` in `desktop/` runs the app straight from the checkout, and `npm test` and `npm run test:window` check it. `test:window` starts the real app headless with a throwaway scores folder.
 
+The editor's browser checks, `tests/e2e_editor.py`, aren't run by pytest: they need a running server and a Python with Playwright, which `.venv` doesn't have, so they run on a Python of their own (a venv with only `playwright` in it is enough). With `XRNSHEET_BROWSER` set to a Chromium already installed:
+
+```sh
+.venv/bin/python -m app.server --notes own --port 8011
+<python with playwright> tests/e2e_editor.py --port 8011 --clean
+```
+
 ### The editor
 
 The window is built round the instrument you play, piano, guitar or violin, and has three modes, switched at the top or with Alt+R, Alt+W and Alt+P:
