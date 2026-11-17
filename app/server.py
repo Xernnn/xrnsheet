@@ -995,6 +995,29 @@ def list_instruments() -> list[dict]:
     return structure.instrument_list()
 
 
+# Each score's title and composer as the library last read them, by its folder, with the version
+# they were read from: its name, when it was written and its size.
+listed_titles: dict[Path, tuple[tuple[str, int, int], dict]] = {}
+
+
+def listed_title(folder: Path) -> dict:
+    """A score's title and composer, read from its latest version only when that has changed.
+
+    The library is listed every 2 s while a sheet is read, and after every edit while it's shown,
+    and parsing every score's whole MusicXML each time just for these grew with the library. An undo
+    followed by a new edit gives a version the number of the one undone, so its time and size count too.
+    """
+    with edit_lock:  # An undo moves the latest version away, so it can't land between finding it and reading it.
+        latest = versions(folder)[-1]
+        found = latest.stat()
+        key = (latest.name, found.st_mtime_ns, found.st_size)
+        kept = listed_titles.get(folder)
+        if kept is None or kept[0] != key:
+            kept = (key, structure.title_of(ET.parse(latest).getroot()))
+            listed_titles[folder] = kept
+    return kept[1]
+
+
 @app.get("/api/scores")
 def list_scores() -> list[dict]:
     """List the sheets, newest first, so one can be reopened after closing the page.
@@ -1023,7 +1046,7 @@ def list_scores() -> list[dict]:
                 "checked": (folder / "checked.json").exists(),
                 "blank": not (folder / "recognized").exists(),
                 "opened": opened_from_file(folder),
-            } | structure.title_of(current_root(folder)))
+            } | listed_title(folder))
         except (OSError, ValueError, TypeError, KeyError, IndexError, ET.ParseError) as error:
             print(f"left an unreadable sheet out of the list, {folder.name}: {error!r}", file=sys.stderr)
     return sorted(found, key=lambda item: item["saved"], reverse=True)

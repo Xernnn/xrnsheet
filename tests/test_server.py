@@ -157,6 +157,25 @@ def test_sheets_are_listed_with_how_far_they_have_got(client, ready_score):
     assert sheets[unfinished.name]["status"] == "processing"
 
 
+def test_the_library_reads_a_score_only_when_it_has_changed(client, monkeypatch):
+    """Each listing parsed every score's latest MusicXML in full for its title, every 2 s while a sheet
+    was read and after every edit with the library open."""
+    first, second = blank(client, title="Blue Bossa"), blank(client, title="Solar")
+    read = []
+    title_of = server.structure.title_of
+    monkeypatch.setattr(server.structure, "title_of", lambda root: read.append(root) or title_of(root))
+    titles = lambda: {sheet["id"]: sheet["title"] for sheet in client.get("/api/scores").json()}
+    assert titles() == {first: "Blue Bossa", second: "Solar"}
+    read.clear()
+    assert titles() == {first: "Blue Bossa", second: "Solar"} and read == [], "unchanged, neither is read again"
+    client.post(f"/api/scores/{second}/title", json={"title": "Nardis"})
+    read.clear()
+    assert titles() == {first: "Blue Bossa", second: "Nardis"} and len(read) == 1
+    client.post(f"/api/scores/{second}/undo")
+    client.post(f"/api/scores/{second}/title", json={"title": "Footprints"})  # The same version number as the one undone.
+    assert titles()[second] == "Footprints"
+
+
 def test_a_missing_source_page_is_not_found(client, ready_score):
     assert client.get(f"/api/scores/{ready_score}/source/7.jpg").status_code == 404
 
