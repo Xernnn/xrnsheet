@@ -326,8 +326,7 @@ function switchDiagrams() {
 
 async function loadTunings() {
   if (tunings) return tunings;
-  const response = await fetch("/api/tunings");
-  if (response.ok) tunings = await response.json();
+  tunings = await request("/api/tunings").catch(() => null);
   return tunings;
 }
 
@@ -515,9 +514,9 @@ async function loadShapes(index) {
   if (chordPane.asked === asked) return;
   chordPane.asked = asked;
   chordPane.shapes = null;
-  const response = await fetch(`/api/scores/${scoreId}/chords/${index}/shapes`);
-  if (response.ok && chordPane.asked === asked) {
-    chordPane.shapes = await response.json();
+  const shapes = await request(`/api/scores/${scoreId}/chords/${index}/shapes`).catch(() => null);
+  if (shapes && chordPane.asked === asked) {
+    chordPane.shapes = shapes;
     drawChordPane();
   }
 }

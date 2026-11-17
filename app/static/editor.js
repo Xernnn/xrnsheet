@@ -1099,15 +1099,8 @@ function selectEverything() {
 }
 
 // A request that only reads, so it changes nothing and draws nothing.
-async function askServer(path, body) {
-  const response = await fetch(`/api/scores/${scoreId}/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "That didn't work.");
-  return data;
+function askServer(path, body) {
+  return postJson(`/api/scores/${scoreId}/${path}`, body);
 }
 
 function readClipboard() {

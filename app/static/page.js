@@ -40,6 +40,37 @@ function enqueue(task) {
   return queue;
 }
 
+// Every request to the server comes through here, and gives the answer or throws a short reason:
+// the server's own when it refused, as "That file is too large", or one of these. A request that
+// never reached it showed "Failed to fetch", and a plain-text 500 "Unexpected token 'I'…", or
+// nothing at all. `status` is 0 when nothing answered.
+const NOT_ANSWERING = "xrnsheet isn't answering.";
+const DIDNT_WORK = "That didn't work.";
+
+class RequestFailed extends Error {
+  constructor(text, status) {
+    super(text);
+    this.status = status;
+  }
+}
+
+async function request(path, options = {}) {
+  let response;
+  try {
+    response = await fetch(path, options);
+  } catch {
+    throw new RequestFailed(NOT_ANSWERING, 0);
+  }
+  const data = await response.json().catch(() => undefined);
+  if (!response.ok) throw new RequestFailed(typeof data?.detail === "string" ? data.detail : DIDNT_WORK, response.status);
+  if (data === undefined) throw new RequestFailed(DIDNT_WORK, response.status);
+  return data;
+}
+
+function postJson(path, body) {
+  return request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+}
+
 // The window is the library while no score is open, the score once one is, and how a sheet is getting
 // on while one still being read, or that couldn't be, is open. That doesn't hold up the rest of the
 // app: the library can be shown beside it, as beside a score, and anything else opened.
@@ -228,9 +259,13 @@ let listed = 0; // Counts the times the library is asked for, so an answer overt
 
 async function drawHistory() {
   const asked = ++listed;
-  const response = await fetch("/api/scores");
-  if (!response.ok || asked !== listed) return;
-  const found = await response.json();
+  let found;
+  try {
+    found = await request("/api/scores");
+  } catch {
+    if (asked === listed) watchReading(true); // A sheet being read is asked about again, later.
+    return;
+  }
   if (asked !== listed) return;
   const before = new Map(sheets.map(sheet => [sheet.id, sheet.status]));
   const heard = performance.now();
@@ -251,12 +286,14 @@ function tellWhatFinished(before) {
 
 // While a sheet is being read the library is asked again every few seconds, wherever the window is, so
 // its tile keeps up and the sheet can say when it's done.
-let watchTimer = 0;
-const WATCH_MS = 2000;
+// While the server doesn't answer, it's asked less often each time, up to every half a minute.
+let watchTimer = 0, watchWait = 0;
+const WATCH_MS = 2000, LONGEST_WAIT_MS = 30000;
 
-function watchReading() {
+function watchReading(unanswered = false) {
   clearTimeout(watchTimer);
-  if (sheets.some(sheet => sheet.status === "processing")) watchTimer = setTimeout(drawHistory, WATCH_MS);
+  watchWait = unanswered ? Math.min(Math.max(watchWait, WATCH_MS) * 2, LONGEST_WAIT_MS) : WATCH_MS;
+  if (sheets.some(sheet => sheet.status === "processing")) watchTimer = setTimeout(drawHistory, watchWait);
 }
 
 // The time a sheet has been read for counts up on its tile, and where it's open.
@@ -334,10 +371,16 @@ async function upload(file) {
   toast(`Opening ${file.name}…`);
   const body = new FormData();
   body.append("file", file);
-  const response = await fetch("/api/scores", { method: "POST", body });
-  const data = await response.json();
+  let data;
+  try {
+    data = await request("/api/scores", { method: "POST", body });
+  } catch (error) {
+    // Said where it stays, with the file's name: one that went wrong said nothing at all.
+    hideToast();
+    message(`${file.name}: ${error.message}`);
+    return;
+  }
   hideToast();
-  if (!response.ok) { message(data.detail); return; }
   await openScore(data.id);
   drawHistory(); // A photo or a PDF is listed at once, as it's read.
 }
@@ -374,10 +417,11 @@ async function removeSheet(id) {
   const sheet = sheets.find(item => item.id === id);
   const named = !sheet || sheet.status === "ready" ? `“${(sheet ?? score)?.title || "Untitled score"}”` : sheetName(sheet);
   const open = id === scoreId && Boolean(score);
-  const response = await fetch(`/api/scores/${id}`, { method: "DELETE" });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    message(typeof data.detail === "string" ? data.detail : "That couldn't be removed.");
+  let data;
+  try {
+    data = await request(`/api/scores/${id}`, { method: "DELETE" });
+  } catch (error) {
+    message(error.message);
     drawHistory();
     return;
   }
@@ -389,31 +433,50 @@ async function removeSheet(id) {
 }
 
 async function restoreSheet(id, reopen) {
-  const response = await fetch(`/api/scores/${id}/restore`, { method: "POST" });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) { message(typeof data.detail === "string" ? data.detail : "That couldn't be brought back."); return; }
+  try {
+    await postJson(`/api/scores/${id}/restore`);
+  } catch (error) {
+    message(error.message);
+    return;
+  }
   await drawHistory();
   if (reopen) openScore(id);
 }
 
 async function readAgain(id) {
-  const response = await fetch(`/api/scores/${id}/retry`, { method: "POST" });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) message(typeof data.detail === "string" ? data.detail : "That sheet couldn't be read again.");
-  else if (id === scoreId && !score) poll();
+  try {
+    await postJson(`/api/scores/${id}/retry`);
+    if (id === scoreId && !score) poll();
+  } catch (error) {
+    message(error.message);
+  }
   drawHistory();
 }
 
-async function poll() {
+// A sheet being read is asked about every 1.5 s. When the server doesn't answer, or answers with a
+// fault, as while it restarts, it's asked again, less often each time, rather than given up on with
+// its spinner turning for ever; and a score being opened is asked for again the same way.
+const POLL_MS = 1500;
+let pollTrouble = false;
+
+async function poll(wait = POLL_MS) {
   const turn = opened;
-  const response = await fetch(`/api/scores/${scoreId}`);
-  if (turn !== opened) return; // Something else has been opened meanwhile.
-  if (!response.ok) { closeScore(true); drawHistory(); return; }
-  const data = await response.json();
+  let data;
+  try {
+    data = await request(`/api/scores/${scoreId}`);
+  } catch (error) {
+    if (turn !== opened) return; // Something else has been opened meanwhile.
+    if (error.status === 404) { closeScore(true); drawHistory(); return; }
+    pollTrouble = true;
+    message(error.message);
+    setTimeout(() => { if (turn === opened) poll(Math.min(wait * 2, LONGEST_WAIT_MS)); }, wait);
+    return;
+  }
   if (turn !== opened) return;
+  if (pollTrouble) { pollTrouble = false; message(""); }
   if (data.status !== "ready") {
     showReading(data);
-    if (data.status === "processing") setTimeout(() => { if (turn === opened) poll(); }, 1500);
+    if (data.status === "processing") setTimeout(() => { if (turn === opened) poll(); }, POLL_MS);
     return;
   }
   shownSheet = null;
@@ -547,8 +610,7 @@ function drawOriginals() {
 let sheetPlaces = {};
 
 async function loadPlaces(id, number) {
-  const response = await fetch(`/api/scores/${id}/source/${number}/layout`);
-  const found = response.ok ? await response.json() : null;
+  const found = await request(`/api/scores/${id}/source/${number}/layout`).catch(() => null);
   if (id === scoreId) sheetPlaces[number] = found?.lines ?? [];
 }
 
@@ -858,13 +920,7 @@ function select(id) {
 }
 
 async function send(path, body) {
-  const response = await fetch(`/api/scores/${scoreId}/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "That edit didn't work.");
+  const data = await postJson(`/api/scores/${scoreId}/${path}`, body || undefined);
   const before = editor.cursor;
   receive(data);
   if (editor.on && path !== "undo" && path !== "redo") {

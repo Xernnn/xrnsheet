@@ -594,8 +594,7 @@ function makeChooser(holder, onChange) {
 
 async function loadInstruments() {
   if (instruments.length) return;
-  const response = await fetch("/api/instruments");
-  if (response.ok) instruments = await response.json();
+  instruments = await request("/api/instruments").catch(() => []);
 }
 
 let newChooser = null, partChooser = null;
@@ -637,11 +636,12 @@ async function createScore(picked = newChooser.picked) {
     fifths: Number($("blankKey").value), beats: Number(beats), beat_type: Number(beat_type), symbol, clef: first, more, measures: Number($("blankBars").value),
     title: $("blankTitle").value, composer: $("blankComposer").value, tempo: $("blankTempo").value, pickup: Number($("blankPickup").value),
   };
-  const response = await fetch("/api/scores/blank", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const data = await response.json();
-  if (!response.ok) {
+  let data;
+  try {
+    data = await postJson("/api/scores/blank", body);
+  } catch (error) {
     showNewPage(true);
-    $("blankError").textContent = typeof data.detail === "string" ? data.detail : "Those settings didn't work.";
+    $("blankError").textContent = error.message;
     $("blankError").hidden = false;
     return;
   }

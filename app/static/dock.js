@@ -145,9 +145,9 @@ function mixerChanged() {
   const waiting = { id, settings };
   mixerWaiting = waiting;
   mixerSaving = setTimeout(async () => {
-    const response = await fetch(`/api/scores/${id}/mixer`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
+    const saved = await postJson(`/api/scores/${id}/mixer`, settings).then(() => true, () => false);
     if (mixerWaiting === waiting) mixerWaiting = null;
-    if (!response.ok) message("The mixer couldn't be saved.");
+    if (!saved) message("The mixer couldn't be saved.");
   }, MIXER_SAVE_MS);
 }
 

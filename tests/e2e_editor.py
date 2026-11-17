@@ -5521,6 +5521,46 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         check("Cancel where it's shown stops it and goes back to the library", third not in listed(base) and page.locator(f'#historyList a[data-score="{third}"]').count() == 0)
 
 
+def test_failed_requests_say_so(context, base: str, created: list[str]) -> None:
+    """A plain-text 500 showed "Unexpected token 'I', "Internal S"... is not valid JSON", a server that
+    had gone showed "Failed to fetch", an upload that went wrong said nothing once its toast had gone,
+    and a sheet the server didn't answer about stopped being asked about, its spinner turning for ever.
+
+    A page of its own, as the failures it asks for are logged as errors, which the others count."""
+    page = context.new_page()
+    try:
+        score_id = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Faults"})["id"]
+        created.append(score_id)
+        page.goto(f"{base}/#{score_id}")
+        page.wait_for_selector("#pages svg")
+        retitle = lambda title: (menu(page, "File", "Title and composer…"), page.fill("#titleInput", title), page.click("#projectDialog button[type=submit]"), settle(page))
+        page.route("**/title", lambda route: route.fulfill(status=500, body="Internal Server Error", content_type="text/plain"))
+        retitle("Faults two")
+        check("a fault answered in plain text says the edit didn't work", page.inner_text("#message") == "That didn't work.", page.inner_text("#message"))
+        page.unroute("**/title")
+        page.route("**/title", lambda route: route.abort())
+        retitle("Faults three")
+        check("and a server that doesn't answer says so", page.inner_text("#message") == "xrnsheet isn't answering.", page.inner_text("#message"))
+        page.unroute("**/title")
+
+        page.route("**/api/scores", lambda route: route.fulfill(status=500, body="Internal Server Error", content_type="text/plain") if route.request.method == "POST" else route.continue_())
+        page.set_input_files("#file", files=[photo("page one.png")])
+        page.wait_for_function("() => !document.getElementById('message').hidden && /page one/.test(document.getElementById('message').textContent)")
+        page.wait_for_timeout(5500)  # Past the toast saying it's being opened.
+        check("an upload that fails stays said, with the file's name", page.is_visible("#message") and page.inner_text("#message") == "page one.png: That didn't work.", page.inner_text("#message"))
+        page.unroute("**/api/scores")
+
+        unanswered = [2]
+        page.route(f"**/api/scores/{score_id}", lambda route: (unanswered.__setitem__(0, unanswered[0] - 1), route.abort()) if unanswered[0] > 0 else route.continue_())
+        page.goto(base)
+        page.evaluate("id => { location.hash = id; }", score_id)
+        page.wait_for_function("() => /isn't answering/.test(document.getElementById('message').textContent)")
+        page.wait_for_function("id => scoreId === id && score !== null", arg=score_id, timeout=15000)
+        check("a score the server didn't answer about is asked for again until it does", page.is_visible("#pages") and page.is_hidden("#message") and unanswered[0] == 0, page.inner_text("#message"))
+    finally:
+        page.close()
+
+
 def on_the_sheet(page, x: float, y: float) -> tuple[float, float]:
     """Where a point of the original's first page, in its own pixels, is in the window."""
     spot = page.evaluate("""([x, y]) => {
@@ -6047,6 +6087,7 @@ def main() -> None:
             test_found_by_the_bug_hunt(context, base, created)
             test_phone(context, base, arguments.shots, created)
             test_reading_leaves_the_window_free(page, arguments.shots)
+            test_failed_requests_say_so(context, base, created)
             test_the_original_sheet(page, base, arguments.shots, created)
             test_marking_checked_with_things_still_listed(page, base, created)
             test_chords_to_check_are_stepped_through(page, base, arguments.shots, created)
