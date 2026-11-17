@@ -3585,6 +3585,18 @@ def test_back_and_forward_follow_the_address(page, base: str, created: list[str]
     check("and a reload opens the score that was shown", page.inner_text("#scoreName") == "Going Back Two")
 
 
+def test_a_score_that_is_gone_says_so(context, base: str) -> None:
+    """An old bookmark, or a deleted score's address, opened the library as if nothing had been asked
+    for. A page of its own, as the 404 is logged as an error."""
+    page = context.new_page()
+    try:
+        page.goto(f"{base}/#{'0' * 32}")
+        page.wait_for_function("() => document.body.classList.contains('atHome') && !document.getElementById('toast').hidden")
+        check("a score that isn't there says so, over the library", page.inner_text("#toastText") == "Not in the library" and "#" not in page.url, (page.inner_text("#toastText"), page.url))
+    finally:
+        page.close()
+
+
 def test_library_search_by_composer(page, base: str, created: list[str]) -> None:
     """The library finds a score by who wrote it, and says when a search finds nothing."""
     score_id = written_melody(page, base, created, tune="cdef")
@@ -6082,6 +6094,7 @@ def main() -> None:
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
             test_back_and_forward_follow_the_address(page, base, created)
+            test_a_score_that_is_gone_says_so(context, base)
             test_library_search_by_composer(page, base, created)
             test_deleting_a_score(page, base, created)
             test_another_score_opened_while_writing(page, base, created)

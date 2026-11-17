@@ -480,7 +480,13 @@ async function poll(wait = POLL_MS) {
     data = await request(`/api/scores/${scoreId}`);
   } catch (error) {
     if (turn !== opened) return; // Something else has been opened meanwhile.
-    if (error.status === 404) { closeScore(true); drawHistory(); return; }
+    if (error.status === 404) {
+      // An old bookmark, or a deleted score's address, opened the library as if nothing was asked for.
+      closeScore(true);
+      drawHistory();
+      toast("Not in the library");
+      return;
+    }
     pollTrouble = true;
     message(error.message);
     setTimeout(() => { if (turn === opened) poll(Math.min(wait * 2, LONGEST_WAIT_MS)); }, wait);
