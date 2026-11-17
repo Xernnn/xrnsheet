@@ -44,7 +44,7 @@ Tesseract needs `eng.traineddata` in `/usr/share/tessdata`.
 .venv/bin/python -m app.server
 ```
 
-Open <http://127.0.0.1:8000>. A page takes 10 to 15 seconds on a laptop's CPU, or 2 to 3 with `--notes own` below. PDFs can have up to 40 pages. If a page can't be read, it's left out and the app says which one. Your sheets are listed in the library, so you can come back to them.
+Open <http://127.0.0.1:8000>. A page takes 10 to 15 seconds on a laptop's CPU, or 2 to 3 with `--notes own` below. PDFs can have up to 40 pages. Photos opened or dropped together, up to 40, are read as the pages of one score, in the order of their names, so a piece photographed page by page is one score. If a page can't be read, it's left out and the app says which one. Your sheets are listed in the library, so you can come back to them.
 
 The rest of the app can be used while a sheet is read. It's in the library at once, as a tile saying how it's getting on: waiting its turn, and behind how many, as sheets are read one at a time; or the page being read and the time so far. Opened, it shows the same, and opens into the score when it's done. Cancel, on either, stops the reading and removes the sheet; the pages of a PDF read so far go with it. A sheet read while you were elsewhere says so, with Open, and one that couldn't be read stays in the library saying why, with Try again and Remove.
 

@@ -5521,6 +5521,31 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         check("Cancel where it's shown stops it and goes back to the library", third not in listed(base) and page.locator(f'#historyList a[data-score="{third}"]').count() == 0)
 
 
+def test_photos_opened_together_are_one_score(page) -> None:
+    """Only the first of several files chosen or dropped was opened, and the rest were dropped without a
+    word, so a piece photographed page by page couldn't be one score."""
+    page_photo = lambda name, width: {"name": name, "mimeType": "image/png", "buffer": png(width, 320, tuple(range(120, 200, 16)))}
+    widths = lambda: page.evaluate("() => [...document.querySelectorAll('.imageBox img')].map(image => image.naturalWidth)")
+    with slow_reader(0.2) as base:
+        page.goto(base)
+        page.set_input_files("#file", files=[page_photo("etude page 10.png", 490), page_photo("etude page 2.png", 482), page_photo("etude page 1.png", 481)])
+        page.wait_for_selector("#pages svg", timeout=30000)
+        page.wait_for_function("() => document.querySelectorAll('.imageBox img').length === 3 && [...document.querySelectorAll('.imageBox img')].every(image => image.naturalWidth)")
+        check("photos chosen together are read as the pages of one score", len(listed(base)) == 1 and page.inner_text("#scoreName") == "Etude page 1", (len(listed(base)), page.inner_text("#scoreName")))
+        check("in the order of their names, page 2 before page 10", widths() == [481, 482, 490], widths())
+
+        page.goto(base)
+        page.evaluate("""async pages => {
+            const dropped = new DataTransfer();
+            for (const [name, bytes] of pages) dropped.items.add(new File([new Uint8Array(bytes)], name, { type: "image/png" }));
+            document.body.dispatchEvent(new DragEvent("drop", { dataTransfer: dropped, bubbles: true, cancelable: true }));
+        }""", [["dropped b.png", list(png(484, 320, tuple(range(120, 200, 16))))], ["dropped a.png", list(png(483, 320, tuple(range(120, 200, 16))))]])
+        page.wait_for_function("() => document.querySelectorAll('.imageBox img').length === 2 && [...document.querySelectorAll('.imageBox img')].every(image => image.naturalWidth)", timeout=30000)
+        check("and so are photos dropped together", len(listed(base)) == 2 and widths() == [483, 484], widths())
+        # The library listed it as being read, and asks again until it's told otherwise.
+        page.wait_for_function("() => !sheets.some(sheet => sheet.status === 'processing')")
+
+
 def test_failed_requests_say_so(context, base: str, created: list[str]) -> None:
     """A plain-text 500 showed "Unexpected token 'I', "Internal S"... is not valid JSON", a server that
     had gone showed "Failed to fetch", an upload that went wrong said nothing once its toast had gone,
@@ -6087,6 +6112,7 @@ def main() -> None:
             test_found_by_the_bug_hunt(context, base, created)
             test_phone(context, base, arguments.shots, created)
             test_reading_leaves_the_window_free(page, arguments.shots)
+            test_photos_opened_together_are_one_score(page)
             test_failed_requests_say_so(context, base, created)
             test_the_original_sheet(page, base, arguments.shots, created)
             test_marking_checked_with_things_still_listed(page, base, created)

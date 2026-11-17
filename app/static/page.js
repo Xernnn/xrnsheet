@@ -365,23 +365,37 @@ function closeScore(gone = false) {
   show("start");
 }
 
-async function upload(file) {
-  if (!file) return;
+// Photos chosen or dropped together are the pages of one sheet, in the order of their names, so
+// "page 2" comes before "page 10" whatever order they were picked or dropped in. A PDF or a MusicXML
+// file is a score of its own. Only the first file of several used to be opened.
+const OWN_SCORE = /\.(pdf|musicxml|xml|mxl)$/i;
+
+function sentTogether(files) {
+  const photos = files.filter(file => !OWN_SCORE.test(file.name)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  return [...(photos.length ? [photos] : []), ...files.filter(file => OWN_SCORE.test(file.name)).map(file => [file])];
+}
+
+// The first score opens, and the others are in the library.
+async function upload(files) {
+  const groups = sentTogether([...(files ?? [])]);
+  if (!groups.length) return;
   message("");
-  toast(`Opening ${file.name}…`);
-  const body = new FormData();
-  body.append("file", file);
-  let data;
-  try {
-    data = await request("/api/scores", { method: "POST", body });
-  } catch (error) {
-    // Said where it stays, with the file's name: one that went wrong said nothing at all.
-    hideToast();
-    message(`${file.name}: ${error.message}`);
-    return;
+  const failed = [];
+  let first = null;
+  for (const group of groups) {
+    toast(group.length > 1 ? `Opening ${group.length} pages…` : `Opening ${group[0].name}…`);
+    const body = new FormData();
+    for (const file of group) body.append("file", file);
+    try {
+      const made = await request("/api/scores", { method: "POST", body });
+      first ??= made.id;
+    } catch (error) {
+      failed.push(`${group[0].name}: ${error.message}`); // Said where it stays, with the file's name.
+    }
   }
   hideToast();
-  await openScore(data.id);
+  if (first) await openScore(first);
+  if (failed.length) message(failed.join(" "));
   drawHistory(); // A photo or a PDF is listed at once, as it's read.
 }
 
@@ -1074,13 +1088,13 @@ function setUpPage() {
   $("checkedAnyway").addEventListener("click", () => setChecked(true));
   for (const id of ["file", "camera"]) {
     // Cleared afterwards, so choosing the same file again still counts as a choice.
-    $(id).addEventListener("change", event => { upload(event.target.files[0]); event.target.value = ""; });
+    $(id).addEventListener("change", event => { upload(event.target.files); event.target.value = ""; });
   }
   // A file dropped anywhere opens, as Open does.
   const carriesFile = event => [...(event.dataTransfer?.types ?? [])].includes("Files");
   for (const name of ["dragenter", "dragover"]) document.addEventListener(name, event => { if (!carriesFile(event)) return; event.preventDefault(); document.body.classList.add("dropping"); });
   for (const name of ["dragleave", "drop"]) document.addEventListener(name, event => { if (!carriesFile(event)) return; event.preventDefault(); document.body.classList.remove("dropping"); });
-  document.addEventListener("drop", event => { if (carriesFile(event)) upload(event.dataTransfer.files[0]); });
+  document.addEventListener("drop", event => { if (carriesFile(event)) upload(event.dataTransfer.files); });
   document.querySelectorAll("label.button").forEach(label => {
     label.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); } });
   });
