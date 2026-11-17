@@ -63,6 +63,7 @@ LONGEST_PDF_PAGE = 5000
 PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
 DRAWINGS_KEPT = 4  # A long score's drawing is a few megabytes, so only the last few are kept.
+VERSIONS_KEPT = 100  # The versions an edit leaves to undo to, besides the first (see prune_versions).
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
 SOURCE_FILE = "source.json"  # The name of the file a sheet is read from, to call it by until it has a title.
@@ -80,6 +81,7 @@ FIRST_VERSION_HEAD = 8192  # Where a file names the program that wrote it, near 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     fail_interrupted_jobs()
+    clear_page_pictures()
     empty_trash()
     yield
     stop_reading()
@@ -442,7 +444,22 @@ def save_version(folder: Path, root: ET.Element) -> str:
     text = to_text(root)
     write_whole(folder / f"version_{number:04d}.musicxml", text)
     shutil.rmtree(folder / "undone", ignore_errors=True)
+    prune_versions(folder)
     return text
+
+
+def prune_versions(folder: Path) -> None:
+    """Keep the last VERSIONS_KEPT versions to undo to, and the first, and delete those between.
+
+    Every edit saves the whole score again, so a long session on a dense score left hundreds of
+    megabytes. The first is kept whatever its age: for a sheet read from a photo it's the reading as
+    the reader made it, which the real-world benchmark compares the corrected score with, and for an
+    older score opened from a file it's how the library knows where it came from. So undo goes back
+    through the last hundred edits, and then to the score as it began.
+    """
+    saved = versions(folder)
+    for old in saved[1:-VERSIONS_KEPT]:
+        old.unlink(missing_ok=True)
 
 
 def pdf_to_images(path: Path) -> tuple[list[Path], str]:
@@ -560,6 +577,19 @@ def recognize_job(folder: Path, upload: Path) -> None:
     except Exception as error:  # A background thread has no one else to report to.
         print(f"recognition error: {error}", file=sys.stderr)
         write_status(folder, "failed", "Recognition failed.")
+    finally:
+        # A PDF's pages, drawn at 250 dots an inch, are only for the reader: what's shown beside the
+        # score is the page.jpg it keeps of each, and Try again draws them afresh.
+        shutil.rmtree(folder / "pages", ignore_errors=True)
+
+
+def clear_page_pictures() -> None:
+    """Remove the pictures of PDF pages that sheets read before they were removed once read left behind.
+
+    Nothing is being read as the app starts, and nothing else looks at them.
+    """
+    for pictures in JOB_DIR.glob("*/pages") if JOB_DIR.exists() else []:
+        shutil.rmtree(pictures, ignore_errors=True)
 
 
 def name_after_file(folder: Path, root: ET.Element) -> None:

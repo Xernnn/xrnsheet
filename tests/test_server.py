@@ -894,6 +894,53 @@ def test_versions_past_9999_keep_every_edit_and_undo_in_order(client, ready_scor
     assert pitches(client, ready_score)[0] == "E"
 
 
+def test_only_the_last_versions_are_kept_with_the_first(client, monkeypatch):
+    """Every edit kept a whole copy of the score for ever, so a long session on a dense score filled
+    hundreds of megabytes. The first stays: it's the reading the real-world benchmark compares with,
+    and how a score opened from a file is known when it predates opened.json."""
+    monkeypatch.setattr(server, "VERSIONS_KEPT", 3)
+    root = parsed(note())
+    identification = ET.Element("identification")
+    ET.SubElement(ET.SubElement(identification, "encoding"), "software").text = "MuseScore 2.1.0"
+    root.insert(0, identification)
+    score_id = client.post("/api/scores", files={"file": ("old.musicxml", io.BytesIO(to_text(root).encode()))}).json()["id"]
+    folder = server.JOB_DIR / score_id
+    (folder / "opened.json").unlink()
+    for title in "ABCDEF":
+        assert client.post(f"/api/scores/{score_id}/title", json={"title": title}).status_code == 200
+    assert [path.name for path in server.versions(folder)] == ["version_0000.musicxml", "version_0004.musicxml", "version_0005.musicxml", "version_0006.musicxml"]
+    assert {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}[score_id]["opened"] is True
+    titles = []
+    while client.get(f"/api/scores/{score_id}").json()["canUndo"]:
+        titles.append(client.post(f"/api/scores/{score_id}/undo").json()["title"])
+    assert titles == ["E", "D", ""], "undo walks back through what's kept, to the score as it was opened"
+    assert client.post(f"/api/scores/{score_id}/redo").json()["title"] == "D"
+
+
+def test_a_pdfs_page_pictures_go_once_it_is_read_and_what_the_score_uses_stays(client, monkeypatch):
+    """Each page of a PDF was kept as a 250-dpi PNG for good, though only the reader looks at them. The
+    upload, the pictures shown beside the score and the first version are still used, so they stay."""
+    from chords import corrections
+
+    monkeypatch.setattr(server, "recognize_page", fake_recognizer())
+    folder, upload = job_for_pdf(3)
+    server.recognize_job(folder, upload)
+    assert not (folder / "pages").exists()
+    assert upload.exists() and (folder / "version_0000.musicxml").exists()
+    assert all(client.get(f"/api/scores/{folder.name}/source/{number}.jpg").status_code == 200 for number in (1, 2, 3))
+    (folder / "checked.json").write_text("{}", encoding="utf-8")
+    gathered = corrections.export(server.JOB_DIR, server.JOB_DIR / ".corrections")  # It hashes the upload, and crops page.jpg.
+    assert gathered["train_sheets"] + gathered["test_sheets"] == 1 and gathered["confirmed"] == 3
+
+    left = server.JOB_DIR / ("d" * 32)  # Read before page pictures were removed.
+    (left / "pages").mkdir(parents=True)
+    (left / "pages" / "page_001.png").write_bytes(b"png")
+    server.write_status(left, "ready")
+    with TestClient(server.app):  # Starting the app clears them away.
+        pass
+    assert not (left / "pages").exists() and (left / "status.json").exists()
+
+
 def test_a_selection_holding_both_ends_of_a_tie_is_respelled_once(client):
     score_id = "c" * 32
     folder = server.JOB_DIR / score_id
