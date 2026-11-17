@@ -1091,6 +1091,48 @@ def upload_photo(client, name, shade="black"):
     return response.json()["id"]
 
 
+def test_photos_sent_together_are_read_as_the_pages_of_one_score(client, monkeypatch):
+    """Only the first of several files was opened, so a piece photographed page by page couldn't be
+    one score: each photo had to be a score of its own, or be made into a PDF elsewhere first."""
+    seen = []
+    fake = fake_recognizer()
+    monkeypatch.setattr(server, "recognize_page", lambda image, out_dir: seen.append(image.read_bytes()) or fake(image, out_dir))
+    pages = [("autumn leaves 1.png", photo("black")), ("autumn leaves 2.png", photo("gray")), ("autumn leaves 3.jpg", photo("red"))]
+    response = client.post("/api/scores", files=[("file", (name, io.BytesIO(data))) for name, data in pages])
+    assert response.status_code == 200
+    score_id = response.json()["id"]
+    assert until(lambda: client.get(f"/api/scores/{score_id}").json()["status"] == "ready")
+    data = client.get(f"/api/scores/{score_id}").json()
+    assert seen == [data for _, data in pages], "read in the order they were sent"
+    assert data["sourcePages"] == [1, 2, 3] and [chord["page"] for chord in data["chords"]] == [1, 2, 3]
+    assert data["title"] == "Autumn leaves 1"
+    assert {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}[score_id]["pages"] == 3
+
+    seen.clear()
+    server.write_status(server.JOB_DIR / score_id, "failed", "Recognition failed.")
+    assert client.post(f"/api/scores/{score_id}/retry").status_code == 200
+    assert until(lambda: client.get(f"/api/scores/{score_id}").json()["status"] == "ready") and len(seen) == 3, "Try again reads every page"
+
+
+@pytest.mark.parametrize("names", [("page.png", "piece.pdf"), ("page.png", "song.musicxml"), ("a.pdf", "b.pdf")])
+def test_only_photos_are_read_together(client, names):
+    files = [("file", (name, io.BytesIO(photo()))) for name in names]
+    response = client.post("/api/scores", files=files)
+    assert response.status_code == 415 and "on its own" in response.json()["detail"] and client.get("/api/scores").json() == []
+
+
+def test_too_many_photos_together_are_refused(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_PDF_PAGES", 2)
+    response = client.post("/api/scores", files=[("file", (f"{number}.png", io.BytesIO(photo()))) for number in range(3)])
+    assert response.status_code == 422 and "2" in response.json()["detail"] and client.get("/api/scores").json() == []
+
+
+def test_one_bad_photo_among_several_refuses_them_all(client):
+    files = [("file", ("1.png", io.BytesIO(photo()))), ("file", ("2.png", io.BytesIO(b"not a photo")))]
+    response = client.post("/api/scores", files=files)
+    assert response.status_code == 415 and "2.png" in response.json()["detail"] and client.get("/api/scores").json() == []
+
+
 def until(condition, seconds=20):
     for _ in range(int(seconds / 0.05)):
         if condition():
@@ -1332,14 +1374,20 @@ def upload_in_pieces(size, stated):
 
 
 def test_an_upload_that_says_it_is_too_large_is_refused_before_it_is_taken_in(client, monkeypatch):
-    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    monkeypatch.setattr(server, "MAX_SENT_BYTES", 1024 * 1024)
     assert upload_in_pieces(2 * 1024 * 1024, stated=True) == (413, 0)
 
 
 def test_an_upload_that_does_not_say_its_size_stops_being_taken_in_at_the_limit(client, monkeypatch):
-    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    monkeypatch.setattr(server, "MAX_SENT_BYTES", 1024 * 1024)
     status, taken = upload_in_pieces(4 * 1024 * 1024, stated=False)
     assert status == 413 and taken * PIECE <= 2 * 1024 * 1024
+
+
+def test_one_file_over_its_own_limit_is_refused_though_several_together_may_be_larger(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    response = client.post("/api/scores", files={"file": ("page.png", photo() + b"\0" * 2 * 1024 * 1024)})
+    assert response.status_code == 413 and response.json()["detail"] == server.TOO_LARGE
 
 
 def test_an_upload_within_the_limit_is_still_taken(client, monkeypatch):

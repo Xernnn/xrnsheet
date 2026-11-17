@@ -25,12 +25,13 @@ from fractions import Fraction
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote, urlsplit
 
 import uvicorn
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -54,8 +55,10 @@ IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".pdf"
 SCORE_TYPES = {".musicxml", ".xml", ".mxl"}
 ALLOWED_TYPES = IMAGE_TYPES | SCORE_TYPES
 MAX_UPLOAD_BYTES = 40 * 1024 * 1024
+MAX_SENT_BYTES = 160 * 1024 * 1024  # Several photos sent together, as one sheet's pages, in all.
 FORM_BYTES = 64 * 1024  # What an upload wraps its file in: the file's name and type, and the form's edges.
 TOO_LARGE = "That file is too large. The limit is 40 MB."
+TOO_MUCH = "That's too much to open at once. The limit is 40 MB a file, and 160 MB in all."
 MAX_PDF_PAGES = 40
 # A PDF page is drawn at 250 dots an inch, but no larger than this on its longest side: a page can
 # say it's 200 inches across, which would take gigabytes. At 250 dots an inch, A3 is about 4,100.
@@ -127,7 +130,8 @@ class SizeLimit:
     An upload is saved to disk as it arrives and only then read and measured, so one far over the
     limit would fill the disk and then the memory before being refused. A request that says it's
     too large is refused before any of it is read, and one that doesn't say is stopped as soon as
-    it passes the limit.
+    it passes the limit. The limit is for everything sent at once, as several photos can be sent
+    together as one sheet's pages; each file is held to MAX_UPLOAD_BYTES once it's in.
     """
 
     def __init__(self, inner: ASGIApp) -> None:
@@ -137,10 +141,10 @@ class SizeLimit:
         if scope["type"] != "http":
             await self.inner(scope, receive, send)
             return
-        limit = MAX_UPLOAD_BYTES + FORM_BYTES
+        limit = MAX_SENT_BYTES + FORM_BYTES
         stated = Headers(scope=scope).get("content-length", "")
         if stated.isdigit() and int(stated) > limit:
-            await JSONResponse({"detail": TOO_LARGE}, status_code=413)(scope, receive, send)
+            await JSONResponse({"detail": TOO_MUCH}, status_code=413)(scope, receive, send)
             return
         taken = 0
 
@@ -149,7 +153,7 @@ class SizeLimit:
             message = await receive()
             taken += len(message.get("body", b""))
             if taken > limit:
-                raise HTTPException(413, TOO_LARGE)
+                raise HTTPException(413, TOO_MUCH)
             return message
 
         await self.inner(scope, receive_within_limit, send)
@@ -543,9 +547,14 @@ def given_up(folder: Path) -> bool:
     return stopping.is_set() or folder.name in cancelled
 
 
+def uploaded_pages(folder: Path, upload: Path) -> list[Path]:
+    """The photos a sheet is read from, in their order: the first, kept as upload.*, then the rest."""
+    return [upload, *sorted(folder.glob("upload_*.*"), key=lambda path: path.stem)]
+
+
 def recognize_job(folder: Path, upload: Path) -> None:
     try:
-        images, note = pdf_to_images(upload) if upload.suffix.lower() == ".pdf" else ([upload], "")
+        images, note = pdf_to_images(upload) if upload.suffix.lower() == ".pdf" else (uploaded_pages(folder, upload), "")
         if not images:
             write_status(folder, "failed", "That PDF has no pages.")
             return
@@ -692,23 +701,40 @@ def unfinished(folder: Path, status: dict) -> dict:
 
 
 @app.post("/api/scores")
-async def create_score(file: UploadFile) -> dict:
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in ALLOWED_TYPES:
+async def create_score(file: Annotated[list[UploadFile], File()]) -> dict:
+    """Open a photo, a PDF or a MusicXML file as a new score, or several photos as the pages of one.
+
+    Only the first of several files used to be opened, so a piece photographed page by page couldn't
+    be one score. Photos sent together are now read as the pages of one sheet, in the order they
+    came, as a PDF's pages are. A PDF or a MusicXML file is a score of its own, so it comes alone.
+    """
+    names = [Path(item.filename or "").name for item in file]
+    suffixes = [Path(name).suffix.lower() for name in names]
+    if any(suffix not in ALLOWED_TYPES for suffix in suffixes):
         raise HTTPException(415, "Please upload a photo, a PDF or a MusicXML file.")
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, TOO_LARGE)
-    if suffix in SCORE_TYPES:
-        return open_score_file(data, suffix)
-    if suffix != ".pdf" and cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE) is None:
-        raise HTTPException(415, "That file couldn't be opened as an image.")
+    if len(file) > 1 and any(suffix == ".pdf" or suffix in SCORE_TYPES for suffix in suffixes):
+        raise HTTPException(415, "Only photos are read together, as the pages of one sheet. Open a PDF or a MusicXML file on its own.")
+    if len(file) > MAX_PDF_PAGES:
+        raise HTTPException(422, f"Up to {MAX_PDF_PAGES} pages can be read together.")
+    sent = []
+    for item in file:
+        data = await item.read()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, TOO_LARGE)
+        sent.append(data)
+    if suffixes[0] in SCORE_TYPES:
+        return open_score_file(sent[0], suffixes[0])
+    for name, suffix, data in zip(names, suffixes, sent):
+        if suffix != ".pdf" and cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE) is None:
+            raise HTTPException(415, f"{name} couldn't be opened as an image." if len(sent) > 1 else "That file couldn't be opened as an image.")
     score_id = uuid.uuid4().hex
     folder = JOB_DIR / score_id
     folder.mkdir(parents=True)
-    upload = folder / f"upload{suffix}"
-    upload.write_bytes(data)
-    write_whole(folder / SOURCE_FILE, json.dumps({"name": Path(file.filename or "").name[:200]}))
+    upload = folder / f"upload{suffixes[0]}"
+    upload.write_bytes(sent[0])
+    for number, (suffix, data) in enumerate(zip(suffixes[1:], sent[1:]), start=2):
+        (folder / f"upload_{number:03d}{suffix}").write_bytes(data)  # See uploaded_pages.
+    write_whole(folder / SOURCE_FILE, json.dumps({"name": names[0][:200]}))
     write_status(folder, "processing")
     queue_reading(folder, upload)
     return {"id": score_id}
