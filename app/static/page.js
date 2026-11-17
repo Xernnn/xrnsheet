@@ -314,11 +314,13 @@ function openScore(id) {
   return poll();
 }
 
-// The score stays where it is, as it's saved with every edit, and the library lists it.
-function closeScore() {
+// The score stays where it is, as it's saved with every edit, and the library lists it. The library
+// is an entry of its own in the window's history, so Back opens the score again, unless the score
+// has gone, which takes its entry with it.
+function closeScore(gone = false) {
   opened++;
   forgetPlayback();
-  history.replaceState(null, "", " ");
+  if (location.hash) history[gone ? "replaceState" : "pushState"](null, "", location.pathname + location.search);
   scoreId = null;
   score = null;
   selected = null;
@@ -379,7 +381,7 @@ async function removeSheet(id) {
     drawHistory();
     return;
   }
-  if (id === scoreId) closeScore();
+  if (id === scoreId) closeScore(true);
   sheets = sheets.filter(item => item.id !== id);
   drawTiles();
   drawHistory();
@@ -406,7 +408,7 @@ async function poll() {
   const turn = opened;
   const response = await fetch(`/api/scores/${scoreId}`);
   if (turn !== opened) return; // Something else has been opened meanwhile.
-  if (!response.ok) { closeScore(); drawHistory(); return; }
+  if (!response.ok) { closeScore(true); drawHistory(); return; }
   const data = await response.json();
   if (turn !== opened) return;
   if (data.status !== "ready") {
@@ -1034,6 +1036,8 @@ function setUpPage() {
   $("readingLibrary").addEventListener("click", goHome);
   $("brand").addEventListener("click", goHome);
   $("toastClose").addEventListener("click", hideToast);
+  addEventListener("hashchange", followAddress);
+  addEventListener("popstate", followAddress);
   setInterval(tickReading, 1000);
 }
 
@@ -1067,4 +1071,14 @@ function setChecked(on) {
 function goHome() {
   if (document.body.classList.contains("atHome")) return;
   closeScore();
+}
+
+// Each score opened is an entry in the window's history, named in the address. Back and Forward, a
+// mouse's back button, or another score's address typed in open what the address names: that score,
+// or with none the library. They changed only the address, so it and the score shown drifted apart.
+function followAddress() {
+  const id = location.hash.slice(1);
+  if (id === (scoreId ?? "")) return;
+  if (id) openScore(id);
+  else closeScore();
 }

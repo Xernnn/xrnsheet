@@ -3549,6 +3549,41 @@ def test_library(page, base: str, created: list[str]) -> None:
     check("and shows each score as a page", page.locator(f'#historyList a[data-score="{first}"] img').count() == 1)
 
 
+def test_back_and_forward_follow_the_address(page, base: str, created: list[str]) -> None:
+    """Back and Forward changed the address but not the score shown, so the two drifted apart, and a
+    reload then opened another score than the one on screen. Another score's address did nothing."""
+    first = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Going Back One"})["id"]
+    second = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Going Back Two"})["id"]
+    created.extend([first, second])
+    opened = lambda score_id: page.wait_for_function("id => scoreId === id && score !== null && !document.getElementById('workspace').hidden", arg=score_id)
+    page.goto(base)
+    page.click(f'#historyList a[data-score="{first}"]')
+    opened(first)
+    page.click("#libraryToggle")
+    page.click(f'#historyList a[data-score="{second}"]')
+    opened(second)
+    page.go_back()
+    opened(first)
+    check("Back opens the score opened before", page.inner_text("#scoreName") == "Going Back One" and page.url.endswith(f"#{first}"), page.url)
+    page.go_back()
+    page.wait_for_function("() => document.body.classList.contains('atHome')")
+    check("and Back again goes to the library", page.evaluate("() => scoreId") is None and "#" not in page.url, page.url)
+    page.go_forward()
+    opened(first)
+    check("Forward opens it again", page.inner_text("#scoreName") == "Going Back One")
+    page.click("#brand")
+    page.wait_for_function("() => document.body.classList.contains('atHome')")
+    page.go_back()
+    opened(first)
+    check("Back from the library the logo went to opens the score it left", page.inner_text("#scoreName") == "Going Back One")
+    page.evaluate("id => { location.hash = id; }", second)
+    opened(second)
+    check("another score's address in the same window opens it", page.inner_text("#scoreName") == "Going Back Two")
+    page.reload()
+    opened(second)
+    check("and a reload opens the score that was shown", page.inner_text("#scoreName") == "Going Back Two")
+
+
 def test_library_search_by_composer(page, base: str, created: list[str]) -> None:
     """The library finds a score by who wrote it, and says when a search finds nothing."""
     score_id = written_melody(page, base, created, tune="cdef")
@@ -5980,6 +6015,7 @@ def main() -> None:
             test_the_zoom_menu_reads_in_full(page, base, created)
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
+            test_back_and_forward_follow_the_address(page, base, created)
             test_library_search_by_composer(page, base, created)
             test_deleting_a_score(page, base, created)
             test_another_score_opened_while_writing(page, base, created)
