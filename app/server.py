@@ -1738,7 +1738,22 @@ def music_glyphs(request: Request) -> Response:
     return Response(script, media_type="text/javascript", headers=headers)
 
 
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+class CheckedStaticFiles(StaticFiles):
+    """Serve the page's own files, telling the browser to ask each time whether it has the latest.
+
+    With only an ETag, a browser takes a file as fresh for a while without asking, about a tenth of
+    its age. The installed app's files all carry the date of their commit, and the page is always at
+    the same address, so after an update a window could load the new page with some of the old
+    scripts, or the old page with some of the new. Asked each time, an unchanged file is a 304.
+    """
+
+    def file_response(self, *args, **kwargs) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", CheckedStaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
 def stop_when_stdin_closes() -> None:

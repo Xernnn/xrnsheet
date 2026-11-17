@@ -1623,6 +1623,16 @@ def test_the_window_is_sent_only_the_symbols_it_draws(client):
     assert again.status_code == 304 and response.headers["cache-control"] == "no-cache", "the browser checks it has the latest"
 
 
+@pytest.mark.parametrize("path", ["/", "/index.html", "/page.js", "/editor.js", "/app.css"])
+def test_the_pages_own_files_are_checked_for_a_newer_copy_each_time(client, path):
+    """With only an ETag, a browser took each script as fresh for a while without asking, so after an
+    update a window could run the new page with some of the old scripts."""
+    response = client.get(path)
+    assert response.status_code == 200 and response.headers["cache-control"] == "no-cache" and response.headers["etag"]
+    again = client.get(path, headers={"If-None-Match": response.headers["etag"]})
+    assert again.status_code == 304 and again.headers["cache-control"] == "no-cache", "unchanged, it isn't sent again"
+
+
 def test_a_drawing_just_made_is_kept_for_the_next_time_it_is_asked_for(client):
     """Opening a score again, and undoing, ask for a drawing the server has just made."""
     score_id = blank(client, measures=2)
