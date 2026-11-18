@@ -157,6 +157,25 @@ def test_sheets_are_listed_with_how_far_they_have_got(client, ready_score):
     assert sheets[unfinished.name]["status"] == "processing"
 
 
+def test_the_library_reads_a_score_only_when_it_has_changed(client, monkeypatch):
+    """Each listing parsed every score's latest MusicXML in full for its title, every 2 s while a sheet
+    was read and after every edit with the library open."""
+    first, second = blank(client, title="Blue Bossa"), blank(client, title="Solar")
+    read = []
+    title_of = server.structure.title_of
+    monkeypatch.setattr(server.structure, "title_of", lambda root: read.append(root) or title_of(root))
+    titles = lambda: {sheet["id"]: sheet["title"] for sheet in client.get("/api/scores").json()}
+    assert titles() == {first: "Blue Bossa", second: "Solar"}
+    read.clear()
+    assert titles() == {first: "Blue Bossa", second: "Solar"} and read == [], "unchanged, neither is read again"
+    client.post(f"/api/scores/{second}/title", json={"title": "Nardis"})
+    read.clear()
+    assert titles() == {first: "Blue Bossa", second: "Nardis"} and len(read) == 1
+    client.post(f"/api/scores/{second}/undo")
+    client.post(f"/api/scores/{second}/title", json={"title": "Footprints"})  # The same version number as the one undone.
+    assert titles()[second] == "Footprints"
+
+
 def test_a_missing_source_page_is_not_found(client, ready_score):
     assert client.get(f"/api/scores/{ready_score}/source/7.jpg").status_code == 404
 
@@ -233,6 +252,22 @@ def test_a_chord_missed_is_added_where_it_was_clicked_on_the_original(client, mo
     client.post(f"{url}/bars", json={"action": "delete", "note": sixth.find("note").get("id")})
     refused = client.post(f"{url}/chords/at", json={"measure": 5, "onset": 0.0, "text": "C"})
     assert refused.status_code == 422 and "deleted" in refused.json()["detail"]
+
+
+@pytest.mark.parametrize("onset", ["1e400", "-1e400", "NaN", "1e300", "4", "2.0"])
+def test_a_chord_that_cant_be_added_from_the_original_leaves_no_box_behind(client, monkeypatch, onset):
+    """A moment no number can hold was a 500, one past the bar was saved, and a refused chord still
+    wrote its box, over the box of the chord already there."""
+    monkeypatch.setattr(server, "recognize_page", page_with_its_places)
+    folder, upload = job_for_pdf(1)
+    server.recognize_job(folder, upload)
+    url = f"/api/scores/{folder.name}"
+    client.post(f"{url}/chords/at", json={"measure": 1, "onset": 2.0, "text": "G7", "page": 1, "box": [690, 75, 730, 95]})
+    before, kept = server.versions(folder), server.added_chords(folder)
+    body = f'{{"measure": 1, "onset": {onset}, "text": "A7", "page": 1, "box": [1, 2, 3, 4]}}'
+    response = client.post(f"{url}/chords/at", content=body, headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+    assert server.versions(folder) == before and server.added_chords(folder) == kept
 
 
 def test_a_page_read_before_its_places_were_kept_says_so(client, monkeypatch):
@@ -711,6 +746,11 @@ REFUSED_EDITS = [
     ("bars", {"action": "barsPerLine", "count": 99, "note": "note0"}),
     ("bars", {"action": "pickup", "count": 2}),
     ("bars", {"action": "pickup", "count": 16}),
+    # A chord at a moment past its bar's end was saved, at onset 1e+300, and a tuplet of no notes was a 500.
+    ("chords/at", {"measure": 0, "onset": 1e300, "text": "C"}),
+    ("chords/at", {"measure": 0, "onset": 4, "text": "C"}),
+    ("paste", {"at": "note0", "events": [{"type": "eighth", "pitches": [["C", 0, 4]], "triplet": 0, "actual": 0}]}),
+    ("paste", {"at": "note0", "events": [{"type": "eighth", "pitches": [["C", 0, 4]], "triplet": 0, "actual": -3}]}),
 ]
 
 
@@ -894,6 +934,53 @@ def test_versions_past_9999_keep_every_edit_and_undo_in_order(client, ready_scor
     assert pitches(client, ready_score)[0] == "E"
 
 
+def test_only_the_last_versions_are_kept_with_the_first(client, monkeypatch):
+    """Every edit kept a whole copy of the score for ever, so a long session on a dense score filled
+    hundreds of megabytes. The first stays: it's the reading the real-world benchmark compares with,
+    and how a score opened from a file is known when it predates opened.json."""
+    monkeypatch.setattr(server, "VERSIONS_KEPT", 3)
+    root = parsed(note())
+    identification = ET.Element("identification")
+    ET.SubElement(ET.SubElement(identification, "encoding"), "software").text = "MuseScore 2.1.0"
+    root.insert(0, identification)
+    score_id = client.post("/api/scores", files={"file": ("old.musicxml", io.BytesIO(to_text(root).encode()))}).json()["id"]
+    folder = server.JOB_DIR / score_id
+    (folder / "opened.json").unlink()
+    for title in "ABCDEF":
+        assert client.post(f"/api/scores/{score_id}/title", json={"title": title}).status_code == 200
+    assert [path.name for path in server.versions(folder)] == ["version_0000.musicxml", "version_0004.musicxml", "version_0005.musicxml", "version_0006.musicxml"]
+    assert {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}[score_id]["opened"] is True
+    titles = []
+    while client.get(f"/api/scores/{score_id}").json()["canUndo"]:
+        titles.append(client.post(f"/api/scores/{score_id}/undo").json()["title"])
+    assert titles == ["E", "D", ""], "undo walks back through what's kept, to the score as it was opened"
+    assert client.post(f"/api/scores/{score_id}/redo").json()["title"] == "D"
+
+
+def test_a_pdfs_page_pictures_go_once_it_is_read_and_what_the_score_uses_stays(client, monkeypatch):
+    """Each page of a PDF was kept as a 250-dpi PNG for good, though only the reader looks at them. The
+    upload, the pictures shown beside the score and the first version are still used, so they stay."""
+    from chords import corrections
+
+    monkeypatch.setattr(server, "recognize_page", fake_recognizer())
+    folder, upload = job_for_pdf(3)
+    server.recognize_job(folder, upload)
+    assert not (folder / "pages").exists()
+    assert upload.exists() and (folder / "version_0000.musicxml").exists()
+    assert all(client.get(f"/api/scores/{folder.name}/source/{number}.jpg").status_code == 200 for number in (1, 2, 3))
+    (folder / "checked.json").write_text("{}", encoding="utf-8")
+    gathered = corrections.export(server.JOB_DIR, server.JOB_DIR / ".corrections")  # It hashes the upload, and crops page.jpg.
+    assert gathered["train_sheets"] + gathered["test_sheets"] == 1 and gathered["confirmed"] == 3
+
+    left = server.JOB_DIR / ("d" * 32)  # Read before page pictures were removed.
+    (left / "pages").mkdir(parents=True)
+    (left / "pages" / "page_001.png").write_bytes(b"png")
+    server.write_status(left, "ready")
+    with TestClient(server.app):  # Starting the app clears them away.
+        pass
+    assert not (left / "pages").exists() and (left / "status.json").exists()
+
+
 def test_a_selection_holding_both_ends_of_a_tie_is_respelled_once(client):
     score_id = "c" * 32
     folder = server.JOB_DIR / score_id
@@ -1023,6 +1110,73 @@ def upload_photo(client, name, shade="black"):
     response = client.post("/api/scores", files={"file": (name, io.BytesIO(photo(shade)))})
     assert response.status_code == 200
     return response.json()["id"]
+
+
+def test_photos_sent_together_are_read_as_the_pages_of_one_score(client, monkeypatch):
+    """Only the first of several files was opened, so a piece photographed page by page couldn't be
+    one score: each photo had to be a score of its own, or be made into a PDF elsewhere first."""
+    seen = []
+    fake = fake_recognizer()
+    monkeypatch.setattr(server, "recognize_page", lambda image, out_dir: seen.append(image.read_bytes()) or fake(image, out_dir))
+    pages = [("autumn leaves 1.png", photo("black")), ("autumn leaves 2.png", photo("gray")), ("autumn leaves 3.jpg", photo("red"))]
+    response = client.post("/api/scores", files=[("file", (name, io.BytesIO(data))) for name, data in pages])
+    assert response.status_code == 200
+    score_id = response.json()["id"]
+    assert until(lambda: client.get(f"/api/scores/{score_id}").json()["status"] == "ready")
+    data = client.get(f"/api/scores/{score_id}").json()
+    assert seen == [data for _, data in pages], "read in the order they were sent"
+    assert data["sourcePages"] == [1, 2, 3] and [chord["page"] for chord in data["chords"]] == [1, 2, 3]
+    assert data["title"] == "Autumn leaves 1"
+    assert {sheet["id"]: sheet for sheet in client.get("/api/scores").json()}[score_id]["pages"] == 3
+
+    seen.clear()
+    server.write_status(server.JOB_DIR / score_id, "failed", "Recognition failed.")
+    assert client.post(f"/api/scores/{score_id}/retry").status_code == 200
+    assert until(lambda: client.get(f"/api/scores/{score_id}").json()["status"] == "ready") and len(seen) == 3, "Try again reads every page"
+
+
+@pytest.mark.parametrize(("name", "slow"), [("song.musicxml", (server, "open_score_file")), ("page.png", (server.cv2, "imdecode"))], ids=["musicxml", "photo"])
+def test_opening_a_file_holds_up_no_other_request(client, monkeypatch, name, slow):
+    """A file was opened on the server's one event loop: a large MusicXML engraved twice, or a photo
+    decoded, before anything else was answered, as the library's polls or an edit in another window."""
+    entered, release = threading.Event(), threading.Event()
+    real = getattr(*slow)
+
+    def held(*arguments):
+        entered.set()
+        release.wait(10)
+        return real(*arguments)
+
+    monkeypatch.setattr(*slow, held)
+    data = to_text(parsed(note())).encode() if name.endswith(".musicxml") else photo()
+    with TestClient(server.app, base_url="http://127.0.0.1:8000") as shared, ThreadPoolExecutor(1) as pool:  # One event loop for both.
+        opening = pool.submit(shared.post, "/api/scores", files={"file": (name, io.BytesIO(data))})
+        assert entered.wait(10)
+        started = time.monotonic()
+        answered = shared.get("/api/instruments").status_code
+        waited = time.monotonic() - started
+        release.set()
+        assert opening.result().status_code == 200
+    assert answered == 200 and waited < 5, waited
+
+
+@pytest.mark.parametrize("names", [("page.png", "piece.pdf"), ("page.png", "song.musicxml"), ("a.pdf", "b.pdf")])
+def test_only_photos_are_read_together(client, names):
+    files = [("file", (name, io.BytesIO(photo()))) for name in names]
+    response = client.post("/api/scores", files=files)
+    assert response.status_code == 415 and "on its own" in response.json()["detail"] and client.get("/api/scores").json() == []
+
+
+def test_too_many_photos_together_are_refused(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_PDF_PAGES", 2)
+    response = client.post("/api/scores", files=[("file", (f"{number}.png", io.BytesIO(photo()))) for number in range(3)])
+    assert response.status_code == 422 and "2" in response.json()["detail"] and client.get("/api/scores").json() == []
+
+
+def test_one_bad_photo_among_several_refuses_them_all(client):
+    files = [("file", ("1.png", io.BytesIO(photo()))), ("file", ("2.png", io.BytesIO(b"not a photo")))]
+    response = client.post("/api/scores", files=files)
+    assert response.status_code == 415 and "2.png" in response.json()["detail"] and client.get("/api/scores").json() == []
 
 
 def until(condition, seconds=20):
@@ -1266,14 +1420,20 @@ def upload_in_pieces(size, stated):
 
 
 def test_an_upload_that_says_it_is_too_large_is_refused_before_it_is_taken_in(client, monkeypatch):
-    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    monkeypatch.setattr(server, "MAX_SENT_BYTES", 1024 * 1024)
     assert upload_in_pieces(2 * 1024 * 1024, stated=True) == (413, 0)
 
 
 def test_an_upload_that_does_not_say_its_size_stops_being_taken_in_at_the_limit(client, monkeypatch):
-    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    monkeypatch.setattr(server, "MAX_SENT_BYTES", 1024 * 1024)
     status, taken = upload_in_pieces(4 * 1024 * 1024, stated=False)
     assert status == 413 and taken * PIECE <= 2 * 1024 * 1024
+
+
+def test_one_file_over_its_own_limit_is_refused_though_several_together_may_be_larger(client, monkeypatch):
+    monkeypatch.setattr(server, "MAX_UPLOAD_BYTES", 1024 * 1024)
+    response = client.post("/api/scores", files={"file": ("page.png", photo() + b"\0" * 2 * 1024 * 1024)})
+    assert response.status_code == 413 and response.json()["detail"] == server.TOO_LARGE
 
 
 def test_an_upload_within_the_limit_is_still_taken(client, monkeypatch):
@@ -1292,8 +1452,52 @@ def test_a_pdf_page_too_large_to_read_in_full_detail_is_read_at_a_size_that_fits
     document.new_page(2000, 1000)  # 28 inches across, which 250 dots an inch would make 7,000 pixels.
     document.new_page(595, 842)  # A4, which is read in full detail.
     document.save(tmp_path / "upload.pdf")
-    images, _ = server.pdf_to_images(tmp_path / "upload.pdf")
+    document = server.opened_pdf(tmp_path / "upload.pdf")
+    images = [server.draw_pdf_page(document, index, tmp_path / "pages") for index in range(2)]
+    document.close()
     assert [Image.open(image).size for image in images] == [(5000, 2500), (2066, 2924)]
+
+
+def test_a_pdfs_pages_are_drawn_as_they_are_read_so_a_cancel_stops_the_drawing(client, monkeypatch):
+    """Every page of a PDF, up to 40 at 250 dots an inch, was drawn before the first was read, inside
+    the server with no limit, and a cancel waited for all of them."""
+    drawn = []
+
+    def cancelled_during_page_one(image, out_dir):
+        folder = out_dir.parent.parent
+        drawn.append(sorted(path.name for path in (folder / "pages").glob("*.png")))
+        server.cancelled.add(folder.name)
+        return fake_recognizer()(image, out_dir)
+
+    monkeypatch.setattr(server, "recognize_page", cancelled_during_page_one)
+    folder, upload = job_for_pdf(3)
+    server.recognize_job(folder, upload)
+    assert drawn == [["page_001.png"]]
+
+
+def locked_pdf() -> bytes:
+    """A PDF that asks for a password, as a bank statement or a shop's sheet music might."""
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>", b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+               b"<< /Filter /Standard /V 1 /R 2 /O <" + b"11" * 32 + b"> /U <" + b"22" * 32 + b"> /P -4 >>"]
+    out, offsets = b"%PDF-1.4\n", []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    start = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1) + b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    return out + b"trailer\n<< /Size %d /Root 1 0 R /Encrypt 4 0 R /ID [<%s> <%s>] >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, b"ab" * 16, b"ab" * 16, start)
+
+
+@pytest.mark.parametrize(("data", "reason"), [(locked_pdf(), "password"), (b"%PDF-1.4 and nothing more", "couldn't be opened")], ids=["locked", "broken"])
+def test_a_pdf_that_cant_be_opened_says_why(client, data, reason):
+    """A password-protected or broken PDF ended as the general "Recognition failed."."""
+    folder = server.JOB_DIR / ("e" * 32)
+    folder.mkdir()
+    (folder / "upload.pdf").write_bytes(data)
+    server.write_status(folder, "processing")
+    server.recognize_job(folder, folder / "upload.pdf")
+    status = server.read_status(folder)
+    assert status["status"] == "failed" and reason in status["message"], status
 
 
 @pytest.mark.parametrize(("name", "data", "reason"), [
@@ -1621,6 +1825,25 @@ def test_the_window_is_sent_only_the_symbols_it_draws(client):
     assert {f"E08{digit}" for digit in range(10)} | {"E050", "E1D5", "E262"} <= set(sent), "time signature digits, a clef, a note, a sharp"
     again = client.get("/glyphs.js", headers={"If-None-Match": response.headers["etag"]})
     assert again.status_code == 304 and response.headers["cache-control"] == "no-cache", "the browser checks it has the latest"
+
+
+@pytest.mark.parametrize("path", ["/", "/index.html", "/page.js", "/editor.js", "/app.css"])
+def test_the_pages_own_files_are_checked_for_a_newer_copy_each_time(client, path):
+    """With only an ETag, a browser took each script as fresh for a while without asking, so after an
+    update a window could run the new page with some of the old scripts."""
+    response = client.get(path)
+    assert response.status_code == 200 and response.headers["cache-control"] == "no-cache" and response.headers["etag"]
+    again = client.get(path, headers={"If-None-Match": response.headers["etag"]})
+    assert again.status_code == 304 and again.headers["cache-control"] == "no-cache", "unchanged, it isn't sent again"
+
+
+@pytest.mark.parametrize("path", ["/", "/index.html"])
+def test_the_page_may_run_only_its_own_scripts(client, path):
+    """Pages of music go into the window as markup; everything read from a score is escaped today,
+    and a policy keeps a slip in the engraver or a future innerHTML from running anything."""
+    policy = client.get(path).headers["content-security-policy"]
+    assert "default-src 'self'" in policy and "object-src 'none'" in policy and "base-uri 'none'" in policy
+    assert "script-src" not in policy and "'unsafe-eval'" not in policy, "scripts come from the app alone"
 
 
 def test_a_drawing_just_made_is_kept_for_the_next_time_it_is_asked_for(client):

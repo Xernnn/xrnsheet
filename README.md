@@ -44,7 +44,7 @@ Tesseract needs `eng.traineddata` in `/usr/share/tessdata`.
 .venv/bin/python -m app.server
 ```
 
-Open <http://127.0.0.1:8000>. A page takes 10 to 15 seconds on a laptop's CPU, or 2 to 3 with `--notes own` below. PDFs can have up to 40 pages. If a page can't be read, it's left out and the app says which one. Your sheets are listed in the library, so you can come back to them.
+Open <http://127.0.0.1:8000>. A page takes 10 to 15 seconds on a laptop's CPU, or 2 to 3 with `--notes own` below. PDFs can have up to 40 pages. Photos opened or dropped together, up to 40, are read as the pages of one score, in the order of their names, so a piece photographed page by page is one score. If a page can't be read, it's left out and the app says which one. Your sheets are listed in the library, so you can come back to them.
 
 The rest of the app can be used while a sheet is read. It's in the library at once, as a tile saying how it's getting on: waiting its turn, and behind how many, as sheets are read one at a time; or the page being read and the time so far. Opened, it shows the same, and opens into the score when it's done. Cancel, on either, stops the reading and removes the sheet; the pages of a PDF read so far go with it. A sheet read while you were elsewhere says so, with Open, and one that couldn't be read stays in the library saying why, with Try again and Remove.
 
@@ -75,6 +75,13 @@ This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it 
 
 `npm start` in `desktop/` runs the app straight from the checkout, and `npm test` and `npm run test:window` check it. `test:window` starts the real app headless with a throwaway scores folder.
 
+The editor's browser checks, `tests/e2e_editor.py`, aren't run by pytest: they need a running server and a Python with Playwright, which `.venv` doesn't have, so they run on a Python of their own (a venv with only `playwright` in it is enough). With `XRNSHEET_BROWSER` set to a Chromium already installed:
+
+```sh
+.venv/bin/python -m app.server --notes own --port 8011
+<python with playwright> tests/e2e_editor.py --port 8011 --clean
+```
+
 ### The editor
 
 The window is built round the instrument you play, piano, guitar or violin, and has three modes, switched at the top or with Alt+R, Alt+W and Alt+P:
@@ -92,7 +99,7 @@ The mode is kept for next time. A score opens fitted to the width it has: its mu
 - **The command palette** (Ctrl+Shift+P, or the box in the top bar) finds any action by typing part of its name, such as "stacc", "forte", "key d" or "practice mode", and shows its key. Enter runs it. It has every menu item, every mark, note action and mode, the practice tools, the instruments and your scores. In Write, `/` opens it when no note is chosen; with a note chosen `/` still adds a grace note. In Read and Practice `/` always opens it. Firefox and browsers made from it keep Ctrl+Shift+P for a private window, so use `/` or the box there.
 - **The menu** (⋯) has File, Edit, View, Add, Format, Tools and Help, each opening beside it. Help ▸ Keyboard shortcuts lists every key.
 
-**The library** is on the left: your scores as pictures of their first pages, with a search box that finds a score by its title or its composer, New, Open (a photo, a PDF or a MusicXML file) and Take a photo, which uses a phone's camera. With no score open it fills the window, and the logo goes back to it. A score that opens has the window to itself, so the library folds away; its button at the top left or F6 brings it back beside the score, as a list with the open one marked, whose picture follows your edits, and « folds it away again. A file dropped anywhere on the window opens. A tile's ⋮ menu, or a right-click on it, deletes its score, and File ▸ Delete deletes the one open. Nothing asks first: Undo brings it back, and a score deleted stays in the trash, `.trash` in the scores' folder, for a week.
+**The library** is on the left: your scores as pictures of their first pages, with a search box that finds a score by its title or its composer, New, and Open (photos, a PDF or a MusicXML file). With no score open it fills the window, and the logo goes back to it. A score that opens has the window to itself, so the library folds away; its button at the top left or F6 brings it back beside the score, as a list with the open one marked, whose picture follows your edits, and « folds it away again. A file dropped anywhere on the window opens. A tile's ⋮ menu, or a right-click on it, deletes its score, and File ▸ Delete deletes the one open. Nothing asks first: Undo brings it back, and a score deleted stays in the trash, `.trash` in the scores' folder, for a week.
 
 **New score:** Piano, Guitar (with tablature), Violin, Bass guitar (with tablature), Cello, Viola, Ukulele and Voice are large cards. A click on one starts writing for it straight away, in the key and time last chosen, which the dialog names. Its + adds it to the list instead, to choose more instruments. More instruments, key and time opens the rest, chosen by family or by searching: woodwinds from piccolo to contrabassoon with the clarinets and saxophones, accordion, brass, pitched percussion, voices, keyboards, guitars and basses with or without tablature, harp, ukulele, mandolin and banjo, and the bowed strings, each with its clefs and transposition. Searching for "tablature" finds every instrument that has it, here and in Add instruments. Then come the key, time signature, tempo, number of measures, pickup, title and composer. A drum kit and other unpitched percussion aren't there yet, as the score only holds pitched notes.
 

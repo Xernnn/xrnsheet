@@ -141,6 +141,17 @@ async function main() {
   await until('the score to show', () => evaluate(page, 'document.querySelectorAll("svg").length > 0'))
   ok('a file named on a second start opens in the first window, and is kept in the scores folder')
 
+  // The server stopping, as when a crash takes it down mid-edit, starts it again, and the window
+  // comes back to the score that was open rather than to the library.
+  const crashed = await serverPid(base)
+  process.kill(crashed, 'SIGKILL')
+  await until('the window to say it starts again', async () => (await targets(debugPort)).some(target => target.url.startsWith('file:') && target.url.includes('restarting')))
+  page = await until('the score to open again', async () => {
+    const found = await appPage(debugPort)
+    return found.url.endsWith(`#${opened}`) && (await evaluate(found, 'document.querySelectorAll("#pages svg").length > 0')) ? found : null
+  }, 90_000)
+  ok('a server that stops is started again, with the score that was open')
+
   // The app's own new windows open as windows; other sites don't.
   const before = (await targets(debugPort)).filter(target => target.type === 'page').length
   // Not an http address: one would really be handed to the desktop's browser. Other addresses are

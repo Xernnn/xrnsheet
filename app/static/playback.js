@@ -471,10 +471,10 @@ function wavFile(samples, rate) {
 }
 
 async function fetchPlayback() {
-  const response = await fetch(`/api/scores/${scoreId}/playback`);
-  if (!response.ok) return null;
-  playState.data = await response.json();
-  return playState.data;
+  const data = await request(`/api/scores/${scoreId}/playback`).catch(() => null);
+  if (!data) return null;
+  playState.data = data;
+  return data;
 }
 
 // Made by the same code as Play, so the file sounds just as the score does, only faster than real

@@ -11,6 +11,7 @@ import argparse
 import functools
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -25,15 +26,17 @@ from fractions import Fraction
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote, urlsplit
 
 import uvicorn
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -54,8 +57,10 @@ IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".pdf"
 SCORE_TYPES = {".musicxml", ".xml", ".mxl"}
 ALLOWED_TYPES = IMAGE_TYPES | SCORE_TYPES
 MAX_UPLOAD_BYTES = 40 * 1024 * 1024
+MAX_SENT_BYTES = 160 * 1024 * 1024  # Several photos sent together, as one sheet's pages, in all.
 FORM_BYTES = 64 * 1024  # What an upload wraps its file in: the file's name and type, and the form's edges.
 TOO_LARGE = "That file is too large. The limit is 40 MB."
+TOO_MUCH = "That's too much to open at once. The limit is 40 MB a file, and 160 MB in all."
 MAX_PDF_PAGES = 40
 # A PDF page is drawn at 250 dots an inch, but no larger than this on its longest side: a page can
 # say it's 200 inches across, which would take gigabytes. At 250 dots an inch, A3 is about 4,100.
@@ -63,13 +68,18 @@ LONGEST_PDF_PAGE = 5000
 PAGE_TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"
 DRAWINGS_KEPT = 4  # A long score's drawing is a few megabytes, so only the last few are kept.
+VERSIONS_KEPT = 100  # The versions an edit leaves to undo to, besides the first (see prune_versions).
 NO_STAVES = "No staves were found. Try a sharper, straighter photo."
+LOCKED_PDF = "That PDF asks for a password. Open a copy saved without one."
+BROKEN_PDF = "That PDF couldn't be opened."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
 SOURCE_FILE = "source.json"  # The name of the file a sheet is read from, to call it by until it has a title.
 CANCEL_WAIT_SECONDS = 10  # How long a cancel waits for the page being read to stop, which is usually at once.
 TRASH = ".trash"  # In the folder of scores: those deleted, kept a while so a delete can be undone.
 TRASH_SECONDS = 7 * 24 * 60 * 60
 OWN_NAMES = {"127.0.0.1", "localhost"}  # What a browser on this computer calls the app.
+# Verovio puts the font for music symbols in text, such as a tempo's note, into a page's SVG as a data: address.
+PAGE_POLICY = "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 ONLY_READS = {"GET", "HEAD", "OPTIONS"}
 OPENED_FILE = "opened.json"  # Beside a score opened from a MusicXML file.
 LAYOUT_FILE = "layout.json"  # Beside each page read: where its lines of music, barlines and notes are.
@@ -80,6 +90,7 @@ FIRST_VERSION_HEAD = 8192  # Where a file names the program that wrote it, near 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     fail_interrupted_jobs()
+    clear_page_pictures()
     empty_trash()
     yield
     stop_reading()
@@ -125,7 +136,8 @@ class SizeLimit:
     An upload is saved to disk as it arrives and only then read and measured, so one far over the
     limit would fill the disk and then the memory before being refused. A request that says it's
     too large is refused before any of it is read, and one that doesn't say is stopped as soon as
-    it passes the limit.
+    it passes the limit. The limit is for everything sent at once, as several photos can be sent
+    together as one sheet's pages; each file is held to MAX_UPLOAD_BYTES once it's in.
     """
 
     def __init__(self, inner: ASGIApp) -> None:
@@ -135,10 +147,10 @@ class SizeLimit:
         if scope["type"] != "http":
             await self.inner(scope, receive, send)
             return
-        limit = MAX_UPLOAD_BYTES + FORM_BYTES
+        limit = MAX_SENT_BYTES + FORM_BYTES
         stated = Headers(scope=scope).get("content-length", "")
         if stated.isdigit() and int(stated) > limit:
-            await JSONResponse({"detail": TOO_LARGE}, status_code=413)(scope, receive, send)
+            await JSONResponse({"detail": TOO_MUCH}, status_code=413)(scope, receive, send)
             return
         taken = 0
 
@@ -147,7 +159,7 @@ class SizeLimit:
             message = await receive()
             taken += len(message.get("body", b""))
             if taken > limit:
-                raise HTTPException(413, TOO_LARGE)
+                raise HTTPException(413, TOO_MUCH)
             return message
 
         await self.inner(scope, receive_within_limit, send)
@@ -442,25 +454,60 @@ def save_version(folder: Path, root: ET.Element) -> str:
     text = to_text(root)
     write_whole(folder / f"version_{number:04d}.musicxml", text)
     shutil.rmtree(folder / "undone", ignore_errors=True)
+    prune_versions(folder)
     return text
 
 
-def pdf_to_images(path: Path) -> tuple[list[Path], str]:
+def prune_versions(folder: Path) -> None:
+    """Keep the last VERSIONS_KEPT versions to undo to, and the first, and delete those between.
+
+    Every edit saves the whole score again, so a long session on a dense score left hundreds of
+    megabytes. The first is kept whatever its age: for a sheet read from a photo it's the reading as
+    the reader made it, which the real-world benchmark compares the corrected score with, and for an
+    older score opened from a file it's how the library knows where it came from. So undo goes back
+    through the last hundred edits, and then to the score as it began.
+    """
+    saved = versions(folder)
+    for old in saved[1:-VERSIONS_KEPT]:
+        old.unlink(missing_ok=True)
+
+
+class UnopenedPdf(Exception):
+    """A PDF that can't be read, with what to tell the person."""
+
+
+def opened_pdf(path: Path):
+    """Open a PDF to draw its pages, or say why it can't be: a password, or a file that isn't whole."""
     import pypdfium2
 
-    document = pypdfium2.PdfDocument(str(path))
-    folder = path.parent / "pages"
+    try:
+        return pypdfium2.PdfDocument(str(path))
+    except pypdfium2.PdfiumError as error:
+        raise UnopenedPdf(LOCKED_PDF if error.err_code == pypdfium2.raw.FPDF_ERR_PASSWORD else BROKEN_PDF) from error
+
+
+def draw_pdf_page(document, index: int, folder: Path) -> Path:
+    """Draw a page of a PDF for the reader, at 250 dots an inch but no larger than LONGEST_PDF_PAGE."""
     folder.mkdir(exist_ok=True)
-    images = []
-    for index in range(min(len(document), MAX_PDF_PAGES)):
-        image_path = folder / f"page_{index + 1:03d}.png"
-        page = document[index]
-        scale = min(250 / 72, LONGEST_PDF_PAGE / max(*page.get_size(), 1))  # A PDF counts 72 points an inch.
-        page.render(scale=scale).to_pil().convert("RGB").save(image_path)
-        images.append(image_path)
-    note = f"Only the first {MAX_PDF_PAGES} of {len(document)} pages were read." if len(document) > MAX_PDF_PAGES else ""
-    document.close()
-    return images, note
+    image_path = folder / f"page_{index + 1:03d}.png"
+    page = document[index]
+    scale = min(250 / 72, LONGEST_PDF_PAGE / max(*page.get_size(), 1))  # A PDF counts 72 points an inch.
+    page.render(scale=scale).to_pil().convert("RGB").save(image_path)
+    return image_path
+
+
+def pages_to_read(folder: Path, upload: Path, document) -> tuple[list[Callable[[], Path]], str]:
+    """Each page of a sheet, as a picture got only when its turn comes, and a note of any left out.
+
+    A PDF's pages were all drawn before the first was read: up to 40 large pictures, in the server
+    with none of the limits a page's reading has, and a cancel waited for them all. Now each is drawn
+    as it's read, and a cancel stops before the next.
+    """
+    if document is None:
+        return [lambda path=path: path for path in uploaded_pages(folder, upload)], ""
+    count = len(document)
+    note = f"Only the first {MAX_PDF_PAGES} of {count} pages were read." if count > MAX_PDF_PAGES else ""
+    return [functools.partial(draw_pdf_page, document, index, folder / "pages") for index in range(min(count, MAX_PDF_PAGES))], note
 
 
 def recognize_page(image: Path, out_dir: Path) -> str | None:
@@ -526,19 +573,29 @@ def given_up(folder: Path) -> bool:
     return stopping.is_set() or folder.name in cancelled
 
 
+def uploaded_pages(folder: Path, upload: Path) -> list[Path]:
+    """The photos a sheet is read from, in their order: the first, kept as upload.*, then the rest."""
+    return [upload, *sorted(folder.glob("upload_*.*"), key=lambda path: path.stem)]
+
+
 def recognize_job(folder: Path, upload: Path) -> None:
+    document = None
     try:
-        images, note = pdf_to_images(upload) if upload.suffix.lower() == ".pdf" else ([upload], "")
-        if not images:
+        document = opened_pdf(upload) if upload.suffix.lower() == ".pdf" else None
+        pages, note = pages_to_read(folder, upload, document)
+        if not pages:
             write_status(folder, "failed", "That PDF has no pages.")
             return
         read, failed = [], {}
-        for number, image in enumerate(images, start=1):
+        for number, page in enumerate(pages, start=1):
             if given_up(folder):
                 return
-            if len(images) > 1:
-                write_status(folder, "processing", f"Reading page {number} of {len(images)}.")
+            if len(pages) > 1:
+                write_status(folder, "processing", f"Reading page {number} of {len(pages)}.")
+            image = page()
             reason = recognize_page(image, folder / "recognized" / f"page_{number:03d}")
+            if document is not None:
+                image.unlink(missing_ok=True)  # Read, the page is kept as the reader's page.jpg.
             if given_up(folder):
                 return  # Stopping, it's left as still being read, which the next start reports as interrupted.
             if reason is None:
@@ -557,9 +614,26 @@ def recognize_job(folder: Path, upload: Path) -> None:
             listed = ", ".join(str(number) for number in failed)
             note = f"{note} Couldn't read page {listed}, so it was left out.".strip()
         write_status(folder, "ready", note)
+    except UnopenedPdf as error:
+        write_status(folder, "failed", str(error))
     except Exception as error:  # A background thread has no one else to report to.
         print(f"recognition error: {error}", file=sys.stderr)
         write_status(folder, "failed", "Recognition failed.")
+    finally:
+        if document is not None:
+            document.close()
+        # A PDF's pages, drawn at 250 dots an inch, are only for the reader: what's shown beside the
+        # score is the page.jpg it keeps of each, and Try again draws them afresh.
+        shutil.rmtree(folder / "pages", ignore_errors=True)
+
+
+def clear_page_pictures() -> None:
+    """Remove the pictures of PDF pages that sheets read before they were removed once read left behind.
+
+    Nothing is being read as the app starts, and nothing else looks at them.
+    """
+    for pictures in JOB_DIR.glob("*/pages") if JOB_DIR.exists() else []:
+        shutil.rmtree(pictures, ignore_errors=True)
 
 
 def name_after_file(folder: Path, root: ET.Element) -> None:
@@ -662,23 +736,47 @@ def unfinished(folder: Path, status: dict) -> dict:
 
 
 @app.post("/api/scores")
-async def create_score(file: UploadFile) -> dict:
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in ALLOWED_TYPES:
+async def create_score(file: Annotated[list[UploadFile], File()]) -> dict:
+    """Open a photo, a PDF or a MusicXML file as a new score, or several photos as the pages of one.
+
+    Only the first of several files used to be opened, so a piece photographed page by page couldn't
+    be one score. Photos sent together are now read as the pages of one sheet, in the order they
+    came, as a PDF's pages are. A PDF or a MusicXML file is a score of its own, so it comes alone.
+    """
+    names = [Path(item.filename or "").name for item in file]
+    suffixes = [Path(name).suffix.lower() for name in names]
+    if any(suffix not in ALLOWED_TYPES for suffix in suffixes):
         raise HTTPException(415, "Please upload a photo, a PDF or a MusicXML file.")
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, TOO_LARGE)
-    if suffix in SCORE_TYPES:
-        return open_score_file(data, suffix)
-    if suffix != ".pdf" and cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE) is None:
-        raise HTTPException(415, "That file couldn't be opened as an image.")
+    if len(file) > 1 and any(suffix == ".pdf" or suffix in SCORE_TYPES for suffix in suffixes):
+        raise HTTPException(415, "Only photos are read together, as the pages of one sheet. Open a PDF or a MusicXML file on its own.")
+    if len(file) > MAX_PDF_PAGES:
+        raise HTTPException(422, f"Up to {MAX_PDF_PAGES} pages can be read together.")
+    sent = []
+    for item in file:
+        data = await item.read()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, TOO_LARGE)
+        sent.append(data)
+    # Opening is done on a thread of its own: done here, on the one loop every request is answered on,
+    # a large MusicXML engraved twice, or a photo decoded, held up the library's polls and every edit.
+    if suffixes[0] in SCORE_TYPES:
+        return await run_in_threadpool(open_score_file, sent[0], suffixes[0])
+    return await run_in_threadpool(keep_sheet, names, suffixes, sent)
+
+
+def keep_sheet(names: list[str], suffixes: list[str], sent: list[bytes]) -> dict:
+    """Keep a photo, several, or a PDF as a sheet to read, and put it in the line to be read."""
+    for name, suffix, data in zip(names, suffixes, sent):
+        if suffix != ".pdf" and cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE) is None:
+            raise HTTPException(415, f"{name} couldn't be opened as an image." if len(sent) > 1 else "That file couldn't be opened as an image.")
     score_id = uuid.uuid4().hex
     folder = JOB_DIR / score_id
     folder.mkdir(parents=True)
-    upload = folder / f"upload{suffix}"
-    upload.write_bytes(data)
-    write_whole(folder / SOURCE_FILE, json.dumps({"name": Path(file.filename or "").name[:200]}))
+    upload = folder / f"upload{suffixes[0]}"
+    upload.write_bytes(sent[0])
+    for number, (suffix, data) in enumerate(zip(suffixes[1:], sent[1:]), start=2):
+        (folder / f"upload_{number:03d}{suffix}").write_bytes(data)  # See uploaded_pages.
+    write_whole(folder / SOURCE_FILE, json.dumps({"name": names[0][:200]}))
     write_status(folder, "processing")
     queue_reading(folder, upload)
     return {"id": score_id}
@@ -965,6 +1063,29 @@ def list_instruments() -> list[dict]:
     return structure.instrument_list()
 
 
+# Each score's title and composer as the library last read them, by its folder, with the version
+# they were read from: its name, when it was written and its size.
+listed_titles: dict[Path, tuple[tuple[str, int, int], dict]] = {}
+
+
+def listed_title(folder: Path) -> dict:
+    """A score's title and composer, read from its latest version only when that has changed.
+
+    The library is listed every 2 s while a sheet is read, and after every edit while it's shown,
+    and parsing every score's whole MusicXML each time just for these grew with the library. An undo
+    followed by a new edit gives a version the number of the one undone, so its time and size count too.
+    """
+    with edit_lock:  # An undo moves the latest version away, so it can't land between finding it and reading it.
+        latest = versions(folder)[-1]
+        found = latest.stat()
+        key = (latest.name, found.st_mtime_ns, found.st_size)
+        kept = listed_titles.get(folder)
+        if kept is None or kept[0] != key:
+            kept = (key, structure.title_of(ET.parse(latest).getroot()))
+            listed_titles[folder] = kept
+    return kept[1]
+
+
 @app.get("/api/scores")
 def list_scores() -> list[dict]:
     """List the sheets, newest first, so one can be reopened after closing the page.
@@ -993,7 +1114,7 @@ def list_scores() -> list[dict]:
                 "checked": (folder / "checked.json").exists(),
                 "blank": not (folder / "recognized").exists(),
                 "opened": opened_from_file(folder),
-            } | structure.title_of(current_root(folder)))
+            } | listed_title(folder))
         except (OSError, ValueError, TypeError, KeyError, IndexError, ET.ParseError) as error:
             print(f"left an unreadable sheet out of the list, {folder.name}: {error!r}", file=sys.stderr)
     return sorted(found, key=lambda item: item["saved"], reverse=True)
@@ -1143,12 +1264,27 @@ def add_chord_at(score_id: str, body: ChordAt) -> dict:
     Where it was clicked is kept, apart from what the reader found, so the original draws its box.
     """
     folder = job_folder(score_id)
+    if not math.isfinite(body.onset):  # 1e400 is read as infinity, which no Fraction can hold.
+        raise HTTPException(422, "That isn't a moment in a bar.")
+    path = folder / "recognized" / ADDED_FILE
     with edit_lock:
-        if body.page is not None and body.box is not None and len(body.box) == 4 and (folder / "recognized").exists():
+        before = path.read_text(encoding="utf-8") if path.exists() else None
+        wrote = body.page is not None and body.box is not None and len(body.box) == 4 and (folder / "recognized").exists()
+        if wrote:
             kept = [item for item in added_chords(folder) if (item.get("measure"), item.get("onset")) != (body.measure, body.onset)]
             kept.append({"measure": body.measure, "onset": body.onset, "page": body.page, "box": body.box, "chord": body.text.strip(), "confidence": None, "added": True})
-            write_whole(folder / "recognized" / ADDED_FILE, json.dumps(kept))
-        return apply_edit(score_id, lambda root: edit.add_chord_at(root, body.measure, Fraction(body.onset).limit_denominator(64), body.text))
+            write_whole(path, json.dumps(kept))
+        try:
+            return apply_edit(score_id, lambda root: edit.add_chord_at(root, body.measure, Fraction(body.onset).limit_denominator(64), body.text))
+        except Exception:
+            # A chord refused, as there's one there already, leaves the boxes as they were: its box
+            # had replaced the box of the chord already there.
+            if wrote:
+                if before is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    write_whole(path, before)
+            raise
 
 
 @app.post("/api/scores/{score_id}/checked")
@@ -1738,7 +1874,29 @@ def music_glyphs(request: Request) -> Response:
     return Response(script, media_type="text/javascript", headers=headers)
 
 
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+class CheckedStaticFiles(StaticFiles):
+    """Serve the page's own files, telling the browser to ask each time whether it has the latest.
+
+    With only an ETag, a browser takes a file as fresh for a while without asking, about a tenth of
+    its age. The installed app's files all carry the date of their commit, and the page is always at
+    the same address, so after an update a window could load the new page with some of the old
+    scripts, or the old page with some of the new. Asked each time, an unchanged file is a 304.
+
+    The page itself comes with a Content-Security-Policy. Pages of music go into it as markup, and
+    everything read from a score is escaped today; the policy keeps a slip in the engraver or a
+    future innerHTML from running anything but the app's own scripts. The pages' SVG carries its
+    own style sheets and the app sets styles from its scripts, so inline styles are allowed.
+    """
+
+    def file_response(self, *args, **kwargs) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        if response.media_type == "text/html" or response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Content-Security-Policy"] = PAGE_POLICY
+        return response
+
+
+app.mount("/", CheckedStaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
 def stop_when_stdin_closes() -> None:

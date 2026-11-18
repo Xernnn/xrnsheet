@@ -9,24 +9,24 @@
 </head>
 <body class="atHome" data-mode="write">
 <header id="topBar">
-  <button id="libraryToggle" class="flat scoreOnly" aria-label="Library" aria-pressed="true" aria-controls="library" title="Show or hide the library (F6)"><span data-icon="library"></span></button>
-  <button id="brand" class="flat" aria-label="Library" title="Back to the library, with all your scores. Every edit is saved as it's made"><img src="icon.svg" alt="" width="26" height="26"></button>
-  <button id="scoreName" class="flat scoreOnly" title="Change the title and composer"></button>
+  <button id="libraryToggle" class="flat scoreOnly" aria-label="Library" aria-pressed="true" aria-controls="library" title="Library (F6)"><span data-icon="library"></span></button>
+  <button id="brand" class="flat" aria-label="Library" title="Library"><img src="icon.svg" alt="" width="26" height="26"></button>
+  <button id="scoreName" class="flat scoreOnly" title="Title and composer"></button>
   <div id="modeSwitch" class="segmented scoreOnly" role="radiogroup" aria-label="Mode">
-    <button role="radio" data-mode="read" aria-checked="false" title="Read: the score large and clean, pages turned with Space or a click (Alt+R)"><span data-icon="read"></span><span>Read</span></button>
-    <button role="radio" data-mode="write" aria-checked="true" title="Write: enter and change notes (Alt+W)"><span data-icon="pen"></span><span>Write</span></button>
-    <button role="radio" data-mode="practice" aria-checked="false" title="Practice: loop, slow down, count in, one hand alone, wait for you (Alt+P)"><span data-icon="target"></span><span>Practice</span></button>
+    <button role="radio" data-mode="read" aria-checked="false" title="Read (Alt+R)"><span data-icon="read"></span><span>Read</span></button>
+    <button role="radio" data-mode="write" aria-checked="true" title="Write (Alt+W)"><span data-icon="pen"></span><span>Write</span></button>
+    <button role="radio" data-mode="practice" aria-checked="false" title="Practice (Alt+P)"><span data-icon="target"></span><span>Practice</span></button>
   </div>
-  <button id="partSwitch" class="scoreOnly" aria-haspopup="menu" title="Which instrument the panel below shows, and practice follows"><span id="partKind"></span><span id="partName"></span><span class="caret">▾</span></button>
+  <button id="partSwitch" class="scoreOnly" aria-haspopup="menu" title="Instrument"><span id="partKind"></span><span id="partName"></span><span class="caret">▾</span></button>
   <div id="transport" class="scoreOnly" role="toolbar" aria-label="Playback">
-    <button id="rewind" class="flat" aria-label="Rewind" title="Rewind to the start, or to the start of the loop"><span data-icon="rewind"></span></button>
-    <button id="play" class="flat" aria-label="Play" aria-pressed="false" title="Play from the selected note, or in Practice round the loop from A, or stop (Space)"><span data-icon="play"></span></button>
-    <button id="loop" class="flat" aria-label="Loop playback" aria-pressed="false" title="Loop playback over the selection"><span data-icon="loop"></span></button>
+    <button id="rewind" class="flat" aria-label="Rewind" title="Rewind"><span data-icon="rewind"></span></button>
+    <button id="play" class="flat" aria-label="Play" aria-pressed="false" title="Play (Space)"><span data-icon="play"></span></button>
+    <button id="loop" class="flat" aria-label="Loop playback" aria-pressed="false" title="Loop"><span data-icon="loop"></span></button>
     <button id="metronome" class="flat" aria-label="Metronome" aria-pressed="false" title="Metronome"><span data-icon="metronome"></span></button>
     <button id="tempoButton" class="flat readout" aria-label="Playback speed" title="Playback speed" aria-haspopup="dialog"><span class="tempoNote"></span>&nbsp;=&nbsp;<span id="tempoValue">100</span></button>
     <span id="position">
-      <input id="beatCounter" class="counter" aria-label="Measure and beat" title="Measure and beat. Type one, such as 5.1, to go there" value="1.1" autocomplete="off" spellcheck="false">
-      <input id="timeCounter" class="counter" aria-label="Playback time" title="Playback time. Type a time to go there" value="00:00:00.0" autocomplete="off" spellcheck="false">
+      <input id="beatCounter" class="counter" aria-label="Measure and beat" title="Measure and beat" value="1.1" autocomplete="off" spellcheck="false">
+      <input id="timeCounter" class="counter" aria-label="Playback time" title="Playback time" value="00:00:00.0" autocomplete="off" spellcheck="false">
     </span>
     <button id="playSettings" class="flat" aria-label="Playback settings" title="Playback settings"><span data-icon="cog"></span></button>
   </div>
@@ -34,9 +34,9 @@
     <button id="undo" class="flat" aria-label="Undo" title="Undo (Ctrl+Z)" disabled><span data-icon="undo"></span></button>
     <button id="redo" class="flat" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled><span data-icon="redo"></span></button>
   </div>
-  <button id="commandOpen" title="Find any action and its key (Ctrl+Shift+P)"><span data-icon="search"></span><span class="words">Type a command</span><kbd>Ctrl+Shift+P</kbd></button>
+  <button id="commandOpen" title="Commands (Ctrl+Shift+P)"><span data-icon="search"></span><span class="words">Type a command</span><kbd>Ctrl+Shift+P</kbd></button>
   <button id="mainMenu" class="flat" aria-label="Menu" aria-haspopup="menu" title="Menu"><span data-icon="dots"></span></button>
-  <button id="inspectorToggle" class="flat scoreOnly" aria-label="Inspector" aria-pressed="true" aria-controls="inspector" title="Show or hide the inspector (F8)"><span data-icon="inspector"></span></button>
+  <button id="inspectorToggle" class="flat scoreOnly" aria-label="Inspector" aria-pressed="true" aria-controls="inspector" title="Inspector (F8)"><span data-icon="inspector"></span></button>
 </header>
 <div id="message" role="status" hidden></div>
 <div id="toast" role="status" hidden><span id="toastText"></span><button id="toastAction"></button><button id="toastClose" class="flat" aria-label="Dismiss" title="Dismiss"><span data-icon="close"></span></button></div>
@@ -50,17 +50,12 @@
     <input id="homeSearch" type="search" placeholder="Search your scores" aria-label="Search your scores">
     <div class="libraryActions">
       <button id="blankOpen" class="primary"><span data-icon="plus"></span>New</button>
-      <label class="button" tabindex="0" title="A photo, a PDF or a MusicXML file. Notes and chord symbols in a photo are read for you"><span data-icon="folder"></span>Open…<input id="file" type="file" accept="image/*,.pdf,.musicxml,.xml,.mxl" hidden></label>
-      <label class="button" tabindex="0" title="Use the camera, on a phone"><span data-icon="camera"></span>Take a photo<input id="camera" type="file" accept="image/*" capture="environment" hidden></label>
+      <label class="button" tabindex="0" title="Open"><span data-icon="folder"></span>Open…<input id="file" type="file" accept="image/*,.pdf,.musicxml,.xml,.mxl" multiple hidden></label>
     </div>
     <div id="homeScroll"><div id="historyList" role="list"></div>
       <p id="libraryNone" role="status" hidden></p>
-      <div id="libraryEmpty" hidden>
-        <h3>Sheet music, ready to play</h3>
-        <p>Read a photo or a PDF into notes you can change, or write a new score for piano, guitar or violin.</p>
-      </div>
+      <div id="libraryEmpty" hidden><h3>No scores</h3></div>
     </div>
-    <p class="libraryFoot">Drop a photo, PDF or MusicXML file anywhere to open it.</p>
   </aside>
 
   <main id="centre">
@@ -69,13 +64,12 @@
       <section id="readingCard" aria-labelledby="readingName">
         <div id="readingIcon" aria-hidden="true"><div class="spinner"></div></div>
         <h2 id="readingName">Your sheet</h2>
-        <p id="busyText" aria-live="polite">Reading your sheet.</p>
+        <p id="busyText" aria-live="polite">Reading</p>
         <p id="readingTime"></p>
-        <p id="readingHint">You can carry on meanwhile: open the library (F6) or another score. It's in the library, and opens here when it's done.</p>
         <div class="buttons">
           <button id="readingRetry" class="primary" hidden>Try again</button>
           <button id="readingRemove" hidden>Remove</button>
-          <button id="readingCancel" title="Stop reading this sheet and remove it">Cancel reading</button>
+          <button id="readingCancel" title="Cancel reading">Cancel reading</button>
           <button id="readingLibrary">Library</button>
         </div>
       </section>
@@ -83,7 +77,7 @@
 
     <div id="workspace" hidden>
       <div id="noteBar" role="toolbar" aria-label="Note input">
-        <button id="inputToggle" class="flat" title="Write notes: click the staff, type A to G, or play the instrument below (N)" aria-label="Note input" aria-pressed="false"><span data-icon="pen"></span><span id="inputLabel">Write notes</span></button>
+        <button id="inputToggle" class="flat" title="Write notes (N)" aria-label="Note input" aria-pressed="false"><span data-icon="pen"></span><span id="inputLabel">Write notes</span></button>
         <span id="lengths" role="group" aria-label="Duration"></span>
         <button id="dotButton" class="flat" title="Augmentation dot (.)" aria-label="Augmentation dot" aria-pressed="false"><span data-glyph="E1E7" data-space="7"></span></button>
         <button id="restButton" class="flat" data-needs="note" title="Rest (0)" aria-label="Rest"><span data-glyph="E4E5" data-space="4.5"></span></button>
@@ -101,7 +95,7 @@
         <span class="divider"></span>
         <span id="voices" role="group" aria-label="Voice"></span>
         <span class="divider"></span>
-        <button id="addButton" class="flat" title="Add a mark, text, line or measure" aria-label="Add" aria-haspopup="menu"><span data-icon="plus"></span></button>
+        <button id="addButton" class="flat" title="Add" aria-label="Add" aria-haspopup="menu"><span data-icon="plus"></span></button>
       </div>
       <div id="practiceBar" role="toolbar" aria-label="Practice"></div>
       <div id="pitches"></div>
@@ -118,25 +112,25 @@
         </div>
         <div id="viewTools">
           <span id="pageCount" aria-live="polite"></span>
-          <select id="viewMode" aria-label="View" title="Pages, or the score as one long line or one long page"><option value="page">Pages</option><option value="horizontal">One line</option><option value="vertical">One long page</option></select>
+          <select id="viewMode" aria-label="View" title="View"><option value="page">Pages</option><option value="horizontal">One line</option><option value="vertical">One long page</option></select>
           <button id="zoomOut" class="flat" aria-label="Zoom out" title="Zoom out (Ctrl+-)"><span data-icon="zoomOut"></span></button>
           <select id="zoomChoice" aria-label="Zoom"></select>
           <button id="zoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+=)"><span data-icon="zoomIn"></span></button>
         </div>
         <aside id="original" aria-label="Your original sheet">
-          <div id="originalGrip" role="separator" tabindex="0" aria-label="Room for the original sheet" title="Drag to give the original sheet more or less room"></div>
+          <div id="originalGrip" role="separator" tabindex="0" aria-label="Room for the original sheet" title="Resize"></div>
           <header><span>Original sheet</span>
-            <button id="originalLarger" class="flat" aria-pressed="false" aria-label="More room" title="Give the original sheet more room, or its usual room back"><span data-icon="enlarge"></span></button>
-            <button id="checked" title="Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.">Mark as checked</button>
+            <button id="originalLarger" class="flat" aria-pressed="false" aria-label="More room" title="More room"><span data-icon="enlarge"></span></button>
+            <button id="checked">Mark as checked</button>
             <button id="originalClose" class="flat" aria-label="Hide the original sheet" title="Hide"><span data-icon="close"></span></button>
           </header>
           <div id="sheetFrame">
-            <div id="images" title="Click a chord's box to change it, or the place where a chord was missed to add it. Ctrl+wheel, a pinch or a double-click zooms; drag to move about"></div>
+            <div id="images"></div>
             <div id="sheetGhost" hidden><span class="tag"></span></div>
             <div id="originalTools" role="toolbar" aria-label="Zoom the original sheet">
               <button id="originalZoomOut" class="flat" aria-label="Zoom out" title="Zoom out (Ctrl+wheel)"><span data-icon="zoomOut"></span></button>
-              <button id="originalFit" class="flat" title="How far the sheet is zoomed. Click to fit it in again, as a double-click does">Fit</button>
-              <button id="originalZoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+wheel, or double-click a place)"><span data-icon="zoomIn"></span></button>
+              <button id="originalFit" class="flat" title="Fit">Fit</button>
+              <button id="originalZoomIn" class="flat" aria-label="Zoom in" title="Zoom in (Ctrl+wheel)"><span data-icon="zoomIn"></span></button>
             </div>
           </div>
           <div id="checks" hidden><span class="label">Please check:</span></div>
@@ -159,8 +153,8 @@
         <h3 id="propMarkKind">Mark</h3>
         <p id="propMarkText" class="sub"></p>
         <div class="row">
-          <button id="markEdit" title="Change what it says (F2, or double-click it)">Edit text</button>
-          <button id="markDelete" title="Remove it from the score (Del)">Delete</button>
+          <button id="markEdit" title="Edit text (F2)">Edit text</button>
+          <button id="markDelete" title="Delete (Del)">Delete</button>
         </div>
       </section>
       <section id="propChord" hidden>
@@ -169,10 +163,10 @@
         <div id="chordDiagramTools">
           <div id="chordDiagram" role="group" aria-label="The chord's diagram: click a string at a fret to put a finger there, or above the nut for an open or unplayed string"></div>
           <div class="row tight">
-            <button id="diagramNut" class="flat" title="Show the frets nearer the nut" aria-label="Nearer the nut"><span data-icon="up"></span></button>
-            <button id="diagramBody" class="flat" title="Show the frets further up the neck" aria-label="Further up the neck"><span data-icon="down"></span></button>
-            <button id="diagramBarre" class="toggle" title="Lay the first finger across the strings at the lowest fret">Barre</button>
-            <button id="diagramUsual" title="The shape the library or the score gives this chord">Usual shape</button>
+            <button id="diagramNut" class="flat" title="Nearer the nut" aria-label="Nearer the nut"><span data-icon="up"></span></button>
+            <button id="diagramBody" class="flat" title="Further up the neck" aria-label="Further up the neck"><span data-icon="down"></span></button>
+            <button id="diagramBarre" class="toggle" title="Barre">Barre</button>
+            <button id="diagramUsual" title="Usual shape">Usual shape</button>
           </div>
           <span class="label">Other shapes</span>
           <div id="chordShapes" role="group" aria-label="Other shapes for this chord"></div>
@@ -194,12 +188,12 @@
           <button class="flat" data-action="semitoneUp" data-needs="note" title="Up a semitone (↑)" aria-label="Up a semitone"><span data-icon="up"></span></button>
           <button data-action="octaveDown" data-needs="note" title="Down an octave (Ctrl+↓)">−8ve</button>
           <button data-action="octaveUp" data-needs="note" title="Up an octave (Ctrl+↑)">+8ve</button>
-          <button data-action="respell" data-needs="note" title="Write the same note under its other name (J)">Respell</button>
+          <button data-action="respell" data-needs="note" title="Respell (J)">Respell</button>
         </div></div>
         <div class="field"><span class="label">Note</span><div class="row tight">
-          <button data-action="flip" data-needs="note" title="Flip the stem (X)">Flip stem</button>
-          <button id="graceButton" data-needs="note" title="A grace note before this one (/)">Grace note</button>
-          <button data-action="clear" data-needs="note" title="Remove a fermata, ornament or articulation from this note">Clear marks</button>
+          <button data-action="flip" data-needs="note" title="Flip stem (X)">Flip stem</button>
+          <button id="graceButton" data-needs="note" title="Grace note (/)">Grace note</button>
+          <button data-action="clear" data-needs="note" title="Clear marks">Clear marks</button>
         </div></div>
         <div class="field"><span class="label">Words</span><div class="row tight">
           <button id="addChord" data-needs="note" title="Chord symbol (Ctrl+K)">Chord symbol</button>
@@ -212,13 +206,13 @@
         <h3 id="propMeasureName">Measure</h3>
         <div id="measureGroups" class="groups"></div>
         <div class="field"><span class="label">Measures</span><div class="row">
-          <button id="addBar" title="Insert a measure before the selected one, or at the end (Ins)">Insert</button>
-          <button id="deleteBar" data-needs="note" title="Delete the selected measures (Ctrl+Del with whole measures selected)">Delete</button>
-          <button id="breakButton" data-needs="note" title="Start a new line at this measure (Enter)">New line here</button>
+          <button id="addBar" title="Insert measure (Ins)">Insert</button>
+          <button id="deleteBar" data-needs="note" title="Delete measures (Ctrl+Del)">Delete</button>
+          <button id="breakButton" data-needs="note" title="New line here (Enter)">New line here</button>
         </div></div>
         <div class="field" id="propBeats"><span class="label">Beats</span><div class="row">
-          <button data-action="close" data-needs="note" title="Remove this and pull later notes in. Fixes a measure with too many beats (Ctrl+Del)">Remove beat</button>
-          <button data-action="insert" data-needs="note" title="Open a gap here. Fixes a measure with too few beats">Insert beat</button>
+          <button data-action="close" data-needs="note" title="Remove beat (Ctrl+Del)">Remove beat</button>
+          <button data-action="insert" data-needs="note" title="Insert beat">Insert beat</button>
         </div></div>
         <label class="field"><span class="label">Pickup at the start</span>
           <select id="pickupChoice"><option value="">Choose…</option><option value="2">An eighth note</option><option value="4">A quarter note</option><option value="8">A half note</option><option value="12">Three quarter notes</option><option value="0">No pickup</option></select>
@@ -232,22 +226,22 @@
           <ul id="partList" role="listbox" aria-label="Instruments in this score"></ul>
           <div class="row">
             <button id="partAdd" title="Add instruments (I)"><span data-icon="plus"></span>Add</button>
-            <button id="partRemove" title="Remove the selected instrument" disabled><span data-icon="trash"></span>Remove</button>
-            <button id="partsButton" title="Open or print one instrument's part"><span data-icon="parts"></span>Parts</button>
+            <button id="partRemove" title="Remove instrument" disabled><span data-icon="trash"></span>Remove</button>
+            <button id="partsButton" title="Parts"><span data-icon="parts"></span>Parts</button>
           </div>
         </div>
         <div class="field instrumentMarks" id="partSettings" hidden>
           <h4 id="partSettingsName"></h4>
           <label class="field"><span class="label">Tuning</span><select id="tuningChoice" aria-label="Tuning"></select></label>
-          <input id="customStrings" hidden placeholder="Each string from the lowest, e.g. D2 A2 D3 G3 B3 E4, then Enter" aria-label="Custom tuning, each string from the lowest" autocomplete="off" spellcheck="false">
+          <input id="customStrings" hidden placeholder="D2 A2 D3 G3 B3 E4" aria-label="Custom tuning, each string from the lowest" autocomplete="off" spellcheck="false">
           <label class="field"><span class="label">Capo</span><select id="capoChoice" aria-label="Capo"></select></label>
-          <div class="row"><button id="tabSwitch" class="toggle" aria-pressed="false" title="A tablature staff under the staff, with each note's string and fret">Tablature</button></div>
+          <div class="row"><button id="tabSwitch" class="toggle" aria-pressed="false" title="Tablature">Tablature</button></div>
         </div>
         <div id="scoreGroups" class="groups"></div>
         <div class="field"><span class="label">Show</span><div class="row">
-          <button id="concertPitch" class="toggle" aria-pressed="false" title="Show transposing instruments at the pitch they sound"><span data-icon="fork"></span>Concert pitch</button>
-          <button id="originalShow" class="toggle" aria-pressed="false" title="The photo or PDF this score was read from">Original sheet</button>
-          <button id="diagramsSwitch" class="toggle" aria-pressed="false" data-switch="diagrams" title="A fretboard diagram over each chord symbol, for the score's guitar">Chord diagrams</button>
+          <button id="concertPitch" class="toggle" aria-pressed="false" title="Concert pitch"><span data-icon="fork"></span>Concert pitch</button>
+          <button id="originalShow" class="toggle" aria-pressed="false" title="Original sheet">Original sheet</button>
+          <button id="diagramsSwitch" class="toggle" aria-pressed="false" data-switch="diagrams" title="Chord diagrams">Chord diagrams</button>
         </div></div>
         <div class="field"><span class="label">Page</span><div class="row">
           <button id="pageOpen">Page settings…</button>
@@ -258,7 +252,7 @@
           <button id="transposeOpen">Transpose…</button>
         </div></div>
         <div class="field"><span class="label">Share</span><div class="row" id="publishBar">
-          <a id="pdf" class="button" title="Open the score as a PDF, to print or save">Print</a>
+          <a id="pdf" class="button" title="Print">Print</a>
           <a id="pdfSave" class="button" download="score.pdf">PDF</a>
           <a id="xml" class="button">MusicXML</a>
           <a id="midi" class="button">MIDI</a>
@@ -301,9 +295,8 @@
 
 <dialog id="commandDialog" aria-label="Commands">
   <form method="dialog">
-    <div class="commandField"><span data-icon="search"></span><input id="commandInput" placeholder="Type a command, such as staccato, key D or practice" autocomplete="off" spellcheck="false" aria-label="Command" role="combobox" aria-controls="commandList" aria-expanded="true"></div>
+    <div class="commandField"><span data-icon="search"></span><input id="commandInput" placeholder="Type a command" autocomplete="off" spellcheck="false" aria-label="Command" role="combobox" aria-controls="commandList" aria-expanded="true"></div>
     <ul id="commandList" role="listbox" aria-label="Commands"></ul>
-    <div class="commandFoot"><kbd>↑</kbd><kbd>↓</kbd> to choose, <kbd>Enter</kbd> to run, <kbd>Esc</kbd> to close</div>
   </form>
 </dialog>
 
@@ -322,7 +315,7 @@
         <label class="field">Time signature<select id="blankTime"><option>2/4</option><option>3/4</option><option selected>4/4</option><option>5/4</option><option>6/4</option><option value="4/4/common">Common time</option><option value="2/2/cut">Cut time</option><option>2/2</option><option>3/2</option><option>3/8</option><option>6/8</option><option>9/8</option><option>12/8</option></select></label>
       </div>
       <div class="pair">
-        <label class="field">Tempo, such as Andante 92<input id="blankTempo" maxlength="60" placeholder="None"></label>
+        <label class="field">Tempo<input id="blankTempo" maxlength="60" placeholder="None"></label>
         <label class="field">Measures<input id="blankBars" type="number" min="1" max="1000" value="32"></label>
       </div>
       <div class="pair">
@@ -465,7 +458,6 @@
     <h2 id="checkedTitle">Mark as checked with things still listed?</h2>
     <div class="content" style="max-width: 480px">
       <div id="checkedWhat"></div>
-      <div>A checked sheet's chords are taught to the chord reader as right, so a chord still wrong would be learnt wrong. You can un-mark it later with the same button.</div>
     </div>
     <div class="buttons"><button type="submit" value="mark" id="checkedAnyway">Mark as checked anyway</button><button type="submit" value="back" class="primary" autofocus>Go back and check</button></div>
   </form>
@@ -475,8 +467,6 @@
   <form method="dialog">
     <h2 id="aboutTitle">About xrnsheet</h2>
     <div class="content" style="max-width: 460px">
-      <div>xrnsheet reads a photo or PDF of sheet music into a score you can edit, play, practise and print.</div>
-      <div>It's made for piano, guitar and violin players: Read shows the score large and clean, Write enters notes from the keyboard, fretboard or fingerboard below it, and Practice loops, slows down, counts in, plays one hand alone and waits for you.</div>
       <div>Pages are engraved by Verovio in the Leland music font (SIL Open Font Licence).</div>
     </div>
     <div class="buttons"><button type="submit" class="primary">Close</button></div>

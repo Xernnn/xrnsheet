@@ -40,6 +40,35 @@ function enqueue(task) {
   return queue;
 }
 
+// Every request to the server comes through here, and gives the answer or throws a short reason:
+// the server's own when it refused, as "That file is too large", or one of these. A request that
+// never reached it showed "Failed to fetch", and a plain-text 500 "Unexpected token 'I'…", or
+// nothing at all. `status` is 0 when nothing answered.
+const NOT_ANSWERING = "xrnsheet isn't answering.";
+const DIDNT_WORK = "That didn't work.";
+
+// A function rather than a class, as the page's script tests load its functions alone.
+function requestFailed(text, status) {
+  return Object.assign(new Error(text), { status });
+}
+
+async function request(path, options = {}) {
+  let response;
+  try {
+    response = await fetch(path, options);
+  } catch {
+    throw requestFailed(NOT_ANSWERING, 0);
+  }
+  const data = await response.json().catch(() => undefined);
+  if (!response.ok) throw requestFailed(typeof data?.detail === "string" ? data.detail : DIDNT_WORK, response.status);
+  if (data === undefined) throw requestFailed(DIDNT_WORK, response.status);
+  return data;
+}
+
+function postJson(path, body) {
+  return request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+}
+
 // The window is the library while no score is open, the score once one is, and how a sheet is getting
 // on while one still being read, or that couldn't be, is open. That doesn't hold up the rest of the
 // app: the library can be shown beside it, as beside a score, and anything else opened.
@@ -87,7 +116,7 @@ function tileFor(sheet) {
   if (sheet.status && sheet.status !== "ready") jobTile(sheet, holder, link);
   else drawScoreTile(sheet, link);
   more.setAttribute("aria-label", `More for ${link.querySelector(".name").textContent}`);
-  more.title = "More: open or delete";
+  more.title = "More";
   return holder;
 }
 
@@ -161,16 +190,15 @@ function jobTile(sheet, holder, link) {
   link.append(picture, name, state);
   const actions = document.createElement("span");
   actions.className = "actions";
-  const button = (label, title, run) => {
+  const button = (label, run) => {
     const made = document.createElement("button");
     made.type = "button";
     made.textContent = label;
-    made.title = title;
     made.addEventListener("click", () => run(sheet.id));
     return made;
   };
-  if (failed) actions.append(button("Try again", "Read this sheet again", readAgain), button("Remove", "Remove it from the library", removeSheet));
-  else actions.append(button("Cancel", "Stop reading this sheet and remove it", removeSheet));
+  if (failed) actions.append(button("Try again", readAgain), button("Remove", removeSheet));
+  else actions.append(button("Cancel", removeSheet));
   holder.append(actions);
 }
 
@@ -204,7 +232,7 @@ function drawTiles() {
   const create = document.createElement("button");
   create.className = "tile";
   create.id = "newTile";
-  create.innerHTML = `<span class="sheet">${icon("plus")}</span><span class="name">New score</span><span class="state">Piano, guitar, violin or anything</span>`;
+  create.innerHTML = `<span class="sheet">${icon("plus")}</span><span class="name">New score</span>`;
   create.addEventListener("click", openNewScore);
   // A score is found by its title or by who wrote it, as a musician asks for "the Joplin".
   const called = sheet => sheet.status && sheet.status !== "ready" ? sheetName(sheet) : `${sheet.title || "Untitled score"} ${sheet.composer ?? ""}`;
@@ -221,16 +249,20 @@ function drawTiles() {
   $("libraryEmpty").hidden = sheets.length > 0;
   // A search that finds nothing says so, rather than leaving an empty space that looks like no library.
   $("libraryNone").hidden = !wanted || shown.length > 0 || !sheets.length;
-  $("libraryNone").textContent = `No score in your library is called “${$("homeSearch").value.trim()}” or is by anyone of that name.`;
+  $("libraryNone").textContent = "No match";
 }
 
 let listed = 0; // Counts the times the library is asked for, so an answer overtaken by a later one is dropped.
 
 async function drawHistory() {
   const asked = ++listed;
-  const response = await fetch("/api/scores");
-  if (!response.ok || asked !== listed) return;
-  const found = await response.json();
+  let found;
+  try {
+    found = await request("/api/scores");
+  } catch {
+    if (asked === listed) watchReading(true); // A sheet being read is asked about again, later.
+    return;
+  }
   if (asked !== listed) return;
   const before = new Map(sheets.map(sheet => [sheet.id, sheet.status]));
   const heard = performance.now();
@@ -251,12 +283,14 @@ function tellWhatFinished(before) {
 
 // While a sheet is being read the library is asked again every few seconds, wherever the window is, so
 // its tile keeps up and the sheet can say when it's done.
-let watchTimer = 0;
-const WATCH_MS = 2000;
+// While the server doesn't answer, it's asked less often each time, up to every half a minute.
+let watchTimer = 0, watchWait = 0;
+const WATCH_MS = 2000, LONGEST_WAIT_MS = 30000;
 
-function watchReading() {
+function watchReading(unanswered = false) {
   clearTimeout(watchTimer);
-  if (sheets.some(sheet => sheet.status === "processing")) watchTimer = setTimeout(drawHistory, WATCH_MS);
+  watchWait = unanswered ? Math.min(Math.max(watchWait, WATCH_MS) * 2, LONGEST_WAIT_MS) : WATCH_MS;
+  if (sheets.some(sheet => sheet.status === "processing")) watchTimer = setTimeout(drawHistory, watchWait);
 }
 
 // The time a sheet has been read for counts up on its tile, and where it's open.
@@ -314,11 +348,13 @@ function openScore(id) {
   return poll();
 }
 
-// The score stays where it is, as it's saved with every edit, and the library lists it.
-function closeScore() {
+// The score stays where it is, as it's saved with every edit, and the library lists it. The library
+// is an entry of its own in the window's history, so Back opens the score again, unless the score
+// has gone, which takes its entry with it.
+function closeScore(gone = false) {
   opened++;
   forgetPlayback();
-  history.replaceState(null, "", " ");
+  if (location.hash) history[gone ? "replaceState" : "pushState"](null, "", location.pathname + location.search);
   scoreId = null;
   score = null;
   selected = null;
@@ -326,17 +362,37 @@ function closeScore() {
   show("start");
 }
 
-async function upload(file) {
-  if (!file) return;
+// Photos chosen or dropped together are the pages of one sheet, in the order of their names, so
+// "page 2" comes before "page 10" whatever order they were picked or dropped in. A PDF or a MusicXML
+// file is a score of its own. Only the first file of several used to be opened.
+const OWN_SCORE = /\.(pdf|musicxml|xml|mxl)$/i;
+
+function sentTogether(files) {
+  const photos = files.filter(file => !OWN_SCORE.test(file.name)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  return [...(photos.length ? [photos] : []), ...files.filter(file => OWN_SCORE.test(file.name)).map(file => [file])];
+}
+
+// The first score opens, and the others are in the library.
+async function upload(files) {
+  const groups = sentTogether([...(files ?? [])]);
+  if (!groups.length) return;
   message("");
-  toast(`Opening ${file.name}…`);
-  const body = new FormData();
-  body.append("file", file);
-  const response = await fetch("/api/scores", { method: "POST", body });
-  const data = await response.json();
+  const failed = [];
+  let first = null;
+  for (const group of groups) {
+    toast(group.length > 1 ? `Opening ${group.length} pages…` : `Opening ${group[0].name}…`);
+    const body = new FormData();
+    for (const file of group) body.append("file", file);
+    try {
+      const made = await request("/api/scores", { method: "POST", body });
+      first ??= made.id;
+    } catch (error) {
+      failed.push(`${group[0].name}: ${error.message}`); // Said where it stays, with the file's name.
+    }
+  }
   hideToast();
-  if (!response.ok) { message(data.detail); return; }
-  await openScore(data.id);
+  if (first) await openScore(first);
+  if (failed.length) message(failed.join(" "));
   drawHistory(); // A photo or a PDF is listed at once, as it's read.
 }
 
@@ -350,10 +406,9 @@ function showReading(data) {
   $("readingName").textContent = sheetName(data);
   $("readingIcon").innerHTML = failed ? icon("alert") : data.ahead > 0 ? icon("clock") : `<div class="spinner"></div>`;
   $("readingIcon").classList.toggle("failed", failed);
-  $("busyText").textContent = failed ? `This sheet couldn't be read. ${data.message || ""}`.trim()
-    : data.ahead > 0 ? `Waiting its turn, behind ${data.ahead} ${data.ahead === 1 ? "sheet" : "sheets"}: sheets are read one at a time.`
-    : data.message || "Reading your sheet.";
-  $("readingHint").hidden = failed;
+  $("busyText").textContent = failed ? `Couldn't be read. ${data.message || ""}`.trim()
+    : data.ahead > 0 ? `Waiting: ${data.ahead} ${data.ahead === 1 ? "sheet" : "sheets"} ahead`
+    : (data.message || "Reading").replace(/\.$/, "");
   $("readingRetry").hidden = $("readingRemove").hidden = !failed;
   $("readingCancel").hidden = failed;
   drawReadingTime();
@@ -362,7 +417,7 @@ function showReading(data) {
 
 function drawReadingTime() {
   const time = shownSheet?.status === "processing" ? readingFor(shownSheet) : null;
-  $("readingTime").textContent = time === null ? "" : `${elapsedText(time)} so far. A page usually takes under a minute.`;
+  $("readingTime").textContent = time === null ? "" : elapsedText(time);
 }
 
 // The one way anything leaves the library: Delete on a score, Remove on a sheet that couldn't be
@@ -372,14 +427,15 @@ async function removeSheet(id) {
   const sheet = sheets.find(item => item.id === id);
   const named = !sheet || sheet.status === "ready" ? `“${(sheet ?? score)?.title || "Untitled score"}”` : sheetName(sheet);
   const open = id === scoreId && Boolean(score);
-  const response = await fetch(`/api/scores/${id}`, { method: "DELETE" });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    message(typeof data.detail === "string" ? data.detail : "That couldn't be removed.");
+  let data;
+  try {
+    data = await request(`/api/scores/${id}`, { method: "DELETE" });
+  } catch (error) {
+    message(error.message);
     drawHistory();
     return;
   }
-  if (id === scoreId) closeScore();
+  if (id === scoreId) closeScore(true);
   sheets = sheets.filter(item => item.id !== id);
   drawTiles();
   drawHistory();
@@ -387,31 +443,56 @@ async function removeSheet(id) {
 }
 
 async function restoreSheet(id, reopen) {
-  const response = await fetch(`/api/scores/${id}/restore`, { method: "POST" });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) { message(typeof data.detail === "string" ? data.detail : "That couldn't be brought back."); return; }
+  try {
+    await postJson(`/api/scores/${id}/restore`);
+  } catch (error) {
+    message(error.message);
+    return;
+  }
   await drawHistory();
   if (reopen) openScore(id);
 }
 
 async function readAgain(id) {
-  const response = await fetch(`/api/scores/${id}/retry`, { method: "POST" });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) message(typeof data.detail === "string" ? data.detail : "That sheet couldn't be read again.");
-  else if (id === scoreId && !score) poll();
+  try {
+    await postJson(`/api/scores/${id}/retry`);
+    if (id === scoreId && !score) poll();
+  } catch (error) {
+    message(error.message);
+  }
   drawHistory();
 }
 
-async function poll() {
+// A sheet being read is asked about every 1.5 s. When the server doesn't answer, or answers with a
+// fault, as while it restarts, it's asked again, less often each time, rather than given up on with
+// its spinner turning for ever; and a score being opened is asked for again the same way.
+const POLL_MS = 1500;
+let pollTrouble = false;
+
+async function poll(wait = POLL_MS) {
   const turn = opened;
-  const response = await fetch(`/api/scores/${scoreId}`);
-  if (turn !== opened) return; // Something else has been opened meanwhile.
-  if (!response.ok) { closeScore(); drawHistory(); return; }
-  const data = await response.json();
+  let data;
+  try {
+    data = await request(`/api/scores/${scoreId}`);
+  } catch (error) {
+    if (turn !== opened) return; // Something else has been opened meanwhile.
+    if (error.status === 404) {
+      // An old bookmark, or a deleted score's address, opened the library as if nothing was asked for.
+      closeScore(true);
+      drawHistory();
+      toast("Not in the library");
+      return;
+    }
+    pollTrouble = true;
+    message(error.message);
+    setTimeout(() => { if (turn === opened) poll(Math.min(wait * 2, LONGEST_WAIT_MS)); }, wait);
+    return;
+  }
   if (turn !== opened) return;
+  if (pollTrouble) { pollTrouble = false; message(""); }
   if (data.status !== "ready") {
     showReading(data);
-    if (data.status === "processing") setTimeout(() => { if (turn === opened) poll(); }, 1500);
+    if (data.status === "processing") setTimeout(() => { if (turn === opened) poll(); }, POLL_MS);
     return;
   }
   shownSheet = null;
@@ -482,7 +563,6 @@ function draw() {
   $("redo").disabled = !score.canRedo;
   $("checked").textContent = score.checked ? "Checked ✓" : "Mark as checked";
   $("checked").classList.toggle("done", score.checked);
-  $("checked").title = score.checked ? "Checked: its chords are learnt from as right. Press to un-mark it, so they aren't." : "Press this once you've fixed everything on this sheet. Checked sheets become trusted answers for retraining and for your real-world score.";
   const shown = [...document.querySelectorAll("#pages g.harm")];
   score.chords.forEach((chord, index) => {
     const element = shown[index];
@@ -545,8 +625,7 @@ function drawOriginals() {
 let sheetPlaces = {};
 
 async function loadPlaces(id, number) {
-  const response = await fetch(`/api/scores/${id}/source/${number}/layout`);
-  const found = response.ok ? await response.json() : null;
+  const found = await request(`/api/scores/${id}/source/${number}/layout`).catch(() => null);
   if (id === scoreId) sheetPlaces[number] = found?.lines ?? [];
 }
 
@@ -650,7 +729,7 @@ function askForMissedChord(event) {
   const spot = point && missedChordAt(point);
   if (!point) return;
   if (!spot) {
-    message(sheetPlaces[point.page] ? "This page was read before chords could be added from it. Choose a note in the score, then Add chord." : "");
+    message(sheetPlaces[point.page] ? "Add this chord from a note in the score." : "");
     return;
   }
   if (!spot.name) { message("That bar has been deleted from the score."); return; }
@@ -795,7 +874,7 @@ function drawBoxes() {
     const box = document.createElement("div");
     box.className = "box" + (chord.confidence !== null && chord.confidence < UNSURE_BELOW ? " unsure" : "") + (chord.added ? " added" : "");
     box.dataset.index = chord.index;
-    box.title = `${chord.text}: click to change it`;
+    box.title = chord.text;
     box.style.left = `${left / image.naturalWidth * 100}%`;
     box.style.top = `${top / image.naturalHeight * 100}%`;
     box.style.width = `${(right - left) / image.naturalWidth * 100}%`;
@@ -821,7 +900,6 @@ function drawChecks() {
   $("checks").append(stepLine("chordSteps", "Chords to check", unsure, unsure.map(chord => chord.index), chordStep, {
     said: chord => chord.text,
     many: `${unsure.length} chords`,
-    why: "The reader wasn't sure of these chords, which are coloured in the score and on the original.",
     before: "The chord before to check",
     next: "The next chord to check",
     go: stepToChordCheck,
@@ -856,13 +934,7 @@ function select(id) {
 }
 
 async function send(path, body) {
-  const response = await fetch(`/api/scores/${scoreId}/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "That edit didn't work.");
+  const data = await postJson(`/api/scores/${scoreId}/${path}`, body || undefined);
   const before = editor.cursor;
   receive(data);
   if (editor.on && path !== "undo" && path !== "redo") {
@@ -1014,15 +1086,13 @@ function setUpPage() {
   // Marked as the button is pressed, not once the dialog has closed, which comes a moment later, so an
   // edit made straight after can't overtake it.
   $("checkedAnyway").addEventListener("click", () => setChecked(true));
-  for (const id of ["file", "camera"]) {
-    // Cleared afterwards, so choosing the same file again still counts as a choice.
-    $(id).addEventListener("change", event => { upload(event.target.files[0]); event.target.value = ""; });
-  }
+  // Cleared afterwards, so choosing the same file again still counts as a choice.
+  $("file").addEventListener("change", event => { upload(event.target.files); event.target.value = ""; });
   // A file dropped anywhere opens, as Open does.
   const carriesFile = event => [...(event.dataTransfer?.types ?? [])].includes("Files");
   for (const name of ["dragenter", "dragover"]) document.addEventListener(name, event => { if (!carriesFile(event)) return; event.preventDefault(); document.body.classList.add("dropping"); });
   for (const name of ["dragleave", "drop"]) document.addEventListener(name, event => { if (!carriesFile(event)) return; event.preventDefault(); document.body.classList.remove("dropping"); });
-  document.addEventListener("drop", event => { if (carriesFile(event)) upload(event.dataTransfer.files[0]); });
+  document.addEventListener("drop", event => { if (carriesFile(event)) upload(event.dataTransfer.files); });
   document.querySelectorAll("label.button").forEach(label => {
     label.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); label.click(); } });
   });
@@ -1034,6 +1104,8 @@ function setUpPage() {
   $("readingLibrary").addEventListener("click", goHome);
   $("brand").addEventListener("click", goHome);
   $("toastClose").addEventListener("click", hideToast);
+  addEventListener("hashchange", followAddress);
+  addEventListener("popstate", followAddress);
   setInterval(tickReading, 1000);
 }
 
@@ -1058,7 +1130,7 @@ function markChecked() {
 function setChecked(on) {
   return enqueue(async () => {
     await send("checked", { checked: on });
-    toast(on ? "Marked as checked: its chords will be learnt from." : "No longer marked as checked, so it won't be learnt from.", { label: "Undo", run: () => setChecked(!on) });
+    toast(on ? "Marked as checked" : "Not checked", { label: "Undo", run: () => setChecked(!on) });
   });
 }
 
@@ -1067,4 +1139,14 @@ function setChecked(on) {
 function goHome() {
   if (document.body.classList.contains("atHome")) return;
   closeScore();
+}
+
+// Each score opened is an entry in the window's history, named in the address. Back and Forward, a
+// mouse's back button, or another score's address typed in open what the address names: that score,
+// or with none the library. They changed only the address, so it and the score shown drifted apart.
+function followAddress() {
+  const id = location.hash.slice(1);
+  if (id === (scoreId ?? "")) return;
+  if (id) openScore(id);
+  else closeScore();
 }

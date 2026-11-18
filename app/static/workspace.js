@@ -94,7 +94,7 @@ function drawPartSwitch() {
   $("partName").textContent = partLabel(part);
   $("partSwitch").dataset.kind = kind;
   $("partSwitch").setAttribute("aria-label", `Instrument: ${partLabel(part)}`);
-  $("partSwitch").title = `${partLabel(part)} · ${KINDS[kind].label.toLowerCase()}: the instrument the panel below shows, and practice follows`;
+  $("partSwitch").title = `${partLabel(part)} · ${KINDS[kind].label.toLowerCase()}`;
   fitTopBar();
 }
 

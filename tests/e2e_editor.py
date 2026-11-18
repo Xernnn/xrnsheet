@@ -3547,6 +3547,54 @@ def test_library(page, base: str, created: list[str]) -> None:
     menu(page, "File", "Close")
     check("with nothing open the library is the whole window", page.is_visible("#library") and page.is_hidden("#workspace") and page.is_hidden("#inspector"))
     check("and shows each score as a page", page.locator(f'#historyList a[data-score="{first}"] img').count() == 1)
+    check("a score is begun with New or Open, with no camera button doing what Open does", page.locator(".libraryActions > *").all_inner_texts() == ["New", "Open…"], page.locator(".libraryActions > *").all_inner_texts())
+
+
+def test_back_and_forward_follow_the_address(page, base: str, created: list[str]) -> None:
+    """Back and Forward changed the address but not the score shown, so the two drifted apart, and a
+    reload then opened another score than the one on screen. Another score's address did nothing."""
+    first = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Going Back One"})["id"]
+    second = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Going Back Two"})["id"]
+    created.extend([first, second])
+    opened = lambda score_id: page.wait_for_function("id => scoreId === id && score !== null && !document.getElementById('workspace').hidden", arg=score_id)
+    page.goto(base)
+    page.click(f'#historyList a[data-score="{first}"]')
+    opened(first)
+    page.click("#libraryToggle")
+    page.click(f'#historyList a[data-score="{second}"]')
+    opened(second)
+    page.go_back()
+    opened(first)
+    check("Back opens the score opened before", page.inner_text("#scoreName") == "Going Back One" and page.url.endswith(f"#{first}"), page.url)
+    page.go_back()
+    page.wait_for_function("() => document.body.classList.contains('atHome')")
+    check("and Back again goes to the library", page.evaluate("() => scoreId") is None and "#" not in page.url, page.url)
+    page.go_forward()
+    opened(first)
+    check("Forward opens it again", page.inner_text("#scoreName") == "Going Back One")
+    page.click("#brand")
+    page.wait_for_function("() => document.body.classList.contains('atHome')")
+    page.go_back()
+    opened(first)
+    check("Back from the library the logo went to opens the score it left", page.inner_text("#scoreName") == "Going Back One")
+    page.evaluate("id => { location.hash = id; }", second)
+    opened(second)
+    check("another score's address in the same window opens it", page.inner_text("#scoreName") == "Going Back Two")
+    page.reload()
+    opened(second)
+    check("and a reload opens the score that was shown", page.inner_text("#scoreName") == "Going Back Two")
+
+
+def test_a_score_that_is_gone_says_so(context, base: str) -> None:
+    """An old bookmark, or a deleted score's address, opened the library as if nothing had been asked
+    for. A page of its own, as the 404 is logged as an error."""
+    page = context.new_page()
+    try:
+        page.goto(f"{base}/#{'0' * 32}")
+        page.wait_for_function("() => document.body.classList.contains('atHome') && !document.getElementById('toast').hidden")
+        check("a score that isn't there says so, over the library", page.inner_text("#toastText") == "Not in the library" and "#" not in page.url, (page.inner_text("#toastText"), page.url))
+    finally:
+        page.close()
 
 
 def test_library_search_by_composer(page, base: str, created: list[str]) -> None:
@@ -3567,7 +3615,7 @@ def test_library_search_by_composer(page, base: str, created: list[str]) -> None
     page.fill("#homeSearch", "nothing is called this")
     page.wait_for_timeout(100)
     said = page.evaluate("() => document.getElementById('libraryNone')?.hidden === false ? document.getElementById('libraryNone').textContent : ''")
-    check("a search that finds nothing says so", page.locator("#historyList a").count() == 0 and "nothing is called this" in said, said)
+    check("a search that finds nothing says so", page.locator("#historyList a").count() == 0 and said == "No match", said)
     page.fill("#homeSearch", "")
     page.wait_for_timeout(100)
     check("and says nothing once the search is cleared", page.is_hidden("#libraryNone"))
@@ -4754,7 +4802,7 @@ def test_tablature_editing(page, base: str, shots: Path | None, created: list[st
     click_on(page, page.locator(f"[id='{first}-tab']"))
     settle(page)
     check("a fret number on the tablature is selected by a click", page.evaluate("() => selected") == f"{first}-tab" and page.locator(f"[id='{first}-tab'].selected").count() == 1)
-    check("and the inspector says how to change it", "Type a fret number" in page.inner_text("#stringInfo"), page.inner_text("#stringInfo"))
+    check("and the inspector says its string and fret", page.inner_text("#stringInfo").startswith("String "), page.inner_text("#stringInfo"))
     page.keyboard.press("5")
     page.wait_for_timeout(800)
     settle(page)
@@ -4944,7 +4992,7 @@ def test_practice(context, base: str, shots: Path | None, created: list[str]) ->
     check("it says the MIDI keyboard is ready", "MIDI keyboard ready" in page.inner_text("#waitState"), page.inner_text("#waitState"))
     box = page.locator("#waitState").bounding_box()
     check("where it can be seen, as the practice tools wrap to fit", box is not None and box["x"] + box["width"] <= page.viewport_size["width"], box)
-    check("and the hint says what Practice's keys do", page.inner_text("#toolLabel").startswith("Space plays from the selected note"), page.inner_text("#toolLabel"))
+    check("and the bar under the score names what's chosen, with no sentence of keys", page.inner_text("#toolLabel") in ("", "Selected") or page.inner_text("#toolLabel").endswith("notes selected"), page.inner_text("#toolLabel"))
     page.click("#rewind")
     page.keyboard.press(" ")
     page.wait_for_function("() => practice.follower?.arrived")
@@ -5425,7 +5473,7 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         page.set_input_files("#file", files=[photo("first page.png")])
         page.wait_for_selector("#busy:not([hidden])")
         first = page.evaluate("() => scoreId")
-        page.wait_for_function("() => /so far/.test(document.getElementById('readingTime')?.textContent ?? '')", timeout=5000)
+        page.wait_for_function("() => /^\\d+:\\d\\d$/.test(document.getElementById('readingTime')?.textContent ?? '')", timeout=5000)
         check("a sheet being read says which it is, how long it has taken, and can be cancelled", page.inner_text("#readingName") == "first page.png" and page.is_visible("#readingCancel"), page.inner_text("#readingTime"))
         check("and the library's button is there", page.is_visible("#libraryToggle"))
         page.keyboard.press("F6")
@@ -5437,7 +5485,7 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         page.wait_for_function("id => scoreId && scoreId !== id && !document.getElementById('busy').hidden", arg=first)
         second = page.evaluate("() => scoreId")
         page.wait_for_function("id => /ahead/.test(document.querySelector(`#historyList a[data-score='${id}']`)?.textContent ?? '')", arg=second, timeout=5000)
-        check("a second sheet says it waits its turn, and behind how many", "behind 1 sheet" in page.inner_text("#busyText") and "1 sheet ahead" in tile(second).inner_text(), page.inner_text("#busyText"))
+        check("a second sheet says it waits its turn, and behind how many", page.inner_text("#busyText") == "Waiting: 1 sheet ahead" and "1 sheet ahead" in tile(second).inner_text(), page.inner_text("#busyText"))
         if shots:
             page.screenshot(path=str(shots / "reading-two-sheets.png"))
         page.keyboard.press("F6")  # Opening the second folded the library away, as opening a score does.
@@ -5480,10 +5528,75 @@ def test_reading_leaves_the_window_free(page, shots: Path | None) -> None:
         page.set_input_files("#file", files=[photo("third page.png")])
         page.wait_for_selector("#readingCancel:not([hidden])")
         third = page.evaluate("() => scoreId")
-        page.wait_for_function("() => /so far/.test(document.getElementById('readingTime').textContent)", timeout=5000)
+        page.wait_for_function("() => /^\\d+:\\d\\d$/.test(document.getElementById('readingTime').textContent)", timeout=5000)
         page.click("#readingCancel")
         page.wait_for_function("() => document.body.classList.contains('atHome')", timeout=15000)
         check("Cancel where it's shown stops it and goes back to the library", third not in listed(base) and page.locator(f'#historyList a[data-score="{third}"]').count() == 0)
+
+
+def test_photos_opened_together_are_one_score(page) -> None:
+    """Only the first of several files chosen or dropped was opened, and the rest were dropped without a
+    word, so a piece photographed page by page couldn't be one score."""
+    page_photo = lambda name, width: {"name": name, "mimeType": "image/png", "buffer": png(width, 320, tuple(range(120, 200, 16)))}
+    widths = lambda: page.evaluate("() => [...document.querySelectorAll('.imageBox img')].map(image => image.naturalWidth)")
+    with slow_reader(0.2) as base:
+        page.goto(base)
+        page.set_input_files("#file", files=[page_photo("etude page 10.png", 490), page_photo("etude page 2.png", 482), page_photo("etude page 1.png", 481)])
+        page.wait_for_selector("#pages svg", timeout=30000)
+        page.wait_for_function("() => document.querySelectorAll('.imageBox img').length === 3 && [...document.querySelectorAll('.imageBox img')].every(image => image.naturalWidth)")
+        check("photos chosen together are read as the pages of one score", len(listed(base)) == 1 and page.inner_text("#scoreName") == "Etude page 1", (len(listed(base)), page.inner_text("#scoreName")))
+        check("in the order of their names, page 2 before page 10", widths() == [481, 482, 490], widths())
+
+        page.goto(base)
+        page.evaluate("""async pages => {
+            const dropped = new DataTransfer();
+            for (const [name, bytes] of pages) dropped.items.add(new File([new Uint8Array(bytes)], name, { type: "image/png" }));
+            document.body.dispatchEvent(new DragEvent("drop", { dataTransfer: dropped, bubbles: true, cancelable: true }));
+        }""", [["dropped b.png", list(png(484, 320, tuple(range(120, 200, 16))))], ["dropped a.png", list(png(483, 320, tuple(range(120, 200, 16))))]])
+        page.wait_for_function("() => document.querySelectorAll('.imageBox img').length === 2 && [...document.querySelectorAll('.imageBox img')].every(image => image.naturalWidth)", timeout=30000)
+        check("and so are photos dropped together", len(listed(base)) == 2 and widths() == [483, 484], widths())
+        # The library listed it as being read, and asks again until it's told otherwise.
+        page.wait_for_function("() => !sheets.some(sheet => sheet.status === 'processing')")
+
+
+def test_failed_requests_say_so(context, base: str, created: list[str]) -> None:
+    """A plain-text 500 showed "Unexpected token 'I', "Internal S"... is not valid JSON", a server that
+    had gone showed "Failed to fetch", an upload that went wrong said nothing once its toast had gone,
+    and a sheet the server didn't answer about stopped being asked about, its spinner turning for ever.
+
+    A page of its own, as the failures it asks for are logged as errors, which the others count."""
+    page = context.new_page()
+    try:
+        score_id = post_json(base, "/api/scores/blank", {"measures": 2, "title": "Faults"})["id"]
+        created.append(score_id)
+        page.goto(f"{base}/#{score_id}")
+        page.wait_for_selector("#pages svg")
+        retitle = lambda title: (menu(page, "File", "Title and composer…"), page.fill("#titleInput", title), page.click("#projectDialog button[type=submit]"), settle(page))
+        page.route("**/title", lambda route: route.fulfill(status=500, body="Internal Server Error", content_type="text/plain"))
+        retitle("Faults two")
+        check("a fault answered in plain text says the edit didn't work", page.inner_text("#message") == "That didn't work.", page.inner_text("#message"))
+        page.unroute("**/title")
+        page.route("**/title", lambda route: route.abort())
+        retitle("Faults three")
+        check("and a server that doesn't answer says so", page.inner_text("#message") == "xrnsheet isn't answering.", page.inner_text("#message"))
+        page.unroute("**/title")
+
+        page.route("**/api/scores", lambda route: route.fulfill(status=500, body="Internal Server Error", content_type="text/plain") if route.request.method == "POST" else route.continue_())
+        page.set_input_files("#file", files=[photo("page one.png")])
+        page.wait_for_function("() => !document.getElementById('message').hidden && /page one/.test(document.getElementById('message').textContent)")
+        page.wait_for_timeout(5500)  # Past the toast saying it's being opened.
+        check("an upload that fails stays said, with the file's name", page.is_visible("#message") and page.inner_text("#message") == "page one.png: That didn't work.", page.inner_text("#message"))
+        page.unroute("**/api/scores")
+
+        unanswered = [2]
+        page.route(f"**/api/scores/{score_id}", lambda route: (unanswered.__setitem__(0, unanswered[0] - 1), route.abort()) if unanswered[0] > 0 else route.continue_())
+        page.goto(base)
+        page.evaluate("id => { location.hash = id; }", score_id)
+        page.wait_for_function("() => /isn't answering/.test(document.getElementById('message').textContent)")
+        page.wait_for_function("id => scoreId === id && score !== null", arg=score_id, timeout=15000)
+        check("a score the server didn't answer about is asked for again until it does", page.is_visible("#pages") and page.is_hidden("#message") and unanswered[0] == 0, page.inner_text("#message"))
+    finally:
+        page.close()
 
 
 def on_the_sheet(page, x: float, y: float) -> tuple[float, float]:
@@ -5627,7 +5740,7 @@ def test_marking_checked_with_things_still_listed(page, base: str, created: list
     check("the File menu says it's checked", menu_ticked(page, "File", "Checked, for retraining") == "true")
     page.click("#checked")
     settle(page)
-    check("and it can be un-marked later with the same button", checked() is False and "No longer marked" in page.inner_text("#toastText"))
+    check("and it can be un-marked later with the same button", checked() is False and page.inner_text("#toastText") == "Not checked")
 
 
 def test_chords_to_check_are_stepped_through(page, base: str, shots: Path | None, created: list[str]) -> None:
@@ -5980,6 +6093,8 @@ def main() -> None:
             test_the_zoom_menu_reads_in_full(page, base, created)
             test_top_bar_at_half_a_screen(page, base, created)
             test_library(page, base, created)
+            test_back_and_forward_follow_the_address(page, base, created)
+            test_a_score_that_is_gone_says_so(context, base)
             test_library_search_by_composer(page, base, created)
             test_deleting_a_score(page, base, created)
             test_another_score_opened_while_writing(page, base, created)
@@ -6011,6 +6126,8 @@ def main() -> None:
             test_found_by_the_bug_hunt(context, base, created)
             test_phone(context, base, arguments.shots, created)
             test_reading_leaves_the_window_free(page, arguments.shots)
+            test_photos_opened_together_are_one_score(page)
+            test_failed_requests_say_so(context, base, created)
             test_the_original_sheet(page, base, arguments.shots, created)
             test_marking_checked_with_things_still_listed(page, base, created)
             test_chords_to_check_are_stepped_through(page, base, arguments.shots, created)

@@ -21,6 +21,9 @@ let win = null
 let server = null // { child, base, log, ready, exited }
 let quitting = false
 let waitingFiles = []
+// The score the window last showed, by the id in its address, to come back to if the server
+// restarts; null for the library.
+let shownScore = null
 const restarts = []
 
 // The page has its own menu bar and keys. Electron's default menu would take Ctrl+= and Ctrl+-
@@ -79,6 +82,12 @@ function createWindow() {
   })
   guard(win.webContents)
   win.webContents.on('did-create-window', child => guard(child.webContents))
+  // Only the app's own pages count: the loading page shown while the server restarts doesn't.
+  const follow = (_event, url) => {
+    if (server && desktop.sameOrigin(url, server.base)) shownScore = desktop.scoreInAddress(url)
+  }
+  win.webContents.on('did-navigate', follow)
+  win.webContents.on('did-navigate-in-page', follow)
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return
     const key = input.key.toLowerCase()
@@ -106,7 +115,7 @@ function guard(contents) {
     return { action: 'deny' }
   })
   contents.on('will-navigate', (event, url) => {
-    if (url.startsWith('file:') || (server && desktop.sameOrigin(url, server.base))) return
+    if (desktop.staysInApp(url, server?.base, LOADING_PAGE)) return
     event.preventDefault()
     if (desktop.opensOutside(url)) shell.openExternal(url)
   })
@@ -171,7 +180,9 @@ async function start() {
   current.ready = true
   const files = waitingFiles
   waitingFiles = []
-  const opened = await upload(files)
+  // After a restart the window comes back to the score it showed: it came back to the library,
+  // and the score had to be found and opened again.
+  const opened = (await upload(files)) ?? shownScore
   if (win && !win.isDestroyed() && server === current) {
     await win.loadURL(opened ? scoreUrl(current.base, opened) : `${current.base}/`).catch(() => {})
   }
