@@ -10,6 +10,9 @@ DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons"
 MIME_DIR="$HOME/.local/share/mime"
 TARGET="$APPS_DIR/${APP_ID}.AppImage"
+# Where the launcher has the AppImage unpack itself (TMPDIR below): xrnsheet's own folder in the
+# cache, on disk.
+UNPACK_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/${APP_ID}"
 
 [[ -d node_modules ]] || npm ci
 npm run pack
@@ -21,6 +24,7 @@ if [[ -z "${SOURCE:-}" ]]; then
 fi
 
 mkdir -p "$APPS_DIR" "$DESKTOP_DIR" "$ICON_DIR" "$MIME_DIR/packages"
+install -d -m 700 "$UNPACK_DIR"
 
 # Written beside the target and renamed over it: a running AppImage is read from this exact file,
 # and truncating it would break the app in use. A rename leaves that copy running.
@@ -52,13 +56,18 @@ fi
 
 # Run unpacked (NO_CLEANUP keeps the unpacked copy for the next start), as xrncal is: the server
 # reads its code from the app all the time it runs, and an AppImage mounted in place loses those
-# files if its mount goes away.
+# files if its mount goes away. The runtime unpacks into $TMPDIR/appimage_extracted_<MD5 of the
+# AppImage>, so TMPDIR puts the copy in UNPACK_DIR, on disk: /tmp is memory here (about 300 MB a
+# version until a restart), and systemd-tmpfiles removes /tmp files untouched for 10 days, from
+# under an app left running that long. The app and its server get this TMPDIR too, so their
+# temporary files and Chromium's single-instance socket go in the same user-only folder; a second
+# start still finds the open window through the link to that socket in the profile.
 cat > "$DESKTOP_DIR/${APP_ID}.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=xrnsheet
 Comment=Turn a photo or PDF of sheet music into notation you can edit and reprint
-Exec=env NO_CLEANUP=1 "${TARGET}" --appimage-extract-and-run %F
+Exec=env NO_CLEANUP=1 "TMPDIR=${UNPACK_DIR}" "${TARGET}" --appimage-extract-and-run %F
 Icon=${ICON_DIR}/${APP_ID}.png
 Terminal=false
 Categories=AudioVideo;Audio;Music;
@@ -71,21 +80,20 @@ if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
 fi
 
-# Each version unpacks to its own folder in the temporary folder, which is memory here, and stays
-# there until a restart (about 300 MB each). Take away earlier versions' copies that nothing is
-# running from; the next start unpacks again.
-in_use() {
-  local folder="$1" process link
-  for process in /proc/[0-9]*; do
-    for link in exe cwd; do
-      [[ "$(readlink "$process/$link" 2>/dev/null)" == "$folder"/* || "$(readlink "$process/$link" 2>/dev/null)" == "$folder" ]] && return 0
-    done
-  done
-  return 1
-}
-for folder in "${TMPDIR:-/tmp}"/appimage_extracted_*; do
-  [[ -x "$folder/xrnsheet" && -f "$folder/resources/xrnsheet/app/server.py" ]] || continue
-  in_use "$folder" || rm -rf -- "$folder"
+# Each version unpacks to its own folder and NO_CLEANUP keeps it (about 300 MB each). Take away
+# earlier versions' copies that nothing uses: no process runs from one, works in one (the server
+# works in its own) or has one of its files mapped. The copy a running xrnsheet uses stays, whichever
+# version it is, and so does this version's, which a start may be unpacking right now. The same goes
+# for the copies earlier launchers unpacked into ${TMPDIR:-/tmp}, where only xrnsheet's are touched.
+CURRENT_COPY="$UNPACK_DIR/appimage_extracted_$(md5sum "$TARGET" | cut -d' ' -f1)"
+IN_USE="$( { find /proc/[0-9]*/exe /proc/[0-9]*/cwd -maxdepth 0 -printf '%l\n'; cat /proc/[0-9]*/maps; } 2>/dev/null || true)"
+for folder in "$UNPACK_DIR"/appimage_extracted_* "${TMPDIR:-/tmp}"/appimage_extracted_*; do
+  [[ -d "$folder" && "$folder" != "$CURRENT_COPY" ]] || continue
+  [[ "$folder" == "$UNPACK_DIR"/* || ( -x "$folder/${APP_ID}" && -f "$folder/${APP_ID}.desktop" ) ]] || continue
+  if grep -qF -- "$folder/" <<<"$IN_USE" || grep -qxF -- "$folder" <<<"$IN_USE"; then
+    continue
+  fi
+  rm -rf -- "$folder"
 done
 
 echo "Installed: $TARGET"
