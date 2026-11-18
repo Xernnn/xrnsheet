@@ -24,6 +24,9 @@ const env = {
   XDG_CONFIG_HOME: path.join(scratch, 'config'),
   XDG_DATA_HOME: path.join(scratch, 'data'),
   XDG_STATE_HOME: path.join(scratch, 'state'),
+  // As the launcher runs it, an AppImage unpacks into TMPDIR and keeps the copy: here, the
+  // throwaway folder, which goes with it.
+  TMPDIR: scratch,
   NO_CLEANUP: '1'
 }
 const jobs = path.join(scratch, 'data', 'xrnsheet', 'jobs')
