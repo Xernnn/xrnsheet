@@ -390,6 +390,7 @@ Check these before shipping a commercial product.
 | music21 | BSD-3-Clause | The benchmark pieces come from its corpus, and two tests open a chorale from it. Corpus files aren't copied into this repository |
 | RapidOCR | Apache-2.0 | |
 | Fonts in `data/fonts/` | SIL Open Font License | Used to generate training images |
+| MiSans Latin in `app/static/fonts/` | MiSans licence (Xiaomi) | The window's font, as in every xrn app: free for commercial use, embedded as released ([hyperos.mi.com/font](https://hyperos.mi.com/font)) |
 | Piano samples in `app/static/sounds/piano/` | CC BY 3.0 | Salamander Grand Piano by Alexander Holm, the 30-note set from [Tone.js's audio](https://tonejs.github.io/audio/salamander/). Its credit has to go with the app, as [its README](app/static/sounds/piano/README.md) says |
 | Guitar samples in `app/static/sounds/guitar/` | CC0 1.0 | FreePats' Spanish classical guitar, recorded by Roberto of zenvoid.org for [FreePats](https://freepats.zenvoid.org/Guitar/acoustic-guitar.html) ([its README](app/static/sounds/guitar/README.md)) |
 | Bass guitar samples in `app/static/sounds/bass-guitar/` | CC0 1.0 | Growlybass by Karoryfer Samples ([its README](app/static/sounds/bass-guitar/README.md)) |
