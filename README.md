@@ -10,7 +10,9 @@ Upload a sheet, check the result beside the original, fix notes and chord symbol
 
 It works well on clean, computer-rendered sheets. It's weak on real handwriting, and it hasn't been tested on real phone photos or real printed pages yet. See [the project report](docs/PROJECT_REPORT.md) for the full results, and [the knowledge guide](docs/KNOWLEDGE_GUIDE.md) for the ideas behind them.
 
-<img src="docs/screenshots/editor.png" alt="The editor in Write mode with a piano score written from scratch, Twinkle, Twinkle, Little Star, with chord symbols above the notes and lyrics below. The top bar has the title, Read, Write and Practice, the instrument switcher showing Piano, playback and the command palette. The library is on the left, the inspector on the right names the selected note, and a piano keyboard runs along the bottom with the note's key lit">
+<img src="docs/screenshots/write.png" alt="The editor in Write mode with the opening of the Maple Leaf Rag for piano. The top bar has the title, Read, Write and Practice, the instrument switcher showing Piano, playback and the command palette. The note input bar is above the score. A note in the right hand is selected and drawn in blue; the inspector on the right names it, E flat 4 and E flat 5, sixteenth, voice 1, Piano, right hand, with the pianist's box of pedal, octave lines, arpeggio, fingers and hands. The piano keyboard along the bottom has the note's key lit">
+
+*Write mode: a selected note, the inspector's pianist's box, and its key lit on the piano below. The screenshots here use public-domain music and a made-up study.*
 
 ## Setup
 
@@ -44,7 +46,9 @@ Tesseract needs `eng.traineddata` in `/usr/share/tessdata`.
 .venv/bin/python -m app.server
 ```
 
-Open <http://127.0.0.1:8000>. A page takes 10 to 15 seconds on a laptop's CPU, or 2 to 3 with `--notes own` below. PDFs can have up to 40 pages. Photos opened or dropped together, up to 40, are read as the pages of one score, in the order of their names, so a piece photographed page by page is one score. If a page can't be read, it's left out and the app says which one. Your sheets are listed in the library, so you can come back to them.
+Open <http://127.0.0.1:8000>. `--port` serves it on another port. The server only answers on this computer: it's bound to 127.0.0.1 and turns away requests made for any other host name, so a phone on the same network can't open it. A page takes 10 to 40 seconds on a laptop's CPU, the longer for a full page of piano music, or 2 to 3 with `--notes own` below. PDFs can have up to 40 pages. Photos opened or dropped together, up to 40, are read as the pages of one score, in the order of their names, so a piece photographed page by page is one score. If a page can't be read, it's left out and the app says which one. A PDF that asks for a password says so; open a copy saved without one. Your sheets are listed in the library, so you can come back to them.
+
+Each score is a folder of its own in `data/jobs/` in the checkout, or in the folder given with `--jobs`: the photos or PDF it was read from, what the reader found, and every version an edit saved. The last 100 versions are kept to undo to, and the first, so undo goes back through the last hundred edits and then to the score as it began. Each score has its own address, so the browser's Back and Forward go between the library and the scores opened, and an address whose score has been deleted opens the library and says "Not in the library". Nothing leaves the computer: there's no account, sync or server elsewhere.
 
 The rest of the app can be used while a sheet is read. It's in the library at once, as a tile saying how it's getting on: waiting its turn, and behind how many, as sheets are read one at a time; or the page being read and the time so far. Opened, it shows the same, and opens into the score when it's done. Cancel, on either, stops the reading and removes the sheet; the pages of a PDF read so far go with it. A sheet read while you were elsewhere says so, with Open, and one that couldn't be read stays in the library saying why, with Try again and Remove.
 
@@ -65,22 +69,17 @@ cd desktop
 npm run app:install
 ```
 
-This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it to the launcher. Run it again to update. The app starts its own copy of the server when it opens and stops it when it closes, so nothing needs to be running first.
+This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it to the launcher. Run it again to update. Only what's committed in `app/`, `chords/`, `notes/`, `pipeline/` and `models/` goes in, so a half-made change can't slip into the installed app. The app starts its own copy of the server when it opens and stops it when it closes, so nothing needs to be running first.
+
+- **Where it runs from:** the launcher unpacks the AppImage into `~/.cache/xrnsheet` and runs it from there, as the server reads its code from the app all the time it runs. Each version unpacks to a folder of its own, about 300 MB, and a reinstall removes earlier versions' folders that nothing is using.
 
 - **Your scores** are kept in `~/.local/share/xrnsheet/jobs`, not in the checkout, so they stay through updates and branch changes.
 - **Python:** the app runs on this checkout's `.venv`, where homr, onnxruntime and the readers' models already are, rather than carrying a copy. Set `XRNSHEET_PYTHON` before installing to use another one.
 - **Opening files:** `.musicxml` and `.mxl` files offer xrnsheet under "Open with", and `xrnsheet.AppImage song.mxl` opens one from a terminal. If the app is already open, the file opens there.
 - **Keys:** Ctrl+T, Ctrl+Shift+P, F6 and the other keys a browser tab keeps for itself all reach the score. Ctrl+Q quits.
-- **If it won't start**, the window says why, and the server's log is `~/.local/state/xrnsheet/server.log`.
+- **If it won't start**, the window says why, and the server's log is `~/.local/state/xrnsheet/server.log`. While its server starts, the window shows the xrnsheet tile over a spinner; if the server stops and starts again, the window comes back to the score that was open.
 
-`npm start` in `desktop/` runs the app straight from the checkout, and `npm test` and `npm run test:window` check it. `test:window` starts the real app headless with a throwaway scores folder.
-
-The editor's browser checks, `tests/e2e_editor.py`, aren't run by pytest: they need a running server and a Python with Playwright, which `.venv` doesn't have, so they run on a Python of their own (a venv with only `playwright` in it is enough). With `XRNSHEET_BROWSER` set to a Chromium already installed:
-
-```sh
-.venv/bin/python -m app.server --notes own --port 8011
-<python with playwright> tests/e2e_editor.py --port 8011 --clean
-```
+`npm start` in `desktop/` runs the app straight from the checkout. Its tests are under [Tests](#tests).
 
 ### The editor
 
@@ -89,6 +88,10 @@ The window is built round the instrument you play, piano, guitar or violin, and 
 - **Read** shows the score and nothing else, as wide as the window up to one and a half times its printed size, the pages one below the other, or with the zoom's Whole page a whole page at a time, or two side by side like an open book when the window has room for both. Space, Page Down or → reads on down the page, bringing the next system up whole, and then turns it, Shift+Space, Page Up or ← turns back, and so does a click on the right or left half of the score. Two pages side by side are turned together. A page-turning pedal works, as it sends those keys. Home and End go to the first and last page. While the score plays, the page turns to follow it. Nothing can be changed by accident, and N starts writing.
 - **Write** has the note input bar above the score, the inspector on the right and the instrument below.
 - **Practice** has the practice tools above the score and the instrument below, lit as the notes sound.
+
+<img src="docs/screenshots/read.png" alt="Read mode with Mozart's String Quartet in D, K. 155, zoomed to Whole page: pages 1 and 2 side by side like an open book, nothing but the top bar around them, and Pages 1–2 of 12 at the bottom right">
+
+*Read, at Whole page: two pages side by side when the window has room.*
 
 The mode is kept for next time. A score opens fitted to the width it has: its music as wide as the window, with a little of the paper either side and the pages one below the other, which on a laptop is a staff space of about ten pixels in Write, beside the inspector. In Read and Practice, where nothing sits beside the score, it's fitted no larger than one and a half times its printed size, in the middle of the window, so a wide window shows more of the music rather than larger music. Each score keeps the zoom it was left at in each mode.
 
@@ -101,9 +104,21 @@ The mode is kept for next time. A score opens fitted to the width it has: its mu
 
 **The library** is on the left: your scores as pictures of their first pages, with a search box that finds a score by its title or its composer, New, and Open (photos, a PDF or a MusicXML file). With no score open it fills the window, and the logo goes back to it. A score that opens has the window to itself, so the library folds away; its button at the top left or F6 brings it back beside the score, as a list with the open one marked, whose picture follows your edits, and « folds it away again. A file dropped anywhere on the window opens. A tile's ⋮ menu, or a right-click on it, deletes its score, and File ▸ Delete deletes the one open. Nothing asks first: Undo brings it back, and a score deleted stays in the trash, `.trash` in the scores' folder, for a week.
 
+<img src="docs/screenshots/library.png" alt="The library filling the window: a search box, New and Open, and tiles with each score's first page, title, date and where it came from: written here, opened from a file, or read from 1 page">
+
+*The library with no score open.*
+
 **New score:** Piano, Guitar (with tablature), Violin, Bass guitar (with tablature), Cello, Viola, Ukulele and Voice are large cards. A click on one starts writing for it straight away, in the key and time last chosen, which the dialog names. Its + adds it to the list instead, to choose more instruments. More instruments, key and time opens the rest, chosen by family or by searching: woodwinds from piccolo to contrabassoon with the clarinets and saxophones, accordion, brass, pitched percussion, voices, keyboards, guitars and basses with or without tablature, harp, ukulele, mandolin and banjo, and the bowed strings, each with its clefs and transposition. Searching for "tablature" finds every instrument that has it, here and in Add instruments. Then come the key, time signature, tempo, number of measures, pickup, title and composer. A drum kit and other unpitched percussion aren't there yet, as the score only holds pitched notes.
 
+<img src="docs/screenshots/new-score.png" alt="The New score dialog over the library: cards for Piano, Guitar, Violin, Bass guitar, Cello, Viola, Ukulele and Voice, each with a + to add it to the list, C major · 4/4 below them, and More instruments, key and time">
+
+*New score: one click on a card starts writing.*
+
 A score read from a photo or PDF also has the original sheet beside it, or across the top of the score when the sheet is wider than it's tall, as a lead sheet often is, so that the score keeps the window's width, in every mode, with a box round each chord it found, the chords to check, and "Mark as checked". The inspector's Score tab, or View ▸ Original sheet, hides or shows it. Ctrl and the wheel, or a pinch, zoom it, a double-click zooms in on a place and back, and it's dragged to move about. Its edge is dragged to give it more room, or its ⤢ button gives it 60% of the width at once. A box clicked on it opens its chord in the score to change, and a chord chosen in the score shows its box. A click where the reader missed a chord says where it would go, as "bar 5, beat 3", and writes the chord typed there, placed as the reader places the chords it finds; a sheet read before this version has to be read again for that.
+
+<img src="docs/screenshots/original.png" alt="A lead sheet read from a simulated phone photo of Stephen Foster's Jeanie with the Light Brown Hair. The photo is across the top under Original sheet, with Mark as checked, and a green box round each chord the reader found. The G7 in bar 8 is chosen: its box on the photo is blue, and in the score below it's open to change, with Save and Remove">
+
+*A sheet read from a photo: each chord the reader found boxed on the original, and the chosen one open to change.*
 
 **The inspector** shows what's selected, and everything that can be done to it:
 
@@ -119,6 +134,10 @@ A score read from a photo or PDF also has the original sheet beside it, or acros
 - **Joins:** a hammer-on (H), pull-off (P), slide or glissando from each selected note to the next, or from one note to the one after it.
 - **Bend** ½, full or 1½, and vibrato. **Lines:** palm mute (P.M.) and let ring over the selection. **Sound:** a natural or an artificial harmonic, and a dead note.
 - **Right hand** p, i, m and a, **left hand** fingers 0 to 4, and **string numbers** in circles, which play the note on that string too, on the tablature or without it.
+
+<img src="docs/screenshots/guitar.png" alt="A made-up four-bar Study in A minor for guitar, with a tablature staff under the standard staff and a chord diagram over each chord symbol: Am, Dm, E7, Am. The D4 in bar 3 is selected; the inspector's guitarist's box shows it played on string 2, fret 3, with tablature and chord diagrams on, standard tuning and no capo, then the joins and bends. The fretboard below has D lit on the B string at the third fret">
+
+*A guitar with tablature and chord diagrams: the selected note's string and fret in the inspector and on the fretboard.*
 
 **A violinist's note** (or a viola's, a cello's or a double bass's) has its up- and down-bow, slur, staccato and tenuto, then:
 
@@ -137,7 +156,7 @@ A pressed button is what the note has already, and pressing it again takes it aw
 
 F8 shows or hides the inspector on the selection, F7 on the score. On a narrow window it opens over the score.
 
-**The instrument** below the score is the chosen part's: a piano's 88 keys, a guitar's or bass's fretboard (its strings tuned as the score has them, every fret it has, with the inlays, and the capo across the strings, with the frets behind it greyed), or a bowed instrument's fingerboard: a violin's, a viola's, a cello's or a double bass's four strings, from the open string to the fourth finger in twelfth position, with first to twelfth position marked where the first finger goes and first position's finger tapes. Each has its own hand: a violinist's spans a fourth, a cellist's a minor third, and a double bassist's a whole tone, fingered 1, 2 and 4. A part of any other kind gets the keyboard. It lights the selected notes in blue, and while the score plays its notes in amber as they sound. A selected note high on the neck is brought into view, as a phone shows only the first frets. A guitar's notes are shown at the string and fret they're played on, on the tablature or kept on the note, as they sound, and otherwise where they're most easily played together, each chord on strings of its own. A bowed instrument's are shown on the string its number or a "sul G" names, or under the hand in the position marked, and otherwise in the lowest position, each with its finger: the one written on it, or the one that position uses on that instrument. While entering notes, a key, a fret or a place on a string writes that note at the cursor, and Shift adds it to the chord, as a MIDI keyboard does. Otherwise, in Write with a note or rest selected, it makes that note the one pressed, keeping its length, so a misread note is put right by playing the right one, and Shift adds it to the note's chord. With nothing selected, or in Practice, it's only heard. The words beside the panel's tabs say which it is just now. A guitar's note is played on the string clicked, at that fret, with tablature or without. A violin's note played on another string than the one it would be shown on gets that string's number. A key is the pitch the staff shows, so at concert pitch it's the one a transposing instrument sounds. Ctrl and the mouse wheel over the keyboard make the keys wider or narrower. The panel's tabs show the mixer or the timeline in its place, and P, F10 and F12 show or put away the instrument, the mixer and the timeline.
+**The instrument** below the score is the chosen part's: a piano's 88 keys, a guitar's or bass's fretboard (its strings tuned as the score has them, every fret it has, with the inlays, and the capo across the strings, with the frets behind it greyed), or a bowed instrument's fingerboard: a violin's, a viola's, a cello's or a double bass's four strings, from the open string to the fourth finger in twelfth position, with first to twelfth position marked where the first finger goes and first position's finger tapes. Each has its own hand: a violinist's spans a fourth, a cellist's a minor third, and a double bassist's a whole tone, fingered 1, 2 and 4. A part of any other kind gets the keyboard. It lights the selected notes in blue, and while the score plays its notes in amber as they sound. A selected note high on the neck is brought into view, as a narrow window shows only the first frets. A guitar's notes are shown at the string and fret they're played on, on the tablature or kept on the note, as they sound, and otherwise where they're most easily played together, each chord on strings of its own. A bowed instrument's are shown on the string its number or a "sul G" names, or under the hand in the position marked, and otherwise in the lowest position, each with its finger: the one written on it, or the one that position uses on that instrument. While entering notes, a key, a fret or a place on a string writes that note at the cursor, and Shift adds it to the chord, as a MIDI keyboard does. Otherwise, in Write with a note or rest selected, it makes that note the one pressed, keeping its length, so a misread note is put right by playing the right one, and Shift adds it to the note's chord. With nothing selected, or in Practice, it's only heard. The note beside the panel's tabs says which it is just now: "✎ Writing", the part's name with "· Changes the note", or with "· Play along" while Practice waits for you, or the part's name alone. A guitar's note is played on the string clicked, at that fret, with tablature or without. A violin's note played on another string than the one it would be shown on gets that string's number. A key is the pitch the staff shows, so at concert pitch it's the one a transposing instrument sounds. Ctrl and the mouse wheel over the keyboard make the keys wider or narrower. The panel's tabs show the mixer or the timeline in its place, and P, F10 and F12 show or put away the instrument, the mixer and the timeline.
 
 **Practice:**
 
@@ -148,9 +167,13 @@ F8 shows or hides the inspector on the selection, F7 on the score. On a narrow w
 - **Hear** everything, one part alone, or one hand of a piano: its upper staff is the right hand and its lower the left, and a note drawn on the other staff is that staff's hand's.
 - **Wait for** a part or one hand: Play then stops at each of those notes until you've played them, on a MIDI keyboard or on the instrument below, and the rest of the music plays along in time between them. The notes it's waiting for are purple on the page and outlined on the instrument, and a wrong note is named. A chord can be played in any order, and notes played a little early count. Each note you play is timed against the moment the music reached it, and marked on the page: green on time, magenta early, red late, and faded if it was let go before half its length, which a MIDI keyboard's key coming up, or the instrument below let go, says. The last note's timing and the counts so far are beside what it's waiting for, and stay there when it stops.
 
-**Entering notes.** Press `N` or click Write notes, pick a duration, and type the letters, click the staff, or play the instrument below. A new score starts this way. While it's on, the button says Writing, the score is edged in blue, and the panel below says what you play is written. Over the staff a ghost note shows what a click will write before it does: in the length and voice colour chosen, on its line or space with any ledger lines it needs, named as it will be, such as F♯4 under a key of G, with its bar and beat, and the notes it would replace greyed and named. It keeps up with the length and voice chosen, and with the page scrolled or zoomed under the pointer, and a click writes exactly what it shows: where none shows, more than five ledger lines from any staff, a click writes nothing. A click on a note already written selects it instead, to fix it: the arrows, a duration, Delete or a key below then change it, and a drag moves it, while the cursor stays where writing goes on. Shift+click adds the note to the chord there. Writing starts on a selected rest, after a selected note or stretch, so a note you've chosen isn't written over, and with nothing selected after the last note of the instrument's staff. A cursor the arrows take onto notes is drawn as writing over them, and the hint says so. On a tablature staff a click writes the open string clicked, and the cursor becomes a box on that string: a fret typed there writes that note on it, ↑ and ↓ move to another string, and Shift with a digit chooses the length, as the digits are frets. Two digits typed together, such as 1 then 2, are one fret. A new measure appears when you write past the last one. A longer note overwrites what comes after it and a shorter one leaves a rest, so every measure stays full. A note too long for its measure carries into the next one, tied. A letter takes the octave nearest the note before, and a guitar's or bass's first letter starts from the middle of its staff, as its clef has it, and stays within the three octaves up from its lowest string. A violin's, viola's, cello's or double bass's letters stay within its range, from its lowest string up to A7, E6, A5 or G4 as they sound, the tops of their ranges as Adler's The Study of Orchestration gives them, so typing G, D, A, E down from G4 on a violin ends on E4, not on the E3 below its G string. A MIDI keyboard works while entering notes, and keys pressed together make a chord. On a phone, buttons for C to B and a rest show while entering notes.
+<img src="docs/screenshots/practice.png" alt="Practice mode with Mozart's String Quartet in D, K. 155, Violin I chosen. The practice bar has the loop's A and B with Loop on, speed 75%, Count in, Step up, Metronome, Hear Everything and Wait for Violin I alone, and under it Play A5, On time, 2 on time, 2 early, 2 late, 1 let go early. Orange flags mark the loop over bars 4 and 5. The notes played so far are green, magenta and red, the one awaited is purple, and the violin's fingerboard below outlines it, third finger on the E string">
 
-**Selecting.** Click a note or rest, or a fret number on the tablature, where a fret typed plays the note at that fret on its string and the staff above follows, and Ctrl+↑ and ↓ move it to the string above or below at the same sound. Shift-click another to select the stretch between them, which gets a blue box. A selected note is heard as it's selected. Pressing a note's head and dragging it moves it up or down the staff, with its new name shown where it's going and heard as it gets there; dragging the paper anywhere else moves the pages. Click an empty part of a measure to select the whole measure. A stretch moves, deletes or copies as one undo step, within one voice. A copy takes the notes' marks with it: articulations, slurs and dynamics, a player's fingers, plucks, string numbers, bends, harmonics, dead notes, hammer-ons, slides and vibratos, on a guitar the string each note was played on, and the words over the passage: P.M. and let ring, sul G, pizz. and arco, positions, and R.H. and L.H. A line that runs on past the copy ends with it. What the instrument it's pasted into can't have, such as a finger 0 or a palm mute on a piano, is left off, and words already there stay as they are. Click a dynamic, tempo, text, sign, slur, hairpin, octave line or pedal to select it: Delete removes it, and a double-click or `F2` changes its text. A player's marks are selected the same way: a fingering, a pluck, a string number or a bend, which can be retyped (a guitar's string number retyped moves its tablature too), a hammer-on or pull-off, a slide, a glissando or a vibrato, which Delete takes away with both its ends, a harmonic (its circle, a guitar's A.H. or a violin's diamond, which goes with it), a bowing, a staccato, an accent or another articulation, and the words of a line such as P.M., let ring or sul G, or of pizz., arco, a position or R.H., which can be retyped too. A dead note's x is its notehead, so a click on it selects the note, and its button in the inspector takes it away. Clear marks takes all of a note's marks and techniques, its dead note's x included, and leaves the string it's played on. A right-click opens a menu for whatever is under the pointer.
+*Practice waiting for Violin I: notes played on the fingerboard marked on time, early or late, and the next one outlined.*
+
+**Entering notes.** Press `N` or click Write notes, pick a duration, and type the letters, click the staff, or play the instrument below. A new score starts this way. While it's on, the button says Writing, the score is edged in blue, and the bar under the score and the panel below both say "Writing". Over the staff a ghost note shows what a click will write before it does: in the length and voice colour chosen, on its line or space with any ledger lines it needs, named as it will be, such as F♯4 under a key of G, with its bar and beat, and the notes it would replace greyed and named. It keeps up with the length and voice chosen, and with the page scrolled or zoomed under the pointer, and a click writes exactly what it shows: where none shows, more than five ledger lines from any staff, a click writes nothing. A click on a note already written selects it instead, to fix it: the arrows, a duration, Delete or a key below then change it, and a drag moves it, while the cursor stays where writing goes on. Shift+click adds the note to the chord there. Writing starts on a selected rest, after a selected note or stretch, so a note you've chosen isn't written over, and with nothing selected after the last note of the instrument's staff. A cursor the arrows take onto notes is drawn as writing over them, and the bar under the score says so, as "Writing over C5 E5". On a tablature staff a click writes the open string clicked, and the cursor becomes a box on that string: a fret typed there writes that note on it, ↑ and ↓ move to another string, and Shift with a digit chooses the length, as the digits are frets. Two digits typed together, such as 1 then 2, are one fret. A new measure appears when you write past the last one. A longer note overwrites what comes after it and a shorter one leaves a rest, so every measure stays full. A note too long for its measure carries into the next one, tied. A letter takes the octave nearest the note before, and a guitar's or bass's first letter starts from the middle of its staff, as its clef has it, and stays within the three octaves up from its lowest string. A violin's, viola's, cello's or double bass's letters stay within its range, from its lowest string up to A7, E6, A5 or G4 as they sound, the tops of their ranges as Adler's The Study of Orchestration gives them, so typing G, D, A, E down from G4 on a violin ends on E4, not on the E3 below its G string. A MIDI keyboard works while entering notes, and keys pressed together make a chord. In a window narrower than 760 pixels, buttons for C to B and a rest show while entering notes.
+
+**Selecting.** Click a note or rest, or a fret number on the tablature, where a fret typed plays the note at that fret on its string and the staff above follows, and Ctrl+↑ and ↓ move it to the string above or below at the same sound. Shift-click another to select the stretch between them, which gets a blue box. A selected note is heard as it's selected. Pressing a note's head and dragging it moves it up or down the staff, with its new name shown where it's going and heard as it gets there; dragging the paper anywhere else moves the pages. Click an empty part of a measure to select the whole measure. A stretch moves, deletes or copies as one undo step, within one voice. A copy takes the notes' marks with it: articulations, slurs and dynamics, a player's fingers, plucks, string numbers, bends, harmonics, dead notes, hammer-ons, slides and vibratos, on a guitar the string each note was played on, and the words over the passage: P.M. and let ring, sul G, pizz. and arco, positions, and R.H. and L.H. A line that runs on past the copy ends with it. What the instrument it's pasted into can't have, such as a finger 0 or a palm mute on a piano, is left off, and words already there stay as they are. Click a dynamic, tempo, text, sign, slur, hairpin, octave line or pedal to select it: Delete removes it, and a double-click or `F2` changes its text. A player's marks are selected the same way: a fingering, a pluck, a string number or a bend, which can be retyped (a guitar's string number retyped moves its tablature too), a hammer-on or pull-off, a slide, a glissando or a vibrato, which Delete takes away with both its ends, a harmonic (its circle, a guitar's A.H. or a violin's diamond, which goes with it), a bowing, a staccato, an accent or another articulation, and the words of a line such as P.M., let ring or sul G, or of pizz., arco, a position or R.H., which can be retyped too. A dead note's x is its notehead, so a click on it selects the note, and its button in the inspector takes it away. Clear marks takes all of a note's marks and techniques, its dead note's x included, and leaves the string it's played on. A right-click opens a menu for whatever is under the pointer. The bar under the score names what's chosen, as "Selected", "3 notes selected" or "Chord C7", and nothing more: the keys are in Help ▸ Keyboard shortcuts.
 
 **Instruments and parts.** The inspector's Score tab adds and removes instruments, and a transposing instrument gets its own key: the key chosen for a new score is the one it sounds in, so a B♭ trumpet in concert C reads D major. "Parts" opens one instrument alone as a PDF.
 
@@ -251,13 +274,37 @@ Click a chord symbol to change or remove it. With chord diagrams shown, the insp
 
 **Speed.** Only the pages an edit changes are drawn again, the server keeps its last few drawings, so going back to a score, undoing and redoing are quick, and the window is sent only the music symbols it draws. `bench/editor_speed.py` measures how long a score takes to open and an edit to show, and what the window loads.
 
-What MuseScore has and this editor doesn't yet: unpitched percussion such as a drum kit, and the rest of MuseScore's Style dialog beyond the page's spacing.
-
 To recognize a sheet without the app:
 
 ```sh
 .venv/bin/python -m pipeline.recognize photo.jpg --out results/photo
 ```
+
+### What it doesn't do yet
+
+- **Reading:** it's strongest on clean, computer-rendered sheets. On one real handwritten page it found 20 of 53 chords end to end, and real phone photos and printed pages have hardly been tried (see [Latest results](#latest-results)). Lyrics, "N.C." and other words on the page aren't read, and the parts read have no names, so the editor calls them "Instrument 1" and so on. Sheets are read one at a time, on the CPU.
+- **Notation:** what MuseScore has and this editor doesn't yet: unpitched percussion such as a drum kit, and the rest of MuseScore's Style dialog beyond the page's spacing.
+- **Sounds:** only the piano, the guitars (with the ukulele and mandolin), the bass guitar and the bowed strings are recordings; the rest are simple synthesized sounds.
+- **Devices:** it runs on one computer. There's no sync, and a phone can't open it.
+
+## Tests
+
+```sh
+.venv/bin/python -m pytest                  # everything; -k <name> for one test
+```
+
+GitHub Actions runs them on every push to `main` and every pull request, on Python 3.11, without PyTorch, homr and RapidOCR, so it leaves out the four test files that need them: `test_chord_images`, `test_corrections`, `test_notes` and `test_repair`. `tests/test_exported.py` reads the same images with each reader's `.pt` and its `.onnx`, so it fails when a reader has been retrained and not exported again.
+
+The editor's browser checks, `tests/e2e_editor.py`, aren't run by pytest: they need a running server and a Python with Playwright, which `.venv` doesn't have, so they run on a Python of their own (a venv with only `playwright` in it is enough). With `XRNSHEET_BROWSER` set to a Chromium already installed:
+
+```sh
+.venv/bin/python -m app.server --notes own --port 8011
+<python with playwright> tests/e2e_editor.py --port 8011 --clean
+```
+
+`--clean` removes the scores they made, `--shots <folder>` keeps a picture of some of the steps, and `--browser firefox` runs them in Firefox. The checks that read a sheet open `data/images/jazz_chart__clean.png`, which `bench/make_samples.py` makes (see [Run the benchmark](#run-the-benchmark)).
+
+The desktop app's checks run in `desktop/`: `npm test` for how it finds its Python, starts and stops the server and keeps its windows to the app's own pages, and `npm run test:window` starts the real app headless with a throwaway scores folder.
 
 ## Train on a GPU
 
@@ -379,6 +426,21 @@ development result, not a clean accuracy.
 
 <img src="docs/figures/real_gap.png" alt="From synthetic images to a real page: our final model drops from 99.9% on held-out fonts to 77% on chords cropped by hand and 38% end to end; RapidOCR from 91% to 49% and 11%">
 
+## How it's laid out
+
+| Folder | What's in it |
+|---|---|
+| `app/server.py` | The server, on FastAPI: the library, the line of sheets waiting to be read, every edit as a request, and the pages engraved with Verovio for the screen, PDF, MusicXML, MIDI and playback |
+| `app/static/` | The editor, in plain JavaScript with no build step: `page.js` opens and draws a score, `editor.js` writes and selects notes, `workspace.js` has the modes and the command palette, `inspector.js`, `palettes.js` and `technique.js` the inspector and the players' marks, `instruments.js` the keyboard, fretboard and fingerboard, `playback.js` and `practice.js` the sound, `dock.js` the panel along the bottom, and `shell.js` the menus and dialogs. `sounds/` has the recorded instruments and `fonts/` MiSans |
+| `pipeline/` | Reading a sheet (`recognize.py`: homr or the note reader for the notes, RapidOCR's text detector and the chord reader for the chords, `align.py` to put each chord on its beat, `repair.py` for mistakes the bars give away) and everything an edit does to the MusicXML |
+| `chords/`, `notes/` | The two readers trained here: each a small CRNN, with the code that renders its training images, trains, scores and exports it to ONNX |
+| `models/` | The trained readers, each as the `.pt` training writes and the `.onnx` the app reads |
+| `bench/` | The benchmark, the real-page test, the report's charts and the editor's speed |
+| `desktop/` | The Electron window around the server, and its installer |
+| `tests/` | pytest tests, and the browser checks in `e2e_editor.py` |
+| `data/truth/` | The benchmark's correct answers. The images rendered from them, the downloaded fonts and the app's own scores (`data/jobs/`) stay out of git |
+| `docs/` | [The project report](docs/PROJECT_REPORT.md), [the knowledge guide](docs/KNOWLEDGE_GUIDE.md), [the instrument API](docs/instrument-api.md), the report's figures and these screenshots |
+
 ## Licences
 
 Check these before shipping a commercial product.
@@ -387,7 +449,8 @@ Check these before shipping a commercial product.
 |---|---|---|
 | homr, Audiveris | AGPL-3.0 | Running them as a closed online service may require sharing source code. `--notes own` runs with no homr, for melody sheets only |
 | Verovio | LGPL-3.0 | |
-| music21 | BSD-3-Clause | The benchmark pieces come from its corpus, and two tests open a chorale from it. Corpus files aren't copied into this repository |
+| music21 | BSD-3-Clause | The benchmark pieces come from its corpus, two tests open a chorale from it, and the browser checks open its Maple Leaf Rag. The corpus files themselves aren't copied into this repository, but `data/truth/` keeps the first 9 to 16 bars of seven of its pieces as the benchmark's answers |
+| *Alexander's Ragtime Band* in `data/truth/berlin_leadsheet.musicxml` | Public domain in the US | Irving Berlin's song of 1911, 16 bars of it from music21's corpus. It's still in copyright where copyright runs 70 years after the author's death, as in the UK, the EU and Australia, until the end of 2059 |
 | RapidOCR | Apache-2.0 | |
 | Fonts in `data/fonts/` | SIL Open Font License | Used to generate training images |
 | MiSans Latin in `app/static/fonts/` | MiSans licence (Xiaomi) | The window's font, as in every xrn app: free for commercial use, embedded as released ([hyperos.mi.com/font](https://hyperos.mi.com/font)) |
