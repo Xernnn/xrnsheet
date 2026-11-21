@@ -1848,6 +1848,25 @@ def test_the_page_may_run_only_its_own_scripts(client, path):
     assert "script-src" not in policy and "'unsafe-eval'" not in policy, "scripts come from the app alone"
 
 
+def test_about_names_the_licence_the_source_and_the_credits_the_app_owes(client):
+    """AGPL-3.0 asks a changed copy used over a network to offer its source, MiSans's licence asks the
+    software to say it uses MiSans, and the piano's CC BY 3.0 asks for its credit wherever the app goes.
+    About once named only Verovio and Leland."""
+    about = re.search(r'<dialog id="aboutDialog".*?</dialog>', client.get("/").text, re.S).group(0)
+    credits = dict(re.findall(r"<dt>(.*?)</dt><dd>(.*?)</dd>", about))
+    links = {text: (href, rest) for href, rest, text in re.findall(r'<a href="([^"]+)"([^>]*)>([^<]+)</a>', about)}
+    plain = {name: re.sub(r"<[^>]+>", "", credit) for name, credit in credits.items()}
+    assert plain["Licence"] == "© 2026 Xernnn · GNU AGPL-3.0 · No warranty"
+    assert plain["Source"] == "github.com/Xernnn/xrnsheet"
+    assert links["github.com/Xernnn/xrnsheet"][0] == "https://github.com/Xernnn/xrnsheet"
+    assert links["GNU AGPL-3.0"][0] == "https://www.gnu.org/licenses/agpl-3.0.html"
+    assert plain["Engraving"] == "Verovio · LGPL-3.0" and plain["Music font"] == "Leland · SIL OFL 1.1"
+    assert plain["Font"].startswith("MiSans (Xiaomi)")
+    assert plain["Piano"] == "Salamander Grand Piano by Alexander Holm · CC BY 3.0"
+    assert links["CC BY 3.0"][0] == "https://creativecommons.org/licenses/by/3.0/", "the credit links to the licence"
+    assert all('target="_blank"' in rest and "noopener" in rest for _, rest in links.values()), "each opens beside the score, not over it"
+
+
 def test_a_drawing_just_made_is_kept_for_the_next_time_it_is_asked_for(client):
     """Opening a score again, and undoing, ask for a drawing the server has just made."""
     score_id = blank(client, measures=2)
