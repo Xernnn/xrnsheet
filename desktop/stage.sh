@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Gather what goes inside the desktop app: the server's committed code and models, the Python it
-# runs on, and the icon. `npm run pack` runs this before electron-builder.
+# Gather what goes inside the desktop app: the server's committed code, the readers models/models.json
+# names, the Python it runs on, and the icon. `npm run pack` runs this before electron-builder.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 REPO="$(cd .. && pwd)"
 STAGE=build/xrnsheet
-PARTS=(app chords notes pipeline models)
+PARTS=(app chords notes pipeline)
 
 # The Python environment with xrnsheet's packages (about 1.8 GB, with PyTorch's CPU build), used
 # where it is rather than copied into the app. The checkout's .venv by default; a worktree's .venv
@@ -22,10 +22,18 @@ fi
 # Only what's committed, so a half-made change in the checkout can't slip into the installed app.
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
-git -C "$REPO" archive --format=tar HEAD -- "${PARTS[@]}" | tar -x -C "$STAGE"
-if [[ -n "$(git -C "$REPO" status --porcelain -- "${PARTS[@]}")" ]]; then
-  echo "Note: changes not yet committed in ${PARTS[*]} are left out of the app." >&2
+git -C "$REPO" archive --format=tar HEAD -- "${PARTS[@]}" models/models.json | tar -x -C "$STAGE"
+if [[ -n "$(git -C "$REPO" status --porcelain -- "${PARTS[@]}" models/models.json)" ]]; then
+  echo "Note: changes not yet committed in ${PARTS[*]} models/models.json are left out of the app." >&2
 fi
+
+# The readers aren't in git: they're files of a release, fetched into models/. Only the ones the
+# committed models.json lists go in, each checked against its SHA-256, so a reader trained here and
+# not yet released can't slip in either.
+"$PYTHON" "$REPO/tools/fetch_models.py" --check --listing "$STAGE/models/models.json" >/dev/null \
+  || { echo "The readers in $REPO/models aren't the ones models/models.json lists. Fetch them with: python3 tools/fetch_models.py" >&2; exit 1; }
+"$PYTHON" -c 'import json, sys; print("\n".join(json.load(open(sys.argv[1]))["files"]))' "$STAGE/models/models.json" \
+  | while read -r name; do cp "$REPO/models/$name" "$STAGE/models/$name"; done
 COMMIT="$(git -C "$REPO" rev-parse --short HEAD)"
 
 # Check that this Python can run the server the app carries, before building around it.

@@ -23,8 +23,13 @@ from pipeline.musicxml import to_text
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(tmp_path, tmp_path_factory, monkeypatch):
     monkeypatch.setattr(server, "JOB_DIR", tmp_path)
+    # Reading is faked here, so it needs only stand-ins for the readers, not the ones fetched.
+    readers = tmp_path_factory.mktemp("models")
+    for name in ("chord_reader.onnx", "note_reader.onnx"):
+        (readers / name).touch()
+    monkeypatch.setattr(server, "MODEL_DIR", readers)
     monkeypatch.setattr(server, "stopping", threading.Event())  # Each test's app has yet to stop.
     for name, empty in (("line", []), ("began", {}), ("cancelled", set())):
         monkeypatch.setattr(server, name, empty)  # And nothing waiting to be read.
@@ -315,6 +320,29 @@ def test_a_document_with_no_readable_page_fails(client, monkeypatch):
     server.recognize_job(folder, upload)
     data = client.get(f"/api/scores/{folder.name}").json()
     assert data["status"] == "failed" and data["message"] == "Recognition failed."
+
+
+def test_a_sheet_read_before_the_readers_are_fetched_says_how_to_fetch_them(client, monkeypatch, tmp_path_factory):
+    """The readers are files of a release, not of git, so a fresh checkout has none. A sheet read then
+    failed in each page's own process, saying only "Recognition failed"."""
+    monkeypatch.setattr(server, "MODEL_DIR", tmp_path_factory.mktemp("empty"))
+    monkeypatch.setattr(server, "recognize_page", lambda image, out_dir: pytest.fail("a page was read with no reader"))
+    monkeypatch.setenv("XRNSHEET_NOTES", "own")
+    assert server.missing_readers("own") == ["chord_reader.onnx", "note_reader.onnx"]
+    folder, upload = job_for_pdf(1)
+    server.recognize_job(folder, upload)
+    data = client.get(f"/api/scores/{folder.name}").json()
+    assert data["status"] == "failed" and data["message"] == server.MISSING_READERS
+    assert "python3 tools/fetch_models.py" in data["message"]
+
+
+def test_the_readers_a_sheet_needs_are_the_chord_readers_and_with_own_notes_the_note_readers(client, monkeypatch, tmp_path_factory):
+    readers = tmp_path_factory.mktemp("some")
+    monkeypatch.setattr(server, "MODEL_DIR", readers)
+    (readers / "chord_reader.pt").touch()  # Read in PyTorch, as before, when it isn't exported.
+    assert server.missing_readers("homr") == [] and server.missing_readers("own") == ["note_reader.onnx"]
+    (readers / "note_reader.onnx").touch()
+    assert server.missing_readers("own") == []
 
 
 def test_a_long_pdf_says_what_was_skipped(client, monkeypatch):

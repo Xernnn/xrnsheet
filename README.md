@@ -23,11 +23,12 @@ python3 -m venv .venv
 .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu   # PyTorch without the GPU parts
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m chords.fonts          # download the fonts
+python3 tools/fetch_models.py             # download the trained readers into models/
 ```
 
 The app reads every page on the CPU, with its two models exported to ONNX and run in onnxruntime, so reading a page doesn't load PyTorch. `.venv` still takes PyTorch's CPU build, under 2 GB in all, for the tests, for `bench/real_page.py`, and to read with a model that hasn't been exported. The default build carries 5 GB of GPU libraries that only [training](#train-on-a-gpu) uses.
 
-The trained models are in `models/`: the `.pt` that training writes, and the `.onnx` exported from it that the app reads. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
+The trained models go in `models/`: the `.pt` that training writes, and the `.onnx` exported from it that the app reads. They're files of a [release](https://github.com/Xernnn/xrnsheet/releases/tag/models-2026-11-17), not of git; `models/models.json` names them with their SHA-256, `tools/fetch_models.py` checks each, and `--onnx` fetches only what the app needs. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
 
 The benchmark also uses Audiveris and Tesseract. Audiveris has no Arch package, so it's unpacked into `tools/` from the official release:
 
@@ -69,7 +70,7 @@ cd desktop
 npm run app:install
 ```
 
-This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it to the launcher. Run it again to update. Only what's committed in `app/`, `chords/`, `notes/`, `pipeline/` and `models/` goes in, so a half-made change can't slip into the installed app. The app starts its own copy of the server when it opens and stops it when it closes, so nothing needs to be running first.
+This builds `~/Applications/xrnsheet.AppImage` from the last commit and adds it to the launcher. Run it again to update. Only what's committed in `app/`, `chords/`, `notes/` and `pipeline/` goes in, with the readers the committed `models/models.json` lists, checked against their hashes, so a half-made change or a reader not yet released can't slip into the installed app. The app starts its own copy of the server when it opens and stops it when it closes, so nothing needs to be running first.
 
 - **Where it runs from:** the launcher unpacks the AppImage into `~/.cache/xrnsheet` and runs it from there, as the server reads its code from the app all the time it runs. Each version unpacks to a folder of its own, about 300 MB, and a reinstall removes earlier versions' folders that nothing is using.
 
@@ -434,7 +435,8 @@ development result, not a clean accuracy.
 | `app/static/` | The editor, in plain JavaScript with no build step: `page.js` opens and draws a score, `editor.js` writes and selects notes, `workspace.js` has the modes and the command palette, `inspector.js`, `palettes.js` and `technique.js` the inspector and the players' marks, `instruments.js` the keyboard, fretboard and fingerboard, `playback.js` and `practice.js` the sound, `dock.js` the panel along the bottom, and `shell.js` the menus and dialogs. `sounds/` has the recorded instruments and `fonts/` MiSans |
 | `pipeline/` | Reading a sheet (`recognize.py`: homr or the note reader for the notes, RapidOCR's text detector and the chord reader for the chords, `align.py` to put each chord on its beat, `repair.py` for mistakes the bars give away) and everything an edit does to the MusicXML |
 | `chords/`, `notes/` | The two readers trained here: each a small CRNN, with the code that renders its training images, trains, scores and exports it to ONNX |
-| `models/` | The trained readers, each as the `.pt` training writes and the `.onnx` the app reads |
+| `models/` | The trained readers, each as the `.pt` training writes and the `.onnx` the app reads, fetched from a release; `models.json` lists them |
+| `tools/` | `fetch_models.py`, which fetches them. Audiveris is unpacked here too, out of git |
 | `bench/` | The benchmark, the real-page test, the report's charts and the editor's speed |
 | `desktop/` | The Electron window around the server, and its installer |
 | `tests/` | pytest tests, and the browser checks in `e2e_editor.py` |

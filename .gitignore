@@ -1,6 +1,8 @@
 .venv/
 .venv-train/
-tools/
+# Audiveris, unpacked here for the benchmark; the script that fetches the readers is kept.
+tools/*
+!tools/fetch_models.py
 results/
 data/images/
 data/my_sheets/
@@ -12,11 +14,9 @@ __pycache__/
 .pytest_cache/
 data/corrections/
 data/notes/
+# The readers are files of a GitHub release, fetched by tools/fetch_models.py; models.json lists them.
 models/*
-!models/chord_reader.pt
-!models/note_reader.pt
-!models/chord_reader.onnx
-!models/note_reader.onnx
+!models/models.json
 desktop/node_modules/
 desktop/dist/
 desktop/build/

@@ -52,6 +52,10 @@ def write_stand_in(folder: Path, seconds: float) -> Path:
     (folder / "pipeline").mkdir(parents=True, exist_ok=True)
     (folder / "pipeline" / "__init__.py").write_text("", encoding="utf-8")
     (folder / "pipeline" / "recognize.py").write_text(READER.replace("SECONDS", repr(float(seconds))), encoding="utf-8")
+    # It reads without the real readers, so it needs only stand-ins for them, not the ones fetched.
+    (folder / "models").mkdir(exist_ok=True)
+    for name in ("chord_reader.onnx", "note_reader.onnx"):
+        (folder / "models" / name).touch()
     return folder
 
 
@@ -68,6 +72,7 @@ def main() -> None:
     # of its own would be left behind; one given is removed by whoever gave it.
     folder = write_stand_in(arguments.reader or Path(tempfile.mkdtemp(prefix="xrnsheet-stand-in-")), arguments.seconds)
     server.ROOT = folder  # Pages are read by whatever pipeline.recognize is there.
+    server.MODEL_DIR = folder / "models"
     try:
         server.main(rest)
     finally:
