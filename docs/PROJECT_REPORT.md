@@ -23,6 +23,8 @@ The concepts behind the project are in [KNOWLEDGE_GUIDE.md](KNOWLEDGE_GUIDE.md).
 
 The first six rows are synthetic. No real phone photo or real printed page has been tested yet, so these scores don't show real-world accuracy.
 
+The 29 melody pages include three lead sheets, and one of them has since been replaced; see [Final results](#final-results).
+
 Three things I'm proudest of aren't in that table:
 
 - The benchmark changed my plan before I'd trained anything.
@@ -344,6 +346,19 @@ The run also taught me about running it. One bug showed as caught when the failu
 **Limits.** The sound is simple waveforms, so parts can be told apart but nothing sounds like the real instrument. There's no fingering, pedal or 8va line, no cross-staff notes, and a printed part is a copy, not linked to the score. No person has used any of this yet.
 
 ## Final results
+
+**One benchmark piece has changed since.** Every lead-sheet figure in this report, and every total over the 29 melody pages or the 13 jazz charts, was measured with 16 bars of Irving Berlin's *Alexander's Ragtime Band* (1911) as the third lead sheet. It's still in copyright outside the US, so on 2026-11-21 it was replaced by the chorus of *Jingle Bells* (James Lord Pierpont, 1857), written out in `bench/make_samples.py`. A run that day, with the code of that day, gives these lead-sheet rows with each piece, as chord recall / placement:
+
+| Lead sheets (3), 2026-11-21 | Audiveris | RapidOCR | xrnsheet | xrnsheet, my note reader |
+|---|---|---|---|---|
+| Clean, with Berlin | 0.62 / 0.62 | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 |
+| Clean, with *Jingle Bells* | 0.68 / 0.64 | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 |
+| Handwritten-style font, with Berlin | 0.74 / 0.65 | 1.00 / 1.00 | 0.96 / 0.96 | 0.94 / 0.94 |
+| Handwritten-style font, with *Jingle Bells* | 0.83 / 0.70 | 1.00 / 0.93 | 1.00 / 0.93 | 0.95 / 0.95 |
+| Simulated photo, with Berlin | 0.51 / 0.39 | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 |
+| Simulated photo, with *Jingle Bells* | 0.44 / 0.35 | 1.00 / 0.93 | 1.00 / 0.93 | 1.00 / 1.00 |
+
+Notes on those pages score 1.00 with homr, 0.99 to 1.00 with my reader and 0.84 to 1.00 with Audiveris. Over the 29 melody pages, chords in the right place come to 519/579 with homr and 534/579 with my reader with Berlin's piece, and 522/585 and 540/585 with *Jingle Bells*. The Berlin rows don't match the figures below exactly, because the code has changed since they were measured.
 
 Synthetic pages, as chord recall / correct placement, with homr reading the notes. Audiveris runs as it comes, and the RapidOCR column is my pipeline with RapidOCR as the reader.
 

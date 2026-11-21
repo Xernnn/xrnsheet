@@ -211,3 +211,33 @@ def test_time_signature_cells_follow_musescores_order_with_the_two_signs():
 def test_barline_cells_follow_musescores_order():
     barlines = next(palette for palette in palettes() if palette["id"] == "barlines")
     assert [cell["key"].removeprefix("barline:") for cell in barlines["cells"]] == ["single", "double", "forward", "backward", "dashed", "final", "heavy", "heavyDouble", "dotted"]
+
+
+def test_a_lit_fret_names_its_note_as_the_score_spells_it():
+    """A G♯ on the fretboard is G♯, not A♭. A pitch the score doesn't spell goes by the key there."""
+    source = "\n".join((STATIC / name).read_text(encoding="utf-8") for name in page_scripts())
+    names = "SHARP_NAMES|NAMES_IN_SHARP_KEYS|NAMES_IN_FLAT_KEYS|STEP_LETTERS|SHARPS_IN_ORDER|STEP_SEMITONES|ALTERATIONS"
+    constants = "\n".join(re.findall(rf"^const (?:{names}) = [^;]*;", source, re.M))
+    body = """
+        let chosenPart = null;
+        // E flat major in the first bar, E major in the second; a trill's upper note shares its note's id.
+        const score = {
+            notes: { sharp: ["G", 1, 3], flat: ["A", -1, 3], high: ["G", 1, 4], eSharp: ["E", 1, 4], trill: ["G", 1, 3] },
+            places: { sharp: [1], flat: [1], high: [1], eSharp: [1], trill: [1] },
+            timeline: { keys: [[-3, 4]] },
+        };
+        const at = midi => ({ dataset: { midi: String(midi), stop: "4" } });
+        console.log(JSON.stringify([
+            spotLabel("guitar", { id: "sharp" }, at(56)),
+            spotLabel("guitar", { id: "flat" }, at(56)),
+            spotLabel("guitar", { id: "high" }, at(56)),
+            spotLabel("guitar", { id: "eSharp" }, at(65)),
+            spotLabel("guitar", { id: "trill" }, at(58)),
+            spotLabel("guitar", {}, at(56)),
+            spotLabel("guitar", {}, at(61)),
+        ]));
+    """
+    shown = run_script(constants + "\n" + page_functions() + "\n" + body)
+    assert shown[:4] == ["G♯", "A♭", "G♯", "E♯"], "as the score spells each note, a guitar's written an octave up included"
+    assert shown[4] == "A♯", "a trill's upper note in E major is sharp"
+    assert shown[5:] == ["A♭", "D♭"], "with no note behind it, a pitch goes by the opening key, E flat major"

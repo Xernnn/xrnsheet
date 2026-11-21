@@ -38,6 +38,9 @@ function bowedNeck(hand, strings, names) {
 }
 const VIOLIN = bowedNeck(HANDS.violin, [76, 69, 62, 55], ["E", "A", "D", "G"]);
 const SHARP_NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"];
+// A note outside the key's scale, named as a key with sharps or one with flats would write it.
+const NAMES_IN_SHARP_KEYS = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+const NAMES_IN_FLAT_KEYS = ["C", "D♭", "D", "E♭", "E", "F", "G♭", "G", "A♭", "A", "B♭", "B"];
 // A key's width is whatever fills the panel, until Ctrl and the wheel choose one.
 // The notes sounding and awaited are kept by pitch for the keys, and with their ids for a neck.
 const keyboard = { width: Number(readSetting("keyWidth", "0")) || 0, sounding: new Map(), soundingNotes: new Map(), expected: new Set(), expectedNotes: [] };
@@ -46,6 +49,20 @@ const fingerings = new Map(); // Where a set of pitches is played on the strings
 
 function noteName(midi) {
   return `${SHARP_NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`;
+}
+
+// A note's name, without its octave, as the score spells it: a G♯ stays G♯, never A♭. A pitch the
+// score doesn't spell, such as a trill's upper note or a part written a fifth from where it sounds,
+// is named as the key in force at its note (or at the start) would: by its letter in the scale, or
+// else sharp in a key with sharps and flat in one with flats.
+function nameOnNeck(midi, id, part) {
+  const [step, alter, octave] = score?.notes?.[id] ?? [];
+  if (step && (12 * (octave + 1) + STEP_SEMITONES[step] + alter - midi) % 12 === 0) return `${step}${ALTERATIONS[alter] ?? ""}`;
+  const fifths = score?.timeline?.keys?.[part]?.[score?.places?.[id]?.[0] ?? 0] ?? 0;
+  const pitchClass = ((midi % 12) + 12) % 12;
+  const letter = [...STEP_LETTERS].find(letter => (STEP_SEMITONES[letter] + keyAlter(letter, fifths) + 12) % 12 === pitchClass);
+  if (letter) return `${letter}${ALTERATIONS[keyAlter(letter, fifths)]}`;
+  return (fifths > 0 ? NAMES_IN_SHARP_KEYS : fifths < 0 ? NAMES_IN_FLAT_KEYS : SHARP_NAMES)[pitchClass];
 }
 
 // What kind of instrument a part is: a guitar, bass or anything else with frets has a fretboard, and
@@ -409,9 +426,9 @@ function placeOnNeck(neck, kind, notes) {
   return spots;
 }
 
-// What a lit place on a neck shows: a violinist's finger, or the note's name.
+// What a lit place on a neck shows: a violinist's finger, or the note's name as the score spells it.
 function spotLabel(kind, spot, element) {
-  const name = noteName(Number(element.dataset.midi)).replace(/\d+$/, "");
+  const name = nameOnNeck(Number(element.dataset.midi), spot.id, activePart());
   if (kind !== "violin") return name;
   const played = spot.id ? playedAs(spot.id) : {};
   const stop = Number(element.dataset.stop);

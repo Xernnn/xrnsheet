@@ -36,11 +36,13 @@ jobs:
           pip install -r "$RUNNER_TEMP/requirements.txt"
 
       # Left out: the tests that import torch, directly or through pipeline.recognize.
-      # test_chord_images also needs the fonts `python -m chords.fonts` downloads.
+      # test_chord_images also needs the fonts `python -m chords.fonts` downloads. Two tests in
+      # test_server borrow test_corrections' sheets, and skip themselves without torch.
       - name: Tests
         run: >-
           python -m pytest tests
           --ignore=tests/test_chord_images.py
           --ignore=tests/test_corrections.py
+          --ignore=tests/test_exported.py
           --ignore=tests/test_notes.py
           --ignore=tests/test_repair.py

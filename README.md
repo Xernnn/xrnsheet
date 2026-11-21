@@ -293,7 +293,7 @@ To recognize a sheet without the app:
 .venv/bin/python -m pytest                  # everything; -k <name> for one test
 ```
 
-GitHub Actions runs them on every push to `main` and every pull request, on Python 3.11, without PyTorch, homr and RapidOCR, so it leaves out the four test files that need them: `test_chord_images`, `test_corrections`, `test_notes` and `test_repair`. `tests/test_exported.py` reads the same images with each reader's `.pt` and its `.onnx`, so it fails when a reader has been retrained and not exported again.
+GitHub Actions runs them on every push to `main` and every pull request, on Python 3.11, without PyTorch, homr and RapidOCR, so it leaves out the five test files that need them: `test_chord_images`, `test_corrections`, `test_exported`, `test_notes` and `test_repair`, and two tests in `test_server` skip themselves. `tests/test_exported.py` reads the same images with each reader's `.pt` and its `.onnx`, so it fails when a reader has been retrained and not exported again.
 
 The editor's browser checks, `tests/e2e_editor.py`, aren't run by pytest: they need a running server and a Python with Playwright, which `.venv` doesn't have, so they run on a Python of their own (a venv with only `playwright` in it is enough). With `XRNSHEET_BROWSER` set to a Chromium already installed:
 
@@ -388,15 +388,15 @@ Scores on real photos count for far more than the simulated ones.
 
 ## Latest results
 
-From 2026-11-06, on synthetic pages. Notes are `note` F1 scores, and chords show recall / placement. In this table, xrnsheet's notes come from homr.
+From 2026-11-06, on synthetic pages, except the lead-sheet rows of both tables, which were run again on 2026-11-21 when the third lead sheet became the chorus of *Jingle Bells* (it had been 16 bars of *Alexander's Ragtime Band*, see [Licences](#licences)). Run again that day with the old piece, those rows differ from 2026-11-06's by up to 0.06 for xrnsheet, with either note reader, and up to 0.21 for Audiveris, so not all of the change comes from the new piece. Notes are `note` F1 scores, and chords show recall / placement. In this table, xrnsheet's notes come from homr.
 
 | Sheets | Notes: xrnsheet | Notes: Audiveris | Chords: xrnsheet | Chords: Audiveris |
 |---|---|---|---|---|
 | Spelled jazz charts, clean (10) | 1.00 | 0.99 | 0.93 / 0.88 | 0.25 / 0.19 |
 | Spelled jazz charts, simulated photo (10) | 1.00 | 0.92 | 0.93 / 0.87 | 0.16 / 0.08 |
-| Lead sheets, clean (3) | 1.00 | 1.00 | 1.00 / 0.96 | 0.63 / 0.63 |
-| Lead sheets, handwritten-style font (3) | 1.00 | 0.89 | 1.00 / 1.00 | 0.53 / 0.53 |
-| Lead sheets, simulated photo (3) | 1.00 | 0.87 | 0.98 / 0.98 | 0.43 / 0.30 |
+| Lead sheets, clean (3) | 1.00 | 1.00 | 1.00 / 1.00 | 0.68 / 0.64 |
+| Lead sheets, handwritten-style font (3) | 1.00 | 0.84 | 1.00 / 0.93 | 0.83 / 0.70 |
+| Lead sheets, simulated photo (3) | 1.00 | 0.94 | 1.00 / 0.93 | 0.44 / 0.35 |
 | Classical, clean (5) | 0.97 | 0.95 | n/a | n/a |
 | Classical, handwritten-style font (5) | 0.93 | 0.51 | n/a | n/a |
 | Classical, simulated photo (5) | 0.82 | 0.27 | n/a | n/a |
@@ -409,9 +409,9 @@ The note reader in this repository (`--notes own`), on the same synthetic pages:
 |---|---|---|---|---|
 | Spelled jazz charts, clean (10) | 1.00 | 1.00 | 0.93 | 0.88 |
 | Spelled jazz charts, simulated photo (10) | 1.00 | 1.00 | 0.88 | 0.87 |
-| Lead sheets, clean (3) | 1.00 | 1.00 | 1.00 | 0.96 |
-| Lead sheets, handwritten-style font (3) | 0.99 | 1.00 | 1.00 | 1.00 |
-| Lead sheets, simulated photo (3) | 1.00 | 1.00 | 1.00 | 0.98 |
+| Lead sheets, clean (3) | 1.00 | 1.00 | 1.00 | 1.00 |
+| Lead sheets, handwritten-style font (3) | 0.99 | 1.00 | 0.95 | 0.93 |
+| Lead sheets, simulated photo (3) | 1.00 | 1.00 | 1.00 | 0.93 |
 | Classical, all conditions (15) | 0.12 | 0.91 | n/a | n/a |
 
 It reads one melody per staff, which is why classical music scores so low, and why homr stays the default. It takes 2 to 3 seconds a page. It reads hand-style time signatures badly, and the notes score doesn't measure that. On real handwriting it found only a small share of the notes.
@@ -443,17 +443,20 @@ development result, not a clean accuracy.
 
 ## Licences
 
-Check these before shipping a commercial product.
+xrnsheet is licensed under the GNU Affero General Public License, version 3 ([`LICENSE`](LICENSE)). Copyright (c) 2026 Xernnn.
+
+It's AGPL because `pipeline/recognize.py` imports homr, which is AGPL-3.0, and reads notes with it in the same process. So anyone who changes xrnsheet and lets other people use it over a network has to offer them the changed source. The parts below keep their own licences, and this repository's licence doesn't cover the recorded sounds or the MiSans font. Check them before building a product on it.
 
 | Component | Licence | Note |
 |---|---|---|
-| homr, Audiveris | AGPL-3.0 | Running them as a closed online service may require sharing source code. `--notes own` runs with no homr, for melody sheets only |
+| homr | AGPL-3.0 | Reads the notes by default, inside xrnsheet's own process, which is why xrnsheet is AGPL-3.0. `--notes own` reads melody sheets without it |
+| Audiveris | AGPL-3.0 | Only the benchmark runs it, as a program of its own unpacked into `tools/`, which stays out of git |
 | Verovio | LGPL-3.0 | |
-| music21 | BSD-3-Clause | The benchmark pieces come from its corpus, two tests open a chorale from it, and the browser checks open its Maple Leaf Rag. The corpus files themselves aren't copied into this repository, but `data/truth/` keeps the first 9 to 16 bars of seven of its pieces as the benchmark's answers |
-| *Alexander's Ragtime Band* in `data/truth/berlin_leadsheet.musicxml` | Public domain in the US | Irving Berlin's song of 1911, 16 bars of it from music21's corpus. It's still in copyright where copyright runs 70 years after the author's death, as in the UK, the EU and Australia, until the end of 2059 |
+| music21 | BSD-3-Clause | Six of the benchmark's pieces come from its corpus, two tests open a chorale from it, and the browser checks open its Maple Leaf Rag. The corpus files themselves aren't copied into this repository, but `data/truth/` keeps the first 9 to 16 bars of those six as the benchmark's answers. Their composers, Stephen Foster, Scott Joplin, Clara Schumann, Schubert, Bach and Mozart, all died more than a century ago |
+| *Jingle Bells* in `data/truth/pierpont_leadsheet.musicxml` | Public domain | The chorus of James Lord Pierpont's song, first published in 1857 (he died in 1893), written out as a lead sheet in `bench/make_samples.py`. It took the place of 16 bars of Irving Berlin's *Alexander's Ragtime Band* (1911), which is still in copyright outside the US |
 | RapidOCR | Apache-2.0 | |
 | Fonts in `data/fonts/` | SIL Open Font License | Used to generate training images |
-| MiSans Latin in `app/static/fonts/` | MiSans licence (Xiaomi) | The window's font, as in every xrn app: free for commercial use, embedded as released ([hyperos.mi.com/font](https://hyperos.mi.com/font)) |
+| MiSans Latin in `app/static/fonts/` | MiSans font licence (Xiaomi) | The window's font, as in every xrn app, unchanged. MiSans by Xiaomi, used under the MiSans font licence (free for commercial use when the software notes that it uses MiSans). The font files are not covered by this repository's licence. <https://hyperos.mi.com/font/en/> ([its README](app/static/fonts/README.md)) |
 | Piano samples in `app/static/sounds/piano/` | CC BY 3.0 | Salamander Grand Piano by Alexander Holm, the 30-note set from [Tone.js's audio](https://tonejs.github.io/audio/salamander/). Its credit has to go with the app, as [its README](app/static/sounds/piano/README.md) says |
 | Guitar samples in `app/static/sounds/guitar/` | CC0 1.0 | FreePats' Spanish classical guitar, recorded by Roberto of zenvoid.org for [FreePats](https://freepats.zenvoid.org/Guitar/acoustic-guitar.html) ([its README](app/static/sounds/guitar/README.md)) |
 | Bass guitar samples in `app/static/sounds/bass-guitar/` | CC0 1.0 | Growlybass by Karoryfer Samples ([its README](app/static/sounds/bass-guitar/README.md)) |

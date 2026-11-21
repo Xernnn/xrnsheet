@@ -404,6 +404,8 @@ Training on a non-commercial dataset can restrict the resulting model, so what l
 
 This is also the second reason for my own note reader. On melody sheets it can run with no AGPL code at all. It isn't a replacement yet, because it can't read several voices on one staff.
 
+The app imports homr into its own process, so xrnsheet itself is released under AGPL-3.0 (see the README's Licences).
+
 ## 17. Questions I should be able to answer
 
 1. Why did you split by font instead of by image?
