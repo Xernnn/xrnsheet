@@ -443,11 +443,14 @@ development result, not a clean accuracy.
 
 ## Licences
 
-Check these before shipping a commercial product.
+xrnsheet is licensed under the GNU Affero General Public License, version 3 ([`LICENSE`](LICENSE)). Copyright (c) 2026 Xernnn.
+
+It's AGPL because `pipeline/recognize.py` imports homr, which is AGPL-3.0, and reads notes with it in the same process. So anyone who changes xrnsheet and lets other people use it over a network has to offer them the changed source. The parts below keep their own licences, and this repository's licence doesn't cover the recorded sounds or the MiSans font. Check them before building a product on it.
 
 | Component | Licence | Note |
 |---|---|---|
-| homr, Audiveris | AGPL-3.0 | Running them as a closed online service may require sharing source code. `--notes own` runs with no homr, for melody sheets only |
+| homr | AGPL-3.0 | Reads the notes by default, inside xrnsheet's own process, which is why xrnsheet is AGPL-3.0. `--notes own` reads melody sheets without it |
+| Audiveris | AGPL-3.0 | Only the benchmark runs it, as a program of its own unpacked into `tools/`, which stays out of git |
 | Verovio | LGPL-3.0 | |
 | music21 | BSD-3-Clause | The benchmark pieces come from its corpus, two tests open a chorale from it, and the browser checks open its Maple Leaf Rag. The corpus files themselves aren't copied into this repository, but `data/truth/` keeps the first 9 to 16 bars of seven of its pieces as the benchmark's answers |
 | *Alexander's Ragtime Band* in `data/truth/berlin_leadsheet.musicxml` | Public domain in the US | Irving Berlin's song of 1911, 16 bars of it from music21's corpus. It's still in copyright where copyright runs 70 years after the author's death, as in the UK, the EU and Australia, until the end of 2059 |
