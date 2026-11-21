@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "bench"))
 
-from make_samples import CHART_COUNT, CORPUS_PIECES  # noqa: E402
+from make_samples import CHART_COUNT, PIECES  # noqa: E402
 from score import compare, read_chords  # noqa: E402
 
 RESULTS_DIR = ROOT / "results"
@@ -32,7 +32,7 @@ HOMR = ROOT / ".venv/bin/homr"
 TIMEOUT_SECONDS = 600
 MEMORY_LIMIT = "6G"  # A runaway engine should fail on its own, not freeze the laptop.
 
-STYLES = {name: style for name, (_, _, style) in CORPUS_PIECES.items()} | {"jazz_chart": "jazz"}
+STYLES = {name: style for name, (_, _, style) in PIECES.items()} | {"jazz_chart": "jazz"}
 STYLES |= {f"chart_{index:02d}": "chart" for index in range(CHART_COUNT)}
 
 

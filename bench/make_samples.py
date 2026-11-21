@@ -23,7 +23,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import verovio
-from music21 import clef, corpus, harmony, key, meter, note, stream
+from music21 import clef, corpus, harmony, key, metadata, meter, note, stream
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -43,10 +43,54 @@ PAGE_WIDTH_PIXELS = 3000  # Close to a phone photo, where a page fills most of a
 CHART_COUNT = 10
 CHART_FONTS = ["Petaluma Script", "Kalam", "Arimo", "Liberation Serif", "Noto Serif"]
 
-# name: (music21 corpus path, last measure to keep, style tag)
-CORPUS_PIECES = {
+# The chorus of "Jingle Bells" by James Lord Pierpont (1822-1893), first published in 1857, written
+# out here as a lead sheet in F with its words. Each bar is the chord that starts it, if one does,
+# and its notes as pitch:quarters:syllable, a hyphen joining the syllables of a word.
+JINGLE_BELLS = [
+    ("F", "A4:1:Jin- A4:1:-gle A4:2:bells,"),
+    (None, "A4:1:jin- A4:1:-gle A4:2:bells,"),
+    (None, "A4:1:jin- C5:1:-gle F4:1.5:all G4:0.5:the"),
+    (None, "A4:4:way."),
+    ("B-", "B-4:1:Oh B-4:1:what B-4:1.5:fun B-4:0.5:it"),
+    ("F", "B-4:1:is A4:1:to A4:1:ride A4:0.5:in A4:0.5:a"),
+    ("G7", "A4:1:one- G4:1:-horse G4:1:o- A4:1:-pen"),
+    ("C7", "G4:2:sleigh, C5:2:hey!"),
+    ("F", "A4:1:Jin- A4:1:-gle A4:2:bells,"),
+    (None, "A4:1:jin- A4:1:-gle A4:2:bells,"),
+    (None, "A4:1:jin- C5:1:-gle F4:1.5:all G4:0.5:the"),
+    (None, "A4:4:way."),
+    ("B-", "B-4:1:Oh B-4:1:what B-4:1:fun B-4:1:it"),
+    ("F", "B-4:1:is A4:1:to A4:1:ride A4:0.5:in A4:0.5:a"),
+    ("C7", "C5:1:one- C5:1:-horse B-4:1:o- G4:1:-pen"),
+    ("F", "F4:4:sleigh."),
+]
+
+
+def jingle_bells() -> stream.Score:
+    """Write out the lead sheet above: a song whose author died in 1893 is out of copyright everywhere."""
+    part = stream.Part()
+    for number, (figure, notes) in enumerate(JINGLE_BELLS, start=1):
+        measure = stream.Measure(number=number)
+        if number == 1:
+            measure.append([clef.TrebleClef(), key.KeySignature(-1), meter.TimeSignature("4/4")])
+        if figure:
+            measure.insert(0, harmony.ChordSymbol(figure))
+        for written in notes.split():
+            pitch, quarters, syllable = written.split(":")
+            sung = note.Note(pitch, quarterLength=float(quarters))
+            sung.addLyric(syllable)
+            measure.append(sung)
+        part.append(measure)
+    part.makeBeams(inPlace=True)
+    score = stream.Score([part])
+    score.metadata = metadata.Metadata(title="Jingle Bells", composer="James Lord Pierpont")
+    return score
+
+
+# name: (music21 corpus path or a function that writes the piece out, last measure to keep, style tag)
+PIECES = {
     "foster_leadsheet": ("leadSheet/fosterBrownHair.mxl", 16, "jazz"),
-    "berlin_leadsheet": ("leadSheet/berlinAlexandersRagtime.mxl", 16, "jazz"),
+    "pierpont_leadsheet": (jingle_bells, 16, "jazz"),
     "joplin_piano": ("joplin/maple_leaf_rag.mxl", 12, "classical"),
     "schumann_piano": ("schumann_clara/polonaise_op1n1.mxl", 12, "classical"),
     "schubert_song": ("schubert/Lindenbaum.xml", 12, "classical"),
@@ -232,8 +276,9 @@ def main() -> None:
         print(f"{name}: rendered in {CHART_FONTS[index % len(CHART_FONTS)]}")
 
     pieces = {"jazz_chart": (jazz_chart(), "jazz")}
-    for name, (corpus_path, last_measure, style) in CORPUS_PIECES.items():
-        pieces[name] = (corpus.parse(corpus_path).measures(0, last_measure), style)
+    for name, (source, last_measure, style) in PIECES.items():
+        score = source() if callable(source) else corpus.parse(source)
+        pieces[name] = (score.measures(0, last_measure), style)
 
     for index, (name, (score, style)) in enumerate(pieces.items()):
         xml = write_truth(name, score)
