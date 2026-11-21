@@ -8,8 +8,9 @@ REPO="$(cd .. && pwd)"
 STAGE=build/xrnsheet
 PARTS=(app chords notes pipeline models)
 
-# The Python environment with xrnsheet's packages (6 GB with PyTorch), used where it is rather than
-# copied into the app. The checkout's .venv by default; a worktree's .venv may be a link to it.
+# The Python environment with xrnsheet's packages (about 1.8 GB, with PyTorch's CPU build), used
+# where it is rather than copied into the app. The checkout's .venv by default; a worktree's .venv
+# may be a link to it.
 if [[ -n "${XRNSHEET_PYTHON:-}" ]]; then
   PYTHON="$XRNSHEET_PYTHON"
 else
