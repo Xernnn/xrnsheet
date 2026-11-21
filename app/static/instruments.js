@@ -65,6 +65,14 @@ function nameOnNeck(midi, id, part) {
   return (fifths > 0 ? NAMES_IN_SHARP_KEYS : fifths < 0 ? NAMES_IN_FLAT_KEYS : SHARP_NAMES)[pitchClass];
 }
 
+// The same name with its octave, for a lit key's or place's title. The octave goes with the letter,
+// so a B♯ played as middle C is B♯3, and a C♭ played as the B below it is C♭5.
+function titleOnNeck(midi, id, part) {
+  const name = nameOnNeck(midi, id, part);
+  const alter = Number(Object.keys(ALTERATIONS).find(alter => ALTERATIONS[alter] === name.slice(1)));
+  return `${name}${Math.floor((midi - STEP_SEMITONES[name[0]] - alter) / 12) - 1}`;
+}
+
 // What kind of instrument a part is: a guitar, bass or anything else with frets has a fretboard, and
 // otherwise it goes by its name and, once playback has been fetched, its sound.
 function kindOfPart(index) {
@@ -224,8 +232,7 @@ function drawKeyboard() {
       key.className = `key ${black ? "black" : "white"}`;
       key.dataset.midi = midi;
       key.tabIndex = -1;
-      key.setAttribute("aria-label", noteName(midi));
-      key.title = noteName(midi);
+      nameKey(key, noteName(midi));
       if (black) key.style.setProperty("--at", String(whites));
       else key.style.setProperty("--at", String(whites++));
       if (midi % 12 === 0) key.innerHTML = `<span>C${midi / 12 - 1}</span>`;
@@ -291,9 +298,14 @@ function drawNeck(holder, neck, kind) {
       Object.assign(spot.dataset, { string: String(index + 1), stop: String(stop), midi: String(midi) });
       const fromCapo = capo && stop >= capo ? ` (${stop === capo ? "open with the capo" : `${stop - capo} from the capo`})` : "";
       const where = kind === "guitar" ? (stop ? `fret ${stop}${fromCapo}` : "open") : (stop ? `${stop} semitones up` : "open");
-      spot.title = stop < capo ? `${neck.names[index]} string, fret ${stop}: behind the capo` : `${neck.names[index]} string, ${where}: ${noteName(midi)}`;
-      spot.setAttribute("aria-label", spot.title);
-      if (stop < capo) spot.disabled = true;
+      if (stop < capo) {
+        spot.title = `${neck.names[index]} string, fret ${stop}: behind the capo`;
+        spot.setAttribute("aria-label", spot.title);
+        spot.disabled = true;
+      } else {
+        spot.dataset.where = `${neck.names[index]} string, ${where}`;
+        nameKey(spot, noteName(midi));
+      }
       spot.addEventListener("pointerdown", event => { event.preventDefault(); pressKey(shownPitch(midi, activePart()), event.shiftKey, { string: index + 1, stop }); });
       spot.addEventListener("pointerup", () => { letGo(POINTER_KEY); practiseReleased(shownPitch(midi, activePart())); });
       for (const away of ["pointercancel", "pointerleave"]) spot.addEventListener(away, () => letGo(POINTER_KEY));
@@ -365,10 +377,6 @@ function chosenNotes() {
   return [...new Map(found.map(note => [note.id, note])).values()];
 }
 
-function chosenPitches() {
-  return chosenNotes().map(note => note.midi);
-}
-
 // Where the score says a note is played, as a string and a stop from the nut: on a guitar from its
 // tablature or its string number, and on a violin from its string number, the "sul G" over it or the
 // position it's in. Without a word from the score it's left for fingering() to place.
@@ -438,39 +446,55 @@ function spotLabel(kind, spot, element) {
   return played.finger || finger || name;
 }
 
-// Light the selected notes, the notes sounding and the notes playback is waiting for.
+// A key's or a place's title, which a screen reader reads too: the place on the neck, if it's on
+// one, and the note's name.
+function nameKey(element, name) {
+  const title = element.dataset.where ? `${element.dataset.where}: ${name}` : name;
+  if (element.title === title) return;
+  element.title = title;
+  element.setAttribute("aria-label", title);
+}
+
+// Light the selected notes, the notes sounding and the notes playback is waiting for. A lit key or
+// place is titled with its note as the score spells it; the rest keep the plain name of their pitch.
 function lightKeys() {
   if (!instrumentShown()) return;
   const kind = activeKind();
   const part = activePart();
-  const chosen = chosenPitches();
+  const chosen = chosenNotes();
   const sounding = [...keyboard.sounding].filter(([, count]) => count > 0).map(([midi]) => midi);
+  const soundingNotes = [...keyboard.soundingNotes.values()].filter(note => note.count > 0);
   if (kind === "guitar" || kind === "violin") {
     const neck = neckOf(part, kind);
     const holder = kind === "guitar" ? $("fretboard") : $("fingerboard");
-    const soundingNotes = [...keyboard.soundingNotes.values()].filter(note => note.count > 0);
     const marks = new Map();
     const mark = (spots, name) => spots.forEach(spot => marks.set(`${spot.string}/${spot.stop}`, { name, spot }));
-    mark(placeOnNeck(neck, kind, chosenNotes()), "chosen");
+    mark(placeOnNeck(neck, kind, chosen), "chosen");
     mark(placeOnNeck(neck, kind, [...keyboard.expectedNotes]), "expected");
     mark(placeOnNeck(neck, kind, soundingNotes), "sounding");
     holder.querySelectorAll(".spot").forEach(element => {
       const lit = marks.get(`${element.dataset.string}/${element.dataset.stop}`);
       for (const name of ["chosen", "expected", "sounding"]) element.classList.toggle(name, lit?.name === name);
       element.dataset.show = lit ? spotLabel(kind, lit.spot, element) : "";
+      const midi = Number(element.dataset.midi);
+      if (element.dataset.where) nameKey(element, lit ? titleOnNeck(midi, lit.spot.id, part) : noteName(midi));
     });
     showChosenSpot(holder);
     return;
   }
   // A keyboard key is the pitch the staff shows, so at concert pitch it's the one that sounds.
-  const shown = new Set(chosen.map(pitch => shownPitch(pitch, part)));
+  const shown = new Set(chosen.map(note => shownPitch(note.midi, part)));
   const lit = new Set(sounding.map(pitch => shownPitch(pitch, part)));
   const expected = new Set([...keyboard.expected].map(pitch => shownPitch(pitch, part)));
+  // The note each lit key stands for, by the key's pitch: the one sounding, else awaited, else chosen.
+  const notes = new Map();
+  for (const note of [...chosen, ...keyboard.expectedNotes, ...soundingNotes]) notes.set(shownPitch(note.midi, part), note.id);
   document.querySelectorAll("#pianoKeys .key").forEach(key => {
     const midi = Number(key.dataset.midi);
     key.classList.toggle("chosen", shown.has(midi));
     key.classList.toggle("expected", expected.has(midi));
     key.classList.toggle("sounding", lit.has(midi));
+    nameKey(key, notes.has(midi) ? titleOnNeck(midi, notes.get(midi), part) : noteName(midi));
   });
 }
 
