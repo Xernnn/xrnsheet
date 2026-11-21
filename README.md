@@ -293,7 +293,7 @@ To recognize a sheet without the app:
 .venv/bin/python -m pytest                  # everything; -k <name> for one test
 ```
 
-GitHub Actions runs them on every push to `main` and every pull request, on Python 3.11, without PyTorch, homr and RapidOCR, so it leaves out the four test files that need them: `test_chord_images`, `test_corrections`, `test_notes` and `test_repair`. `tests/test_exported.py` reads the same images with each reader's `.pt` and its `.onnx`, so it fails when a reader has been retrained and not exported again.
+GitHub Actions runs them on every push to `main` and every pull request, on Python 3.11, without PyTorch, homr and RapidOCR, so it leaves out the five test files that need them: `test_chord_images`, `test_corrections`, `test_exported`, `test_notes` and `test_repair`, and two tests in `test_server` skip themselves. `tests/test_exported.py` reads the same images with each reader's `.pt` and its `.onnx`, so it fails when a reader has been retrained and not exported again.
 
 The editor's browser checks, `tests/e2e_editor.py`, aren't run by pytest: they need a running server and a Python with Playwright, which `.venv` doesn't have, so they run on a Python of their own (a venv with only `playwright` in it is enough). With `XRNSHEET_BROWSER` set to a Chromium already installed:
 

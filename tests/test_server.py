@@ -98,6 +98,7 @@ def test_marking_a_sheet_checked_round_trips(client, ready_score):
 def test_a_sheet_un_marked_is_no_longer_learnt_from(client, tmp_path, monkeypatch):
     """Checked sheets are taught to the chord reader as right, so one marked by mistake must come out
     of what was gathered for it too, as retraining reads that until it's gathered again."""
+    pytest.importorskip("torch")  # test_corrections, which writes the sheets, imports it
     from test_corrections import recognized, write_sheet
 
     out = tmp_path / "corrections"
@@ -121,6 +122,7 @@ def test_a_sheet_un_marked_is_no_longer_learnt_from(client, tmp_path, monkeypatc
 def test_a_checked_sheet_deleted_is_no_longer_learnt_from(client, tmp_path, monkeypatch):
     """A deleted sheet sits in the trash, where gathering doesn't look, but what was gathered from it
     already must come out too, as retraining reads that until it's gathered again."""
+    pytest.importorskip("torch")  # test_corrections, which writes the sheets, imports it
     from test_corrections import recognized, write_sheet
 
     out = tmp_path / "corrections"
