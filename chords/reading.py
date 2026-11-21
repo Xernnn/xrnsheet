@@ -7,7 +7,9 @@ anyway, and which reads them the same (tests/test_exported.py checks). `python -
 and `python -m notes.export` write them, and have to be run after training, or the app goes on
 reading with the old model.
 
-If a reader's .onnx is missing, or it's asked for on a GPU, it runs in PyTorch as before.
+If a reader's .onnx is missing, or it's asked for on a GPU, it runs in PyTorch as before. The
+readers aren't kept in git but as files of a release, so a fresh checkout has neither until
+`python3 tools/fetch_models.py` downloads them (models/models.json says which).
 
 The batching and decoding here are also what chords/model.py uses in training, so the two ways of
 running a reader can't drift apart. Nothing here imports PyTorch unless it has to.
@@ -21,6 +23,8 @@ from pathlib import Path
 import numpy as np
 
 from chords.vocab import ALPHABET
+
+FETCH_MODELS = "python3 tools/fetch_models.py"
 
 BLANK = 0
 CHARACTERS = ["<blank>", *ALPHABET]
@@ -67,6 +71,15 @@ def decode(log_probabilities: np.ndarray, lengths: np.ndarray) -> list[tuple[str
     return results
 
 
+class MissingModel(FileNotFoundError):
+    """A reader that isn't in models/, because it hasn't been fetched."""
+
+
+def has_model(path: Path, device: str = "cpu") -> bool:
+    """Whether load_network can load the reader at path: its .onnx, on the CPU, or the .pt itself."""
+    return path.exists() or (device == "cpu" and path.with_suffix(".onnx").exists())
+
+
 def load_network(path: Path, model_module: str, device: str = "cpu") -> Network:
     """Load a trained reader: its exported .onnx beside path in onnxruntime, or path itself in PyTorch.
 
@@ -74,6 +87,8 @@ def load_network(path: Path, model_module: str, device: str = "cpu") -> Network:
     only imported for PyTorch, as it imports PyTorch itself.
     """
     exported = path.with_suffix(".onnx")
+    if not has_model(path, device):
+        raise MissingModel(f"{exported.name if device == 'cpu' else path.name} isn't in models/. Fetch the readers with: {FETCH_MODELS}")
     if device == "cpu" and exported.exists():
         import onnxruntime
 

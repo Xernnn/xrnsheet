@@ -35,6 +35,11 @@ jobs:
           grep -vE '^(torch|homr|rapidocr)\b' requirements.txt > "$RUNNER_TEMP/requirements.txt"
           pip install -r "$RUNNER_TEMP/requirements.txt"
 
+      # The readers are files of a release, not of git. The app reads only their .onnx, and so does
+      # test_reading; the .pt are for training and test_exported, which needs torch.
+      - name: Fetch the readers
+        run: python tools/fetch_models.py --onnx
+
       # Left out: the tests that import torch, directly or through pipeline.recognize.
       # test_chord_images also needs the fonts `python -m chords.fonts` downloads. Two tests in
       # test_server borrow test_corrections' sheets, and skip themselves without torch.

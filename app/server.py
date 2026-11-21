@@ -42,6 +42,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from chords import corrections
 from chords.fonts import ROOT
+from chords.reading import FETCH_MODELS, has_model
 from pipeline import align, concert, diagrams, edit, fretted, layout, marks, mixer, structure, technique, transpose
 from pipeline.engrave import VIEWS, export_pdf, glyph_script, keep_lines, page_size, render_pages, system_starts
 from pipeline.merge import merge_pages
@@ -52,6 +53,7 @@ from pipeline.rhythm import fit_divisions, indexed
 from pipeline.timeline import places, timeline
 
 JOB_DIR = ROOT / "data" / "jobs"
+MODEL_DIR = ROOT / "models"  # The readers, fetched from a release: models/models.json names them.
 STATIC_DIR = Path(__file__).parent / "static"
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".pdf"}
 SCORE_TYPES = {".musicxml", ".xml", ".mxl"}
@@ -73,6 +75,7 @@ NO_STAVES = "No staves were found. Try a sharper, straighter photo."
 LOCKED_PDF = "That PDF asks for a password. Open a copy saved without one."
 BROKEN_PDF = "That PDF couldn't be opened."
 INTERRUPTED = "The app was closed before this sheet was read. Please open it again."
+MISSING_READERS = f"The readers aren't downloaded. Run {FETCH_MODELS} in xrnsheet's folder, then Try again."
 SOURCE_FILE = "source.json"  # The name of the file a sheet is read from, to call it by until it has a title.
 CANCEL_WAIT_SECONDS = 10  # How long a cancel waits for the page being read to stop, which is usually at once.
 TRASH = ".trash"  # In the folder of scores: those deleted, kept a while so a delete can be undone.
@@ -578,7 +581,17 @@ def uploaded_pages(folder: Path, upload: Path) -> list[Path]:
     return [upload, *sorted(folder.glob("upload_*.*"), key=lambda path: path.stem)]
 
 
+def missing_readers(notes: str) -> list[str]:
+    """The readers reading a sheet needs that aren't in models/: the chord reader's, and with --notes own
+    the note reader's too. A fresh checkout has none until they're fetched."""
+    needed = ["chord_reader"] + (["note_reader"] if notes == "own" else [])
+    return [f"{name}.onnx" for name in needed if not has_model(MODEL_DIR / f"{name}.pt")]
+
+
 def recognize_job(folder: Path, upload: Path) -> None:
+    if missing_readers(os.environ.get("XRNSHEET_NOTES", "homr")):
+        write_status(folder, "failed", MISSING_READERS)  # Said at once, not after a page's reader has started and failed.
+        return
     document = None
     try:
         document = opened_pdf(upload) if upload.suffix.lower() == ".pdf" else None
@@ -1923,6 +1936,8 @@ def main(argv: list[str] | None = None) -> None:
     os.environ["XRNSHEET_NOTES"] = arguments.notes
     JOB_DIR = arguments.jobs.expanduser().resolve()
     JOB_DIR.mkdir(parents=True, exist_ok=True)
+    if missing := missing_readers(arguments.notes):
+        print(f"{' and '.join(missing)} not in models/, so sheets can't be read until the readers are fetched: {FETCH_MODELS}", file=sys.stderr)
     if arguments.stop_when_stdin_closes:
         threading.Thread(target=stop_when_stdin_closes, daemon=True).start()
     # A request still being answered holds up stopping for at most this long, so closing the

@@ -1,0 +1,22 @@
+{
+  "release": "models-2026-11-17",
+  "url": "https://github.com/Xernnn/xrnsheet/releases/download/models-2026-11-17/",
+  "files": {
+    "chord_reader.onnx": {
+      "sha256": "09d1d1464b8af589816a79a456527928e4b62b1195d8952b5899514e8a6abd02",
+      "bytes": 11330532
+    },
+    "note_reader.onnx": {
+      "sha256": "5b1bc1190090eecbd73f7275b2e5d098f48e79a9576dcc7da103d19fb774e6ca",
+      "bytes": 21777880
+    },
+    "chord_reader.pt": {
+      "sha256": "f5a4d0ffbe5cf19d5e482a42f06f85cbc642731017a2201483d39f493ad935a1",
+      "bytes": 11349428
+    },
+    "note_reader.pt": {
+      "sha256": "385e013fe1ee9763f60bf25e433a86eb6b54ac3e1b6f61f3bad9df6ae76205a1",
+      "bytes": 21790244
+    }
+  }
+}
