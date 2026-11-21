@@ -251,10 +251,21 @@ def simulate_photo(image: np.ndarray, seed: int) -> np.ndarray:
     return cv2.imdecode(encoded, cv2.IMREAD_COLOR)
 
 
+# A rights line that names no holder, as Sibelius writes by default and music21's Lindenbaum carries.
+EMPTY_RIGHTS = re.compile(r"\n[ \t]*<rights>\s*(?:Copyright)?\s*(?:©|\(c\))?\s*</rights>", re.I)
+
+
+def without_empty_rights(xml: str) -> str:
+    """Drop a copyright claim that names no one. A piece's real rights line, such as "Public Domain", stays."""
+    return EMPTY_RIGHTS.sub("", xml)
+
+
 def write_truth(name: str, score: stream.Score) -> str:
     path = TRUTH_DIR / f"{name}.musicxml"
     score.write("musicxml", fp=path)
-    return path.read_text(encoding="utf-8")
+    xml = without_empty_rights(path.read_text(encoding="utf-8"))
+    path.write_text(xml, encoding="utf-8")
+    return xml
 
 
 def main() -> None:
