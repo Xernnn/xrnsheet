@@ -6,8 +6,10 @@ release, with no site packages, as it has to run before anything is installed.
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +52,10 @@ def test_it_downloads_each_reader_and_checks_it(checkout):
     done = fetch(checkout)
     assert done.returncode == 0, done.stderr
     assert models(checkout) == dict(sorted(FILES.items()))
+    mask = os.umask(0)
+    os.umask(mask)
+    modes = {stat.S_IMODE((checkout / "models" / name).stat().st_mode) for name in FILES}
+    assert modes == {0o666 & ~mask}, "readable as any file written here, as git's checkout of them was"
 
 
 def test_the_app_needs_only_the_onnx(checkout):

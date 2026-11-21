@@ -48,6 +48,9 @@ def download(url: str, path: Path, sha256: str, size: int) -> str | None:
         got = os.path.getsize(temporary)
         if got != size or digest.hexdigest() != sha256:
             return f"the download isn't the file listed ({got} bytes, SHA-256 {digest.hexdigest()[:12]}…)"
+        mask = os.umask(0)
+        os.umask(mask)
+        os.chmod(temporary, 0o666 & ~mask)  # As any file written here would be, not mkstemp's private 600.
         os.replace(temporary, path)
         return None
     except OSError as error:  # urllib's errors are OSErrors too.
