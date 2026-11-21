@@ -241,3 +241,65 @@ def test_a_lit_fret_names_its_note_as_the_score_spells_it():
     assert shown[:4] == ["G♯", "A♭", "G♯", "E♯"], "as the score spells each note, a guitar's written an octave up included"
     assert shown[4] == "A♯", "a trill's upper note in E major is sharp"
     assert shown[5:] == ["A♭", "D♭"], "with no note behind it, a pitch goes by the opening key, E flat major"
+
+
+def test_a_lit_key_or_fret_is_titled_with_its_note_as_the_score_spells_it():
+    """Hovering a lit key or fret says G♯, as the score does; an unlit one keeps its pitch's plain name."""
+    source = "\n".join((STATIC / name).read_text(encoding="utf-8") for name in page_scripts())
+    names = "SHARP_NAMES|NAMES_IN_SHARP_KEYS|NAMES_IN_FLAT_KEYS|STEP_LETTERS|SHARPS_IN_ORDER|STEP_SEMITONES|ALTERATIONS"
+    constants = "\n".join(re.findall(rf"^const (?:{names}) = [^;]*;", source, re.M))
+    # Stand-ins for the page around the keys: which panel shows, what's selected, and the elements.
+    stand_ins = """
+        function instrumentShown() { return true; }
+        function activeKind() { return kind; }
+        function activePart() { return 0; }
+        function chosenNotes() { return chosen; }
+        function neckOf() { return {}; }
+        function placeOnNeck(neck, kind, notes) { return notes.map(note => ({ string: 3, stop: note.midi - 55, midi: note.midi, id: note.id })); }
+        function showChosenSpot() {}
+        function $() { return { querySelectorAll: () => spots }; }
+    """
+    body = """
+        const playState = { data: null };
+        const keyboard = { sounding: new Map(), soundingNotes: new Map(), expected: new Set(), expectedNotes: [] };
+        // E major, with a B♯ and a D♭ outside it; a guitar is written an octave above where it sounds.
+        const score = {
+            notes: { sharp: ["G", 1, 4], bSharp: ["B", 1, 3], flat: ["D", -1, 4], fretted: ["G", 1, 4] },
+            places: { sharp: [0], bSharp: [0], flat: [0], fretted: [0] },
+            timeline: { keys: [[4]] },
+        };
+        const element = (dataset, title) => ({ dataset, title, classList: { toggle() {} }, setAttribute() {} });
+        const keys = [60, 61, 68, 70].map(midi => element({ midi: String(midi) }, noteName(midi)));
+        const spots = [
+            element({ string: "3", stop: "1", midi: "56", where: "G string, fret 1" }, "G string, fret 1: A♭3"),
+            element({ string: "3", stop: "3", midi: "58", where: "G string, fret 3" }, "G string, fret 3: B♭3"),
+            element({ string: "2", stop: "0", midi: "59" }, "B string, fret 0: behind the capo"),
+        ];
+        const document = { querySelectorAll: () => keys };
+        const titles = () => [...keys, ...spots].map(element => element.title);
+        const seen = [];
+
+        let kind = "piano";
+        let chosen = [{ id: "sharp", midi: 68 }, { id: "bSharp", midi: 60 }];
+        keyboard.soundingNotes.set("flat:61", { id: "flat", midi: 61, count: 1 });
+        lightKeys();
+        seen.push(titles().slice(0, 4));
+        chosen = [];
+        keyboard.soundingNotes.clear();
+        lightKeys();
+        seen.push(titles().slice(0, 4));
+
+        kind = "guitar";
+        chosen = [{ id: "fretted", midi: 56 }];
+        lightKeys();
+        seen.push(titles().slice(4));
+        chosen = [];
+        lightKeys();
+        seen.push(titles().slice(4));
+        console.log(JSON.stringify(seen));
+    """
+    lit_keys, unlit_keys, lit_frets, unlit_frets = run_script(constants + "\n" + page_functions() + "\n" + stand_ins + body)
+    assert lit_keys == ["B♯3", "D♭4", "G♯4", "B♭4"], "chosen and sounding keys as the score spells them, B♯ in its own octave"
+    assert unlit_keys == ["C4", "C♯4", "A♭4", "B♭4"], "and back to the plain names once they go out"
+    assert lit_frets == ["G string, fret 1: G♯3", "G string, fret 3: B♭3", "B string, fret 0: behind the capo"]
+    assert unlit_frets == ["G string, fret 1: A♭3", "G string, fret 3: B♭3", "B string, fret 0: behind the capo"]

@@ -537,6 +537,10 @@ dialog h2 { margin: 0; padding: 16px 20px 6px; font-size: 17px; }
 /* The tile stands for the app's name, as everywhere in the xrn apps. */
 #aboutTitle { display: flex; align-items: center; gap: 8px; }
 #aboutTitle img { display: block; }
+#aboutDialog .credits { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+#aboutDialog .credits dt { color: var(--muted); }
+#aboutDialog .credits dd { margin: 0; }
+#aboutDialog .credits a { color: var(--accent); white-space: nowrap; }
 dialog .content { padding: 12px 20px; overflow-y: auto; display: grid; gap: 12px; min-width: min(380px, calc(100vw - 60px)); }
 dialog .content label.field { display: grid; gap: 4px; }
 dialog .content .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
