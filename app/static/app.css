@@ -1,11 +1,11 @@
 /* The instrument workspace: a top bar with the mode and the instrument, the library on the left, the
    score in the middle, the inspector on the right and the instrument itself along the bottom. The
-   colours start from the app's icon: its cerulean, its near-black and white, on warm paper. */
+   colours start from the app's icon: its ink navy, its near-black and white, on warm paper. */
 :root {
   --bg: #f3f1ec; --surface: #faf9f6; --raised: #ffffff; --sunken: #ebe8e1;
   --line: #e0dbd1; --line-strong: #cbc4b7;
   --ink: #1b1a17; --muted: #6b655b; --faint: #9a9387;
-  --accent: #1273b0; --accent-ink: #ffffff; --accent-soft: #dcebf5; --accent-line: #8fbcdb;
+  --accent: #005ca3; --accent-ink: #ffffff; --accent-soft: #dbe8f2; --accent-line: #87b2d4;
   --desk: #e4e0d8; --paper: #fffefb; --notes: #000000; --shadow: rgba(40, 32, 20, .16);
   --voice1: #1273b0; --voice2: #2f8a3f; --voice3: #c25414; --voice4: #a3317f;
   --tool1: var(--voice1); --tool2: var(--voice2); --tool3: var(--voice3); --tool4: var(--voice4);
@@ -21,7 +21,7 @@
     --bg: #151514; --surface: #1c1c1a; --raised: #252522; --sunken: #111110;
     --line: #2f2e2b; --line-strong: #444240;
     --ink: #edebe6; --muted: #a8a297; --faint: #77726a;
-    --accent: #52b0ea; --accent-ink: #06253a; --accent-soft: #173247; --accent-line: #2d6a92;
+    --accent: #5cadf6; --accent-ink: #10233a; --accent-soft: #1f3047; --accent-line: #3f6793;
     --desk: #0f0f0e; --paper: #f1eee7; --shadow: rgba(0, 0, 0, .55);
     --tool1: #6cbcf0; --tool2: #6cc47b; --tool3: #f08a4b; --tool4: #e070bd;
     --playing: #f0a03c; --playing-soft: #43300f; --expected: #b18cf2;
@@ -34,7 +34,7 @@
   --bg: #151514; --surface: #1c1c1a; --raised: #252522; --sunken: #111110;
   --line: #2f2e2b; --line-strong: #444240;
   --ink: #edebe6; --muted: #a8a297; --faint: #77726a;
-  --accent: #52b0ea; --accent-ink: #06253a; --accent-soft: #173247; --accent-line: #2d6a92;
+  --accent: #5cadf6; --accent-ink: #10233a; --accent-soft: #1f3047; --accent-line: #3f6793;
   --desk: #0f0f0e; --paper: #f1eee7; --shadow: rgba(0, 0, 0, .55);
   --tool1: #6cbcf0; --tool2: #6cc47b; --tool3: #f08a4b; --tool4: #e070bd;
   --playing: #f0a03c; --playing-soft: #43300f; --expected: #b18cf2;
