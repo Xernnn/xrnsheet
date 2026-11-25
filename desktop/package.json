@@ -1,7 +1,7 @@
 {
   "name": "xrnsheet",
   "productName": "xrnsheet",
-  "version": "0.1.2",
+  "version": "0.4.0",
   "description": "Turn a photo or PDF of sheet music into notation you can edit and reprint",
   "author": "xrn",
   "desktopName": "xrnsheet.desktop",
