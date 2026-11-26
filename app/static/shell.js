@@ -734,7 +734,7 @@ function openProject() {
 
 function openTranspose() {
   const first = range?.first ?? (selected && !editor.on ? selected : null);
-  $("transposeWhat").textContent = first ? "The selected notes are transposed." : "Nothing is selected, so the whole score is transposed, with its key signatures.";
+  $("transposeWhat").textContent = first ? "Selected notes" : "Whole score";
   $("transposeError").hidden = true;
   // A stretch can only move by an interval: a key belongs to the whole score.
   const toKey = document.querySelector('input[name="transposeMode"][value="key"]');

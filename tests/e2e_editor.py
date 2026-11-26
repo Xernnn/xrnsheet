@@ -182,14 +182,17 @@ def system_breaks(page, every: int) -> None:
     page.click("#breaksDialog button[type=submit]")
 
 
-def transpose(page, key: int | None = None, interval: str = "", direction: str = "up") -> None:
+def transpose(page, key: int | None = None, interval: str = "", direction: str = "up") -> str:
+    """Transpose as a person would, and return what the dialog said it would move."""
     menu(page, "Tools", "Transpose…")
+    said = page.inner_text("#transposeWhat")
     if key is not None:
         page.select_option("#transposeKey", str(key))
     else:
         page.select_option("#transposeInterval", interval)
         page.select_option("#transposeDirection", direction)
     page.click("#transposeDialog button[type=submit]")
+    return said
 
 
 def test_writing(page, base: str, shots: Path | None, created: list[str]) -> None:
@@ -1720,9 +1723,10 @@ def test_transposing(page, base: str, created: list[str]) -> None:
     settle(page)
     page.keyboard.press("Escape")
     settle(page)
-    transpose(page, key=2)
+    said = transpose(page, key=2)
     settle(page)
     root = saved_score(base, score_id)
+    check("the Transpose dialog says what it moves in a short label", said == "Whole score", said)
     check("the whole score moves to D", root.find(".//fifths").text == "2")
     check("its notes move with it", [note.findtext("pitch/step") for note in root.iter("note") if note.find("pitch") is not None][:4] == list("DEFG"))
     check("its chords move with it", page.evaluate("() => score.chords[0].text") == "Dmaj7", page.evaluate("() => score.chords[0].text"))
@@ -1730,9 +1734,10 @@ def test_transposing(page, base: str, created: list[str]) -> None:
     settle(page)
     check("one undo takes it all back", saved_score(base, score_id).find(".//fifths").text == "0")
     select_notes(page, 1, 2)
-    transpose(page, interval="M2", direction="up")
+    said = transpose(page, interval="M2", direction="up")
     settle(page)
     root = saved_score(base, score_id)
+    check("and for a selection", said == "Selected notes", said)
     check("a selection moves alone", [note.findtext("pitch/step") for note in root.iter("note") if note.find("pitch") is not None][:4] == list("CEFF"))
     check("the key stays", root.find(".//fifths").text == "0")
 
