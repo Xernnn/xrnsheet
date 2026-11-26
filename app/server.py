@@ -53,6 +53,9 @@ from pipeline.rhythm import fit_divisions, indexed
 from pipeline.timeline import places, timeline
 
 JOB_DIR = ROOT / "data" / "jobs"
+# What chords.corrections gathered for retraining, which a sheet un-marked or deleted is taken out of. The
+# desktop app runs this server from its own copy of the code, so it names the checkout's with --corrections.
+CORRECTIONS_DIR = corrections.OUT_DIR
 MODEL_DIR = ROOT / "models"  # The readers, fetched from a release: models/models.json names them.
 STATIC_DIR = Path(__file__).parent / "static"
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".pdf"}
@@ -1190,7 +1193,7 @@ def remove_sheet(score_id: str) -> dict:
             os.utime(trash / score_id)  # When it was deleted, which the trash is emptied by.
         # Gathering corrections doesn't look in the trash, but retraining reads what was gathered last,
         # which would still teach a deleted sheet's chords as right. Brought back, it's gathered again.
-        corrections.forget(score_id, corrections.OUT_DIR)
+        corrections.forget(score_id, CORRECTIONS_DIR)
     empty_trash()
     return {"removed": score_id, "undo": True}
 
@@ -1318,7 +1321,7 @@ def mark_checked(score_id: str, body: CheckedMark) -> dict:
         # Un-marked, it's no longer learnt from: gathering corrections takes only checked sheets, and
         # what was gathered from it already is taken out, as retraining reads that.
         path.unlink(missing_ok=True)
-        corrections.forget(score_id, corrections.OUT_DIR)
+        corrections.forget(score_id, CORRECTIONS_DIR)
     return describe(folder, read_status(folder))
 
 
@@ -1926,16 +1929,18 @@ def stop_when_stdin_closes() -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    global JOB_DIR
+    global JOB_DIR, CORRECTIONS_DIR
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--notes", choices=["homr", "own"], default="homr")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--jobs", type=Path, default=JOB_DIR, help="the folder the scores are kept in (default: data/jobs here)")
+    parser.add_argument("--corrections", type=Path, default=CORRECTIONS_DIR, help="the folder corrections are gathered into for retraining (default: data/corrections here)")
     parser.add_argument("--stop-when-stdin-closes", action="store_true", help="stop when the program that started this one ends")
     arguments = parser.parse_args(argv)
     os.environ["XRNSHEET_NOTES"] = arguments.notes
     JOB_DIR = arguments.jobs.expanduser().resolve()
     JOB_DIR.mkdir(parents=True, exist_ok=True)
+    CORRECTIONS_DIR = arguments.corrections.expanduser().resolve()
     if missing := missing_readers(arguments.notes):
         print(f"{' and '.join(missing)} not in models/, so sheets can't be read until the readers are fetched: {FETCH_MODELS}", file=sys.stderr)
     if arguments.stop_when_stdin_closes:

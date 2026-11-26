@@ -149,7 +149,8 @@ async function start() {
   }
   // stdin stays an open pipe, never written to: when this app ends, however it ends, the server
   // sees it close and stops (--stop-when-stdin-closes).
-  const child = spawn(found.python, desktop.serverArguments(port, jobs), {
+  const corrections = desktop.correctionsDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, repo: path.join(__dirname, '..') })
+  const child = spawn(found.python, desktop.serverArguments(port, jobs, corrections), {
     cwd: source,
     env: desktop.childEnv(process.env),
     stdio: ['pipe', output, output]

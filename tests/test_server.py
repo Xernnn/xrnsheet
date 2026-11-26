@@ -107,7 +107,7 @@ def test_a_sheet_un_marked_is_no_longer_learnt_from(client, tmp_path, monkeypatc
     from test_corrections import recognized, write_sheet
 
     out = tmp_path / "corrections"
-    monkeypatch.setattr(server.corrections, "OUT_DIR", out)
+    monkeypatch.setattr(server, "CORRECTIONS_DIR", out)
     sheet = write_sheet(server.JOB_DIR, "f" * 32, [recognized(0, 0.0, "C")], ["D"])
     other = write_sheet(server.JOB_DIR, "e" * 32, [recognized(0, 0.0, "F")], ["G"], upload=b"other")
     for folder in (sheet, other):
@@ -131,7 +131,7 @@ def test_a_checked_sheet_deleted_is_no_longer_learnt_from(client, tmp_path, monk
     from test_corrections import recognized, write_sheet
 
     out = tmp_path / "corrections"
-    monkeypatch.setattr(server.corrections, "OUT_DIR", out)
+    monkeypatch.setattr(server, "CORRECTIONS_DIR", out)
     sheet = write_sheet(server.JOB_DIR, "f" * 32, [recognized(0, 0.0, "C")], ["D"])
     other = write_sheet(server.JOB_DIR, "e" * 32, [recognized(0, 0.0, "F")], ["G"], upload=b"other")
     for folder in (sheet, other):
@@ -145,6 +145,30 @@ def test_a_checked_sheet_deleted_is_no_longer_learnt_from(client, tmp_path, monk
     assert server.corrections.checked_sheets(server.JOB_DIR) == [other]
     assert client.post(f"/api/scores/{sheet.name}/restore").status_code == 200
     assert server.corrections.checked_sheets(server.JOB_DIR) == [other, sheet]  # Back, and still checked, it's gathered next time.
+
+
+def test_the_corrections_folder_given_is_the_one_a_sheet_comes_out_of(client, ready_score, tmp_path_factory, monkeypatch):
+    """The desktop app runs the server from its own copy of the code, so data/corrections beside that copy
+    was never the folder chords.corrections gathers into, and a sheet un-marked there was still learnt from."""
+    out = tmp_path_factory.mktemp("gathered")
+    rows = [
+        {"image": "a.png", "sheet": ready_score, "split": "train", "label": "Dm7", "read_as": "Dm7", "confidence": "0.9", "outcome": "kept"},
+        {"image": "b.png", "sheet": "e" * 32, "split": "train", "label": "G7", "read_as": "G7", "confidence": "0.9", "outcome": "kept"},
+    ]
+    with open(out / server.corrections.LABEL_FILE, "w", newline="", encoding="utf-8") as file:
+        writer = server.corrections.csv.DictWriter(file, server.corrections.COLUMNS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+    for row in rows:
+        (out / row["image"]).write_bytes(b"crop")
+    monkeypatch.setattr(server, "CORRECTIONS_DIR", server.CORRECTIONS_DIR)  # Put back afterwards.
+    monkeypatch.setenv("XRNSHEET_NOTES", "homr")
+    monkeypatch.setattr(server.uvicorn, "run", lambda *args, **kwargs: None)
+    server.main(["--jobs", str(server.JOB_DIR), "--corrections", str(out)])
+    assert client.post(f"/api/scores/{ready_score}/checked", json={"checked": True}).json()["checked"] is True
+    assert client.post(f"/api/scores/{ready_score}/checked", json={"checked": False}).json()["checked"] is False
+    assert [row["sheet"] for row in server.corrections.load_labels(out)] == ["e" * 32]
+    assert not (out / "a.png").exists() and (out / "b.png").exists()
 
 
 def test_a_sheet_still_reading_cannot_be_checked(client):

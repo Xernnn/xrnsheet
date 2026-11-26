@@ -357,6 +357,8 @@ After you've pressed "Mark as checked" on some sheets:
 .venv-train/bin/python -m chords.retrain --promote # also replace the live model if it passes, and export it
 ```
 
+A sheet un-marked or deleted, in the desktop app too, is taken out of `data/corrections/` at once, so retraining doesn't learn from it.
+
 About one sheet in five is held out, chosen by a hash. A candidate replaces the live model only if there are at least 30 held-out chords, it gains more chords than it loses with p below 0.05, and it stays at 0.99 or above on the synthetic test. So far, a few dozen real corrections haven't been shown to help. See [the project report](docs/PROJECT_REPORT.md).
 
 ## Run the benchmark
