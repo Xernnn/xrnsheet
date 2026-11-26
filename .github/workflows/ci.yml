@@ -79,6 +79,15 @@ jobs:
           .venv/bin/pip install -r requirements.lock playwright==1.65.2
           .venv/bin/python -m playwright install --with-deps chromium
 
+      # The server reads each page in `systemd-run --user --scope`, which needs a user session a runner
+      # may not have. The suite's stand-in readers run as they are instead.
+      - name: systemd-run without a user session
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '%s\n' '#!/bin/sh' 'while [ "${1#-}" != "$1" ]; do [ "$1" = -p ] && shift; shift; done' 'exec "$@"' > "$RUNNER_TEMP/bin/systemd-run"
+          chmod +x "$RUNNER_TEMP/bin/systemd-run"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
       - name: Browser checks
         run: |
           .venv/bin/python -m app.server --notes own --port 8011 --jobs "$RUNNER_TEMP/jobs" > "$RUNNER_TEMP/server.log" 2>&1 &
