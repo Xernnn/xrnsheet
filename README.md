@@ -16,15 +16,17 @@ It works well on clean, computer-rendered sheets. It's weak on real handwriting,
 
 ## Setup
 
-Requires Python 3.11+ and `rsvg-convert`.
+Requires Python 3.11+ and `rsvg-convert`. The app's `.venv` is made on Python 3.14, the version in `.python-version`, with the exact versions in `requirements.lock`:
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu   # PyTorch without the GPU parts
-.venv/bin/pip install -r requirements.txt
+python3.14 -m venv .venv
+.venv/bin/pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu   # PyTorch without the GPU parts
+.venv/bin/pip install -r requirements.lock
 .venv/bin/python -m chords.fonts          # download the fonts
 python3 tools/fetch_models.py             # download the trained readers into models/
 ```
+
+`requirements.txt` names what xrnsheet uses; `requirements.lock` is `pip freeze` of a `.venv` it's known to work with, less PyTorch. A `.venv` runs on the Python it was made with, so when the system's Python moves to a newer version, `.venv` and the desktop app stop working. Make it again on 3.14 from mise: `mise install python@3.14`, then `mise exec python@3.14 -- python -m venv .venv` in place of the first line.
 
 The app reads every page on the CPU, with its two models exported to ONNX and run in onnxruntime, so reading a page doesn't load PyTorch. `.venv` still takes PyTorch's CPU build, under 2 GB in all, for the tests, for `bench/real_page.py`, and to read with a model that hasn't been exported. The default build carries 5 GB of GPU libraries that only [training](#train-on-a-gpu) uses.
 

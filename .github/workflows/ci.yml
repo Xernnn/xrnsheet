@@ -54,18 +54,19 @@ jobs:
 
   # The editor's browser checks, tests/e2e_editor.py, against a server started as the README says.
   # The suite starts stand-in servers with .venv/bin/python, so the packages go in a .venv here.
-  # Reading a real sheet needs RapidOCR and homr, which this job leaves out, so --no-reading
-  # skips the few checks that do.
+  # Reading a real sheet needs the readers, which this job doesn't fetch, so --no-reading skips the
+  # few checks that do.
   browser:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
+      # The app's own Python and the exact versions it runs on, where the job above checks the minimum.
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
 
       - name: Install rsvg-convert
         run: |
@@ -75,8 +76,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m venv .venv
-          grep -vE '^(torch|homr|rapidocr)\b' requirements.txt > "$RUNNER_TEMP/requirements.txt"
-          .venv/bin/pip install -r "$RUNNER_TEMP/requirements.txt" playwright==1.65.2
+          .venv/bin/pip install -r requirements.lock playwright==1.65.2
           .venv/bin/python -m playwright install --with-deps chromium
 
       - name: Browser checks
