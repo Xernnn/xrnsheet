@@ -25,7 +25,7 @@ from chords.fonts import ROOT
 from chords.reading import load_network, read_images
 from chords.render import fit_height
 from chords.vocab import parse_chord
-from pipeline import align
+from pipeline import align, homr_models
 from pipeline.chord_boxes import find_chords
 from pipeline.musicxml import insert_harmony, load_root, read_measures, to_text
 from pipeline.repair import repair
@@ -45,12 +45,12 @@ class ReadChord:
 
 def run_homr(image_path: Path, work_dir: Path) -> tuple[ET.Element, list[align.SystemLayout], np.ndarray]:
     """Run homr's steps directly, to keep the note and barline positions it computes."""
-    from homr.main import ProcessingConfig, detect_staffs_in_image, download_weights
+    from homr.main import ProcessingConfig, detect_staffs_in_image
     from homr.music_xml_generator import XmlGeneratorArguments, generate_xml
     from homr.staff_parsing import parse_staffs
     from homr.transformer.configs import Config
 
-    download_weights(False, False, False)
+    homr_models.ensure()  # In place of homr's download_weights, which checks nothing it downloads.
     working_copy = work_dir / image_path.name
     if working_copy != image_path:
         shutil.copy(image_path, working_copy)

@@ -51,3 +51,49 @@ jobs:
           --ignore=tests/test_exported.py
           --ignore=tests/test_notes.py
           --ignore=tests/test_repair.py
+
+  # The editor's browser checks, tests/e2e_editor.py, against a server started as the README says.
+  # The suite starts stand-in servers with .venv/bin/python, so the packages go in a .venv here.
+  # Reading a real sheet needs the readers, which this job doesn't fetch, so --no-reading skips the
+  # few checks that do.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The app's own Python and the exact versions it runs on, where the job above checks the minimum.
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Install rsvg-convert
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends librsvg2-bin
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.lock playwright==1.65.2
+          .venv/bin/python -m playwright install --with-deps chromium
+
+      # The server reads each page in `systemd-run --user --scope`, which needs a user session a runner
+      # may not have. The suite's stand-in readers run as they are instead.
+      - name: systemd-run without a user session
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '%s\n' '#!/bin/sh' 'while [ "${1#-}" != "$1" ]; do [ "$1" = -p ] && shift; shift; done' 'exec "$@"' > "$RUNNER_TEMP/bin/systemd-run"
+          chmod +x "$RUNNER_TEMP/bin/systemd-run"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Browser checks
+        run: |
+          .venv/bin/python -m app.server --notes own --port 8011 --jobs "$RUNNER_TEMP/jobs" > "$RUNNER_TEMP/server.log" 2>&1 &
+          for _ in $(seq 100); do curl -sf http://127.0.0.1:8011/api/scores > /dev/null && break; sleep 0.3; done
+          .venv/bin/python tests/e2e_editor.py --port 8011 --no-reading
+
+      - name: The server's log
+        if: failure()
+        run: cat "$RUNNER_TEMP/server.log"

@@ -16,19 +16,23 @@ It works well on clean, computer-rendered sheets. It's weak on real handwriting,
 
 ## Setup
 
-Requires Python 3.11+ and `rsvg-convert`.
+Requires Python 3.11+ and `rsvg-convert`. The app's `.venv` is made on Python 3.14, the version in `.python-version`, with the exact versions in `requirements.lock`:
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu   # PyTorch without the GPU parts
-.venv/bin/pip install -r requirements.txt
+python3.14 -m venv .venv
+.venv/bin/pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu   # PyTorch without the GPU parts
+.venv/bin/pip install -r requirements.lock
 .venv/bin/python -m chords.fonts          # download the fonts
 python3 tools/fetch_models.py             # download the trained readers into models/
 ```
 
+`requirements.txt` names what xrnsheet uses; `requirements.lock` is `pip freeze` of a `.venv` it's known to work with, less PyTorch. A `.venv` runs on the Python it was made with, so when the system's Python moves to a newer version, `.venv` and the desktop app stop working. Make it again on 3.14 from mise: `mise install python@3.14`, then `mise exec python@3.14 -- python -m venv .venv` in place of the first line.
+
 The app reads every page on the CPU, with its two models exported to ONNX and run in onnxruntime, so reading a page doesn't load PyTorch. `.venv` still takes PyTorch's CPU build, under 2 GB in all, for the tests, for `bench/real_page.py`, and to read with a model that hasn't been exported. The default build carries 5 GB of GPU libraries that only [training](#train-on-a-gpu) uses.
 
 The trained models go in `models/`: the `.pt` that training writes, and the `.onnx` exported from it that the app reads. They're files of a [release](https://github.com/Xernnn/xrnsheet/releases/tag/models-2026-11-17), not of git; `models/models.json` names them with their SHA-256, `tools/fetch_models.py` checks each, and `--onnx` fetches only what the app needs. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
+
+homr's own three models are fetched into its folder in `.venv` the first time a page is read with homr, from homr's release. `pipeline/homr_models.py` pins their SHA-256s: a download is kept only if it matches, and a page isn't read with a model that differs.
 
 The benchmark also uses Audiveris and Tesseract. Audiveris has no Arch package, so it's unpacked into `tools/` from the official release:
 
@@ -303,7 +307,7 @@ The editor's browser checks, `tests/e2e_editor.py`, aren't run by pytest: they n
 <python with playwright> tests/e2e_editor.py --port 8011 --clean
 ```
 
-`--clean` removes the scores they made, `--shots <folder>` keeps a picture of some of the steps, and `--browser firefox` runs them in Firefox. The checks that read a sheet open `data/images/jazz_chart__clean.png`, which `bench/make_samples.py` makes (see [Run the benchmark](#run-the-benchmark)).
+`--clean` removes the scores they made, `--shots <folder>` keeps a picture of some of the steps, and `--browser firefox` runs them in Firefox. The checks that read a sheet open `data/images/jazz_chart__clean.png`, which isn't in git: when it's missing, they draw it from `data/truth/jazz_chart.musicxml` with `bench/make_samples.py --clean jazz_chart`. `--no-reading` skips those checks, for a server that can't read a sheet. GitHub Actions runs the browser checks that way too, in headless Chromium.
 
 The desktop app's checks run in `desktop/`: `npm test` for how it finds its Python, starts and stops the server and keeps its windows to the app's own pages, and `npm run test:window` starts the real app headless with a throwaway scores folder.
 
@@ -354,6 +358,8 @@ After you've pressed "Mark as checked" on some sheets:
 .venv-train/bin/python -m chords.retrain           # train a candidate and report on it
 .venv-train/bin/python -m chords.retrain --promote # also replace the live model if it passes, and export it
 ```
+
+A sheet un-marked or deleted, in the desktop app too, is taken out of `data/corrections/` at once, so retraining doesn't learn from it.
 
 About one sheet in five is held out, chosen by a hash. A candidate replaces the live model only if there are at least 30 held-out chords, it gains more chords than it loses with p below 0.05, and it stays at 0.99 or above on the synthetic test. So far, a few dozen real corrections haven't been shown to help. See [the project report](docs/PROJECT_REPORT.md).
 

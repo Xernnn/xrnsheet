@@ -9,8 +9,12 @@ under three conditions:
 
 The "photo" condition is a simulation. It is useful for comparing engines, but real
 photos of your own sheets are the test that counts.
+
+    .venv/bin/python bench/make_samples.py                      write the answers, and render them
+    .venv/bin/python bench/make_samples.py --clean jazz_chart   only render that piece's clean image
 """
 
+import argparse
 import os
 import random
 import re
@@ -268,7 +272,7 @@ def write_truth(name: str, score: stream.Score) -> str:
     return xml
 
 
-def main() -> None:
+def prepare() -> None:
     TRUTH_DIR.mkdir(parents=True, exist_ok=True)
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
     FONT_CONFIG.write_text(
@@ -276,6 +280,22 @@ def main() -> None:
         f"<dir>{FONT_DIR}</dir></fontconfig>",
         encoding="utf-8",
     )
+
+
+def render_clean(name: str) -> Path:
+    """Render a piece's clean image from its MusicXML in data/truth, which is left as it is.
+
+    The images aren't in git. The browser checks read the jazz chart's, and this draws it again
+    from the committed answer, as main() first did, without writing the answers anew.
+    """
+    prepare()
+    path = IMAGE_DIR / f"{name}__clean.png"
+    render_png((TRUTH_DIR / f"{name}.musicxml").read_text(encoding="utf-8"), "Leipzig", path)
+    return path
+
+
+def main() -> None:
+    prepare()
 
     for index in range(CHART_COUNT):
         name = f"chart_{index:02d}"
@@ -302,4 +322,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--clean", nargs="+", metavar="PIECE", help="only render these pieces' clean images, from data/truth")
+    pieces = parser.parse_args().clean
+    if pieces:
+        for piece in pieces:
+            print(render_clean(piece))
+    else:
+        main()

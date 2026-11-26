@@ -40,6 +40,7 @@ COMMIT="$(git -C "$REPO" rev-parse --short HEAD)"
 (cd "$STAGE" && "$PYTHON" -c "import app.server") || { echo "$PYTHON can't run xrnsheet's server. Install requirements.txt into it." >&2; exit 1; }
 "$PYTHON" -m compileall -q "$STAGE"
 
-printf '{\n  "python": "%s",\n  "commit": "%s"\n}\n' "$PYTHON" "$COMMIT" > build/desktop.json
+# The server runs from the app's copy, so it's told where this checkout gathers corrections for retraining.
+printf '{\n  "python": "%s",\n  "corrections": "%s",\n  "commit": "%s"\n}\n' "$PYTHON" "$REPO/data/corrections" "$COMMIT" > build/desktop.json
 rsvg-convert -w 512 -h 512 "$REPO/app/static/icon.svg" -o build/icon.png
 echo "Staged xrnsheet $COMMIT, running on $PYTHON"

@@ -59,8 +59,24 @@ function logFile(env, home) {
   return path.join(env.XDG_STATE_HOME || path.join(home, '.local', 'state'), 'xrnsheet', 'server.log')
 }
 
-function serverArguments(port, jobs) {
-  return ['-m', 'app.server', '--port', String(port), '--jobs', jobs, '--stop-when-stdin-closes']
+/**
+ * The folder chords.corrections gathers checked sheets into for retraining, which un-marking or deleting a
+ * sheet takes it out of: the checkout's data/corrections. Packaged, the server runs from the app's own copy
+ * of the code, where data/corrections is never gathered into, so the app says where the checkout's is.
+ */
+function correctionsDir({ packaged, resourcesPath, repo }) {
+  if (!packaged) return path.join(repo, 'data', 'corrections')
+  try {
+    return JSON.parse(fs.readFileSync(path.join(resourcesPath, 'desktop.json'), 'utf8')).corrections || null
+  } catch {
+    return null
+  }
+}
+
+function serverArguments(port, jobs, corrections) {
+  const args = ['-m', 'app.server', '--port', String(port), '--jobs', jobs]
+  if (corrections) args.push('--corrections', corrections)
+  return [...args, '--stop-when-stdin-closes']
 }
 
 /** The environment the server runs in: this one, less what the AppImage set for itself. */
@@ -232,6 +248,7 @@ module.exports = {
   anyFreePort,
   childEnv,
   choosePort,
+  correctionsDir,
   findPython,
   jobsDir,
   logFile,

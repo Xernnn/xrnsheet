@@ -65,6 +65,15 @@ test('scores and the log live in the user\'s folders, not in the program', () =>
 
 test('the server is told where the scores are and to stop with the app', () => {
   assert.deepEqual(desktop.serverArguments(47360, '/j'), ['-m', 'app.server', '--port', '47360', '--jobs', '/j', '--stop-when-stdin-closes'])
+  assert.deepEqual(desktop.serverArguments(47360, '/j', '/c'), ['-m', 'app.server', '--port', '47360', '--jobs', '/j', '--corrections', '/c', '--stop-when-stdin-closes'])
+})
+
+test('a sheet un-marked in the app comes out of the corrections the checkout gathered, not the app\'s copy', () => {
+  const folder = tempDir()
+  assert.equal(desktop.correctionsDir({ packaged: false, resourcesPath: '', repo: '/checkout' }), '/checkout/data/corrections')
+  assert.equal(desktop.correctionsDir({ packaged: true, resourcesPath: folder, repo: '/app' }), null)
+  fs.writeFileSync(path.join(folder, 'desktop.json'), JSON.stringify({ python: '/checkout/.venv/bin/python', corrections: '/checkout/data/corrections' }))
+  assert.equal(desktop.correctionsDir({ packaged: true, resourcesPath: folder, repo: '/app' }), '/checkout/data/corrections')
 })
 
 test('the server runs on the system\'s folders, not the AppImage\'s', () => {

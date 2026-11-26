@@ -15,7 +15,7 @@
     "app:install": "bash install.sh"
   },
   "devDependencies": {
-    "electron": "^44.10.1",
+    "electron": "^44.11.6",
     "electron-builder": "^26.18.0"
   },
   "overrides": {
