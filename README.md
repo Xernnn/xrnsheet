@@ -32,6 +32,8 @@ The app reads every page on the CPU, with its two models exported to ONNX and ru
 
 The trained models go in `models/`: the `.pt` that training writes, and the `.onnx` exported from it that the app reads. They're files of a [release](https://github.com/Xernnn/xrnsheet/releases/tag/models-2026-11-17), not of git; `models/models.json` names them with their SHA-256, `tools/fetch_models.py` checks each, and `--onnx` fetches only what the app needs. To make your own, see [Train the chord reader](#train-the-chord-reader) and [Train the note reader](#train-the-note-reader).
 
+homr's own three models are fetched into its folder in `.venv` the first time a page is read with homr, from homr's release. `pipeline/homr_models.py` pins their SHA-256s: a download is kept only if it matches, and a page isn't read with a model that differs.
+
 The benchmark also uses Audiveris and Tesseract. Audiveris has no Arch package, so it's unpacked into `tools/` from the official release:
 
 ```sh
