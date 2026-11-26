@@ -6,6 +6,7 @@ Start the server, then run this with a Python that has Playwright:
     python tests/e2e_editor.py --port 8011 --shots /tmp/shots
 
 Set XRNSHEET_BROWSER to use a Chromium that's already installed, or pass --browser firefox.
+--no-reading skips the few checks that read a real sheet, for a server that can't (as in CI).
 Every score it creates is listed at the end, and removed if you pass --clean, even when a step
 crashes. It isn't collected by pytest, because it needs a browser and a running server.
 """
@@ -32,12 +33,21 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 FAILURES: list[str] = []
+# The sheet the reading checks read: an original chart that bench/make_samples.py wrote. Its picture
+# isn't in git, so it's drawn again from the chart's MusicXML in data/truth when it's missing.
+JAZZ_CHART = ROOT / "data" / "images" / "jazz_chart__clean.png"
 
 
 def check(name: str, passed: bool, detail: object = "") -> None:
     print(f"{'ok  ' if passed else 'FAIL'} {name} {detail if detail != '' else ''}", flush=True)
     if not passed:
         FAILURES.append(name)
+
+
+def jazz_chart() -> str:
+    if not JAZZ_CHART.exists():
+        subprocess.run([str(ROOT / ".venv" / "bin" / "python"), str(ROOT / "bench" / "make_samples.py"), "--clean", "jazz_chart"], check=True, stdout=subprocess.DEVNULL)
+    return str(JAZZ_CHART)
 
 
 def fetch_text(base: str, path: str) -> str:
@@ -5381,7 +5391,7 @@ def test_phone(context, base: str, shots: Path | None, created: list[str]) -> No
 
 def test_recognized(page, base: str, shots: Path | None, created: list[str]) -> None:
     page.goto(base)
-    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.set_input_files("#file", jazz_chart())
     page.wait_for_selector("#pages svg", timeout=120000)
     score_id = page.evaluate("() => scoreId")
     created.append(score_id)
@@ -5619,7 +5629,7 @@ def test_the_original_sheet(page, base: str, shots: Path | None, created: list[s
     """The original was a fixed picture about 340 pixels across: no zoom, a box on it did nothing, and a
     chord the reader missed, the biggest loss on a handwritten chart, couldn't be added from it."""
     page.goto(base)
-    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.set_input_files("#file", jazz_chart())
     page.wait_for_selector("#pages svg", timeout=120000)
     score_id = page.evaluate("() => scoreId")
     created.append(score_id)
@@ -5708,7 +5718,7 @@ def test_marking_checked_with_things_still_listed(page, base: str, created: list
     """Mark as checked was taken at once with 13 chords and 21 bars still listed, and a checked sheet's
     chords are taught to the chord reader as right, so an early press taught wrong chords as confirmed."""
     page.goto(base)
-    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.set_input_files("#file", jazz_chart())
     page.wait_for_selector("#pages svg", timeout=120000)
     score_id = page.evaluate("() => scoreId")
     created.append(score_id)
@@ -5747,7 +5757,7 @@ def test_chords_to_check_are_stepped_through(page, base: str, shots: Path | None
     """Every chord the reader wasn't sure of had a chip under the original, thirteen on a real
     handwritten page, as the bars that don't add up had above the score."""
     page.goto(base)
-    page.set_input_files("#file", str(ROOT / "data" / "images" / "jazz_chart__clean.png"))
+    page.set_input_files("#file", jazz_chart())
     page.wait_for_selector("#pages svg", timeout=120000)
     score_id = page.evaluate("() => scoreId")
     created.append(score_id)
@@ -6012,6 +6022,7 @@ def main() -> None:
     parser.add_argument("--shots", type=Path)
     parser.add_argument("--clean", action="store_true", help="delete the scores this test created")
     parser.add_argument("--browser", choices=["chromium", "firefox"], default="chromium")
+    parser.add_argument("--no-reading", action="store_true", help="skip the checks that read a sheet, for a server without the readers and RapidOCR")
     arguments = parser.parse_args()
     base = f"http://127.0.0.1:{arguments.port}"
     if arguments.shots:
@@ -6128,10 +6139,13 @@ def main() -> None:
             test_reading_leaves_the_window_free(page, arguments.shots)
             test_photos_opened_together_are_one_score(page)
             test_failed_requests_say_so(context, base, created)
-            test_the_original_sheet(page, base, arguments.shots, created)
-            test_marking_checked_with_things_still_listed(page, base, created)
-            test_chords_to_check_are_stepped_through(page, base, arguments.shots, created)
-            test_recognized(page, base, arguments.shots, created)
+            if arguments.no_reading:
+                print("skip the checks that read a sheet (--no-reading)", flush=True)
+            else:
+                test_the_original_sheet(page, base, arguments.shots, created)
+                test_marking_checked_with_things_still_listed(page, base, created)
+                test_chords_to_check_are_stepped_through(page, base, arguments.shots, created)
+                test_recognized(page, base, arguments.shots, created)
             check("no errors in the page", not problems, problems[:4])
             browser.close()
     finally:

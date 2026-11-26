@@ -303,7 +303,7 @@ The editor's browser checks, `tests/e2e_editor.py`, aren't run by pytest: they n
 <python with playwright> tests/e2e_editor.py --port 8011 --clean
 ```
 
-`--clean` removes the scores they made, `--shots <folder>` keeps a picture of some of the steps, and `--browser firefox` runs them in Firefox. The checks that read a sheet open `data/images/jazz_chart__clean.png`, which `bench/make_samples.py` makes (see [Run the benchmark](#run-the-benchmark)).
+`--clean` removes the scores they made, `--shots <folder>` keeps a picture of some of the steps, and `--browser firefox` runs them in Firefox. The checks that read a sheet open `data/images/jazz_chart__clean.png`, which isn't in git: when it's missing, they draw it from `data/truth/jazz_chart.musicxml` with `bench/make_samples.py --clean jazz_chart`. `--no-reading` skips those checks, for a server that can't read a sheet. GitHub Actions runs the browser checks that way too, in headless Chromium.
 
 The desktop app's checks run in `desktop/`: `npm test` for how it finds its Python, starts and stops the server and keeps its windows to the app's own pages, and `npm run test:window` starts the real app headless with a throwaway scores folder.
 
